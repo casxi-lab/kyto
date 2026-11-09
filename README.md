@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/logo-dark.svg">
+  <img alt="kyto" src=".github/assets/logo.svg" height="64">
+</picture>
+
 # kyto
 
 kyto is the structural design of casξ, a portable workstation for mathematics,
@@ -41,11 +46,11 @@ kyto relies on from the other parts of casξ.
 
 ## Status
 
-kyto is newly initialized. The repository holds documentation, a commit hook
-and the repository checks, which CI runs on every pull request to `main` and
-every push to `main`. No form has been chosen and nothing has been modelled
-yet: there are no models, nothing to print or assemble, and none of the items
-above exists today.
+kyto is newly initialized. The repository holds documentation, the kyto logo,
+a commit hook and the repository checks, which CI runs on every pull request
+to `main` and every push to `main`. No form has been chosen and nothing has
+been modelled yet: there are no models, nothing to print or assemble, and none
+of the items above exists today.
 
 The repository checks run from the repository root:
 

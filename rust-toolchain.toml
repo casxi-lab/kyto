@@ -1,0 +1,5 @@
+# The exact Rust toolchain.
+[toolchain]
+channel = "1.99.0"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

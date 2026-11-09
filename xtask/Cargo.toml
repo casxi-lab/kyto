@@ -1,0 +1,22 @@
+[package]
+name = "xtask"
+version = "0.0.0"
+description = "Repository tasks for kyto, run as `cargo xtask`"
+edition = "2024"
+license = "MIT"
+publish = false
+rust-version = "1.99"
+
+# xtask is a workspace of its own, apart from the kyto design files.
+[workspace]
+
+[dependencies]
+# The receipt of `cargo xtask check` keeps its fields in the order in which
+# they are written, so the insertion-ordered map of the `preserve_order`
+# feature is used. The receipt is written to a string, and its tests read it
+# back from one, so the standard-library support of the default feature is
+# left out.
+serde_json = { version = "=1.0.154", default-features = false, features = ["preserve_order"] }
+# The workflows step uses the event parser on text that is already UTF-8,
+# so the input-decoding support of the default feature is left out.
+yaml-rust2 = { version = "=0.13.0", default-features = false }

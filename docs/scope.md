@@ -1,9 +1,11 @@
 # Scope
 
 This page describes the complete target scope of kyto: what it will provide,
-which other parts of casξ it works with, and the status of each part. No part
-or form has been chosen, and kyto has no design files, models or bench
-program yet, so every part has the status `planned`.
+which other parts of casξ it works with, and the status of each part. The two
+forms and the compute module they are built on are fixed; no other part has
+been chosen, and the screen size, the key count and the arrangement within
+each form are open. kyto has no design files, models or bench program yet, so
+every part has the status `planned`.
 
 | Status | Meaning |
 | --- | --- |
@@ -16,26 +18,33 @@ links its design files, models, programs and records.
 
 ## Responsibilities
 
-kyto designs the hardware of a portable device built on a whole Raspberry
-Pi 5 board, and the bench used to check it:
+kyto designs the hardware of a portable device in two forms, a landscape
+handheld and a clamshell, both built on the Raspberry Pi Compute Module 5, and
+the bench used to check it:
 
-- **Electrical design.** A peripheral carrier board connects the input,
-  display, power and debug connections to the Raspberry Pi 5; the processor
-  board itself is not redesigned. The work covers the choice of the screen,
-  keyboard and power parts, the circuits and boards around them, the bills of
-  materials and manufacturing outputs, and the measurements that show what
-  the hardware does: electrical rule checks, wiring, signals, power
-  consumption, the power flow and tests on built boards.
+- **Electrical design.** A carrier board for each form holds the circuits that
+  power, boot and debug the compute module and connects the input, display
+  and power parts to it; these circuits are one design shared by both carrier
+  boards, and the compute module itself is not redesigned. The development
+  boards are the whole Raspberry Pi 5 board and the Compute Module 5 in its
+  official IO board. The work covers the choice of the screen and
+  keyboard of each form and of the power parts, the circuits and boards around
+  them, the bills of materials and manufacturing outputs, and the measurements
+  that show what the hardware does: electrical rule checks, wiring, signals,
+  power consumption, the power flow and tests on built boards.
 - **Structural design.** The whole-device assembly, the enclosure, the keycaps
   and key mechanism, the thermal parts, parametric models and printed test
   parts. It checks dimensions, interference, key travel, prints and the fit of
   the actual parts. Paper mockups and partial prints verify the layout first;
-  the three-dimensional fit is checked before the carrier board is frozen; the
-  enclosure is frozen only after fit tests with the actual parts.
+  the three-dimensional fit is checked before each carrier board is frozen;
+  each enclosure is frozen only after fit tests with the actual parts.
 - **Hardware-in-the-loop bench.** A bench tool and bench hardware that run
   images on real boards and record what happens, without depending on any one
   bench or on the system under test. The same bench serves the checks of
-  kyto's own hardware and the runs of the systems built for the device.
+  kyto's own hardware and the runs of the systems built for the device. A
+  whole Raspberry Pi 5 board, which has the same processor and I/O controller
+  as the compute module, is a development board and the first board the bench
+  will support.
 
 The detailed dimension sources and the PCB and electrical sources are both
 kept in kyto; they are checked against the same revision before either is
@@ -63,11 +72,11 @@ Other parts of casξ work with kyto's hardware:
 
 | Part | What kyto will provide | Works with | Status |
 | --- | --- | --- | --- |
-| Product screen | A screen module and its connection to the Raspberry Pi 5: resolution, orientation, pixel format, interface, update regions, backlight and refresh target, and the electrical interface and timing that krepi's display driver uses. Until it exists, development uses a separate display | krepi display driver and service; the enclosure's screen window and mounting | `planned` |
-| Keyboard | The key count and layout, the switches, the key matrix and its debouncing, and the path by which key presses reach the Raspberry Pi 5: a keyboard controller that appears as a USB HID device, or scanning through GPIO or I2C. Press, release and repeat, modifier keys and combinations, and the response to cancel reach the software through krepi's input driver. Until it exists, development uses a USB keyboard | krepi input driver; the keycaps and key mechanism; kosmo key layout | `planned` |
-| Power | A battery with its charger and fuel gauge, the supply to the Raspberry Pi 5 and the power button. The shutdown flow saves state, stops computation, cuts power and powers up again as separate steps; a real power-off needs the external power circuit. Battery capacity and runtime are fixed only after the consumption has been measured. Until it exists, the Raspberry Pi 5 runs from a stable external supply | krepi power management service, temperature and fan policy and shutdown; the enclosure's battery space, button and port positions | `planned` |
-| Debug and expansion connections | Access to the dedicated debug UART of the Raspberry Pi 5, kept apart from the peripherals behind the RP1 I/O controller; expansion connections with stated pins, buses, voltage levels and connectors | krepi drivers | `planned` |
-| Carrier board | The peripheral carrier board that joins the screen, keyboard, power and debug connections to the Raspberry Pi 5, with mounting holes and connector positions agreed with the enclosure and assembly | Enclosure; assembly | `planned` |
+| Product screen | For each form, a screen module and its connection to the compute module: resolution, orientation, pixel format, interface, update regions, backlight and refresh target, and the electrical interface and timing that krepi's display driver uses. Until it exists, development uses a separate display | krepi display driver and service; the enclosure's screen window and mounting | `planned` |
+| Keyboard | For each form, the key count and layout, the switches, the key matrix and its debouncing, and the path by which key presses reach the compute module: a keyboard controller that appears as a USB HID device, or scanning through GPIO or I2C. Press, release and repeat, modifier keys and combinations, and the response to cancel reach the software through krepi's input driver. Until it exists, development uses a USB keyboard | krepi input driver; the keycaps and key mechanism; kosmo key layout | `planned` |
+| Power | A battery with its charger and fuel gauge, the supply to the compute module and the power button. The shutdown flow saves state, stops computation, cuts power and powers up again as separate steps; a real power-off needs a power circuit outside the compute module. Battery capacity and runtime are fixed only after the consumption has been measured. Until it exists, the development boards run from a stable external supply | krepi power management service, temperature and fan policy and shutdown; the enclosure's battery space, button and port positions | `planned` |
+| Debug and expansion connections | Access to the compute module's dedicated debug UART, which the module does not bring out on its board-to-board connectors, kept apart from the peripherals behind the RP1 I/O controller; expansion connections with stated pins, buses, voltage levels and connectors | krepi drivers | `planned` |
+| Carrier boards | For each form, the carrier board for the compute module: the circuits that power, boot and debug it, which are one design shared by both forms, and the connections of the screen, keyboard and power parts, with mounting holes and connector positions agreed with the enclosure and assembly | Enclosure; assembly | `planned` |
 | Bills of materials | For every design revision, the parts it uses with their manufacturers, part numbers, quantities and reference designators | — | `planned` |
 | Manufacturing outputs | For every released revision, the files sent to a manufacturer, generated from the committed design revision with the pinned tool version | — | `planned` |
 | Measurements | Electrical rule checks, wiring, signals, power consumption at idle, under computation load and with the display and peripherals, the fan, temperature and throttling, shutdown and wake, and tests on built boards; each record names the design revision and the board | krepi for tests with the real system; thermal parts and fit tests | `planned` |
@@ -79,10 +88,10 @@ Other parts of casξ work with kyto's hardware:
 | Part | What kyto will provide | Works with | Status |
 | --- | --- | --- | --- |
 | Paper and size mockups | Paper mockups and partial prints that verify the layout before the enclosure is modelled, with nominal dimensions from cited sources and measured dimensions recorded separately | Screen, keyboard and battery dimensions | `planned` |
-| Enclosure | A housing for the whole Raspberry Pi 5 board and the carrier board, screen, keyboard and battery: the screen window, the button and port positions, the height limit, and the space for cables and maintenance | Carrier board, screen, keyboard and battery | `planned` |
+| Enclosure | For each form, a housing for the carrier board with its compute module, the screen, keyboard and battery (a single shell for the landscape handheld, two halves joined by a hinge for the clamshell): the screen window, the button and port positions, the height limit, and the space for cables and maintenance | Carrier boards, screen, keyboard and battery | `planned` |
 | Keycaps and key mechanism | Keycaps and the key mechanism with its key travel, fitted to the chosen switches | Keyboard switches and key pitch | `planned` |
-| Assembly | The board edges and mounting holes of the Raspberry Pi 5, its ports, cooler and fan, the screen window, the height limit, the key travel, the cables and the maintenance space | Carrier board | `planned` |
-| Thermal parts | The space and placement of the cooler and fan of the Raspberry Pi 5; the thermal design that krepi's temperature thresholds depend on | krepi temperature and fan policy; power measurements | `planned` |
+| Assembly | The mounting holes and stacking height of the compute module, the board edges and ports of the carrier boards, the cooling parts and fan, the screen window, the height limit, the key travel, the cables, including those through the hinge of the clamshell, and the maintenance space | Carrier boards | `planned` |
+| Thermal parts | The cooling parts, fan and air path for the compute module in each form; the thermal design that krepi's temperature thresholds depend on | krepi temperature and fan policy; power measurements | `planned` |
 | Parametric models and exports | Editable parametric models and assembly sources; STEP exports for exchange with the board design; print models, all generated from a committed model revision | Board design | `planned` |
 | Printed test parts and print checks | Printed test parts with their print checks, each recorded with the model revision, printer and material | — | `planned` |
 | Fit tests | Records of the actual parts fitted together, with nominal and measured dimensions apart; the enclosure is frozen only after them | Boards and parts | `planned` |
@@ -100,10 +109,13 @@ Other parts of casξ work with kyto's hardware:
 
 ## Rules every design follows
 
-- The Raspberry Pi 5 is used as a whole board. Its interfaces, board edges,
-  mounting holes, ports, cooler and fan, connectors and cable space are taken
-  from its official drawings or measured on the board, never carried over
-  from older boards.
+- The Raspberry Pi 5 is used as a whole board for development and on the
+  bench, and the Compute Module 5 in its official IO board for development
+  and on the carrier boards of the product; neither is redesigned. Their
+  interfaces, board edges, mounting holes, connector heights, ports, cooling
+  parts and cable space are taken from their official drawings and datasheets
+  or measured on the board, never carried over from older boards or from one
+  to the other.
 - Every parameter or nominal dimension of a bought part comes from a cited
   datasheet, specification or drawing; measured values are recorded apart from
   nominal values.
@@ -142,7 +154,15 @@ Other parts of casξ work with kyto's hardware:
 
 ## Open questions
 
-- **Form.** Not chosen; no size, key count or arrangement is fixed.
+- **Form.** The two forms are fixed. The landscape handheld has a single
+  shell, a screen of 5 to 6.9 inches diagonal used in landscape and a thumb
+  QWERTY keyboard, with or without a mathematics and navigation key area. The
+  clamshell has a screen of 7 to 8.8 inches diagonal in the lid and a compact
+  QWERTY keyboard in the base, with the mathematics keys on a function layer.
+  Within each form, the screen size, the key count, the arrangement and the
+  place of the compute module are not fixed.
+- **Compute module variant.** The memory size, the on-board storage and
+  whether the module has wireless have not been fixed for the device.
 - **Screen and keyboard.** Not chosen; no key count, size or interface is
   fixed.
 - **Battery and power circuit.** Not chosen; development uses a stable
@@ -152,7 +172,7 @@ Other parts of casξ work with kyto's hardware:
   design files and models follow that choice.
 - **Display, input and rendering stack.** Not decided in krepi; the screen
   and keyboard interfaces follow that decision.
-- **Thermal design.** The cooler, fan and airflow have not been chosen; they
+- **Thermal design.** The cooling parts, fan and air path have not been chosen; they
   follow measurements of the device under sustained load.
 - **Measurement data and binary files.** Where raw measurement files are
   kept, up to what size they are committed, and whether large exports, print

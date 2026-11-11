@@ -118,11 +118,13 @@ measurement record states:
   measured.
 
 A successful boot does not show that a supply path carries full load. Until a
-power circuit exists, the Raspberry Pi 5 runs from a stable external supply;
-battery capacity and runtime are fixed only after the consumption at idle,
-under computation load, with the display and peripherals, and during
-shutdown and wake has been measured. Where raw measurement files are kept,
-and up to what size they are committed, has not been decided.
+power circuit exists, the development boards run from a stable external
+supply; battery capacity and runtime are fixed only after the consumption at
+idle, under computation load, with the display and peripherals, and during
+shutdown and wake has been measured. Consumption and temperatures measured on
+the whole Raspberry Pi 5 do not stand for the Raspberry Pi Compute Module 5.
+Where raw measurement files are kept, and up to what size they are committed,
+has not been decided.
 
 ## Mockups, prints and fit tests
 

@@ -6,10 +6,11 @@
 # kyto
 
 kyto is the hardware of casξ, a portable workstation for mathematics, science
-and programming built on the Raspberry Pi 5. It will hold three things: the
-electrical design (the product screen, the keyboard, the battery and power
-circuits, the debug and expansion connections, the carrier board and the bills
-of materials), the structural design (the enclosure, the keycaps and key
+and programming that comes in two forms, a landscape handheld and a clamshell,
+both built on the Raspberry Pi Compute Module 5. It will hold three things:
+the electrical design (the product screen, the keyboard, the battery and power
+circuits, the debug and expansion connections, the carrier boards and the
+bills of materials), the structural design (the enclosure, the keycaps and key
 mechanism, the assembly and the thermal parts), and the hardware-in-the-loop
 bench used to develop and check the device on real hardware. The name comes
 from the Greek κύτος, a vessel or body.
@@ -22,23 +23,25 @@ see [Related repositories](#related-repositories).
 
 Electrical design:
 
-- **Product screen.** A screen module and its connection to the Raspberry Pi
-  5, with a stated resolution, orientation, pixel format, interface, update
-  regions, backlight and refresh target.
-- **Keyboard.** The key count and layout, the switches, the key matrix and its
-  debouncing, and the path by which key presses reach the Raspberry Pi 5:
-  either a keyboard controller that appears as a USB HID device, or scanning
-  through GPIO or I2C.
+- **Product screen.** For each form, a screen module and its connection to
+  the compute module, with a stated resolution, orientation, pixel format,
+  interface, update regions, backlight and refresh target.
+- **Keyboard.** For each form, the key count and layout, the switches, the
+  key matrix and its debouncing, and the path by which key presses reach the
+  compute module: either a keyboard controller that appears as a USB HID
+  device, or scanning through GPIO or I2C.
 - **Power.** A battery with its charger and fuel gauge, the supply to the
-  Raspberry Pi 5, the power button, and a shutdown flow that saves state,
+  compute module, the power button, and a shutdown flow that saves state,
   stops computation, cuts power and powers up again as separate steps.
-- **Debug and expansion connections.** Access to the dedicated debug UART of
-  the Raspberry Pi 5, kept apart from the peripherals behind the RP1 I/O
-  controller, and expansion connections with stated pins, buses, voltage
+- **Debug and expansion connections.** Access to the compute module's
+  dedicated debug UART, which the module does not bring out on its
+  board-to-board connectors, kept apart from the peripherals behind the RP1
+  I/O controller, and expansion connections with stated pins, buses, voltage
   levels and connectors.
-- **Carrier board.** A peripheral carrier board that connects the input,
-  display, power and debug connections to a whole Raspberry Pi 5 board. The
-  processor board itself is not redesigned.
+- **Carrier boards.** For each form, a carrier board for the compute module
+  that holds the circuits that power, boot and debug it and connects the
+  input, display and power parts to it; these circuits are one design shared
+  by both carrier boards. The compute module itself is not redesigned.
 - **Bills of materials.** For every released design revision, the parts it
   uses, with their manufacturers and part numbers.
 - **Measurements.** Records of wiring, signals, power consumption and the
@@ -47,18 +50,20 @@ Electrical design:
 
 Structural design:
 
-- **Enclosure.** A housing for a whole Raspberry Pi 5 board and the carrier
-  board, screen, keyboard and battery, with the screen window, the button and
-  port positions, the height limit and the space needed for cables and
-  maintenance.
+- **Enclosure.** For each form, a housing for the carrier board with its
+  compute module, the screen, keyboard and battery (a single shell for the
+  landscape handheld, two halves joined by a hinge for the clamshell), with
+  the screen window, the button and port positions, the height limit and the
+  space needed for cables and maintenance.
 - **Keycaps and key mechanism.** Keycaps and the key mechanism with its key
   travel, fitted to the chosen switches.
-- **Assembly.** The board edges and mounting holes of the Raspberry Pi 5, its
-  ports, cooler and fan, the screen window, the height limit, the key travel,
-  the cables and the maintenance space, with nominal and measured dimensions
-  recorded separately.
-- **Thermal parts.** The space and placement of the cooler and fan of the
-  Raspberry Pi 5. krepi's temperature thresholds depend on this thermal
+- **Assembly.** The mounting holes and stacking height of the compute module,
+  the board edges and ports of the carrier boards, the cooling parts and fan,
+  the screen window, the height limit, the key travel, the cables, including
+  those through the hinge of the clamshell, and the maintenance space, with
+  nominal and measured dimensions recorded separately.
+- **Thermal parts.** The cooling parts, fan and air path for the compute
+  module in each form. krepi's temperature thresholds depend on this thermal
   design.
 - **Parametric models and printed test parts.** Editable parametric models
   and assembly sources, exported models for exchange with the board design,
@@ -96,11 +101,14 @@ kyto relies on from the other parts of casξ.
 
 kyto is newly initialized. The repository holds documentation, the kyto logo,
 a commit hook and the repository checks, which CI runs on every pull request
-to `main` and every push to `main`. No part or form has been chosen and
-nothing has been designed, modelled or written yet: there are no design files,
-no models and no bench tool, nothing to build, order, print or assemble, and
-none of the items above exists today. Until a power circuit exists, the
-Raspberry Pi 5 runs from a stable external supply.
+to `main` and every push to `main`. The two forms and the compute module they
+are built on are fixed; no other part has been chosen, and the screen size,
+the key count and the arrangement within each form are open. Nothing has been
+designed, modelled or written yet: there are no design files, no models and no
+bench tool, nothing to build, order, print or assemble, and none of the items
+above exists today. Until a power circuit exists, the development boards, a
+whole Raspberry Pi 5 board and a Compute Module 5 in its official IO board,
+run from a stable external supply.
 
 The repository checks run from the repository root:
 

@@ -2,7 +2,7 @@
 
 - kyto holds the hardware of casξ: the electrical design (the product screen
   and its connection, the keyboard and its scanning, the battery, charging and
-  power circuits, the debug and expansion connections, the carrier board, the
+  power circuits, the debug and expansion connections, the carrier boards, the
   bills of materials and the measurement records), the structural design (the
   enclosure, the keycaps and key mechanism, the assembly, the thermal parts,
   parametric models and printed test parts, paper and size mockups, and
@@ -20,12 +20,15 @@
   is recorded in the project's coordination records, outside this repository.
   Do not order samples, boards, parts or prints, do not open supplier
   accounts, and do not request quotes or samples without authorization.
-- Use the Raspberry Pi 5 as a whole board. Take its interfaces, board edges,
-  mounting holes, ports, cooler and fan, connectors and cable space from its
-  official drawings or from measurements on the board, never from older
-  boards. The processor board is not redesigned.
-- Keep the dedicated debug UART of the Raspberry Pi 5 apart from the
-  peripherals behind the RP1 I/O controller.
+- Develop on the whole Raspberry Pi 5 board and on the Raspberry Pi Compute
+  Module 5 in its official IO board, and use the Compute Module 5 on the
+  carrier boards of the product. Take interfaces, board edges, mounting holes,
+  connector heights, ports, cooling parts and cable space from the official
+  drawings and datasheets of the board or module concerned or from
+  measurements on it, never from older boards and never from one another.
+  Neither the Raspberry Pi 5 nor the compute module is redesigned.
+- Keep the dedicated debug UART of the Raspberry Pi 5 and of the compute
+  module apart from the peripherals behind the RP1 I/O controller.
 - A connector on the board is not a working function: the fan, the
   temperature readings and the power button need drivers and a policy in
   krepi before they count as working.
@@ -33,7 +36,8 @@
   recommended supply is not the device's continuous consumption: measure idle
   load, computation load, the display and peripherals, the fan, temperature
   and throttling, and shutdown and wake behavior before battery capacity or
-  runtime is fixed.
+  runtime is fixed. Consumption and temperatures measured on the whole
+  Raspberry Pi 5 do not stand for the Compute Module 5.
 - A successful boot does not show that a supply path carries full load.
   Check the rating, voltage drop, heating and USB-C negotiation of a supply
   path separately. Never cut only one of several parallel conductors to
@@ -46,7 +50,7 @@
 - Verify the layout with paper mockups and partial prints first. Check the
   three-dimensional fit before the carrier board is frozen, and freeze the
   enclosure only after fit tests with the actual parts. Leave room for the
-  cooler and fan that the thermal design needs; krepi's temperature
+  cooling parts and fan that the thermal design needs; krepi's temperature
   thresholds depend on that design.
 - Keep design sources and models editable in the native format of the chosen
   tool, and models parametric. Generate manufacturing outputs, exports and

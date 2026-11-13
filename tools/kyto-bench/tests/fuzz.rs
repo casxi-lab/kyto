@@ -33,7 +33,7 @@ use kyto_bench::sim::{Files, Responder, Script, ScriptProvider, SimWorld};
 use kyto_bench_core::board::{Board, LineForm, Method, RASPBERRY_PI_5};
 use kyto_bench_core::digest::Sha256;
 use kyto_bench_core::instance::{Instance, Parameters, Quantity};
-use kyto_bench_core::lines::{self, Line};
+use kyto_bench_core::lines::{self, IndexError, Line};
 use kyto_bench_core::names::PayloadName;
 use kyto_bench_core::observe::{self, ColdBootInputs, Matcher, Observations, Sent};
 use kyto_bench_core::plan::{self, Entry, PlanError, RunPlan};
@@ -485,7 +485,6 @@ fn chunk_times(rng: &mut Rng, count: usize) -> Vec<u64> {
     times
 }
 
-/// An entry of a run plan and the instance parameters of a cold boot of it.
 /// An entry of a run plan, the instance parameters of a cold boot of it
 /// and the example console output of its payload, without the lines that
 /// answer its steps.
@@ -672,8 +671,9 @@ fn events(entry: &Entry, online: &Online) -> Vec<Event> {
 
 /// Asserts that `lines` are the lines of `transcript`: from its start, each
 /// starts where the one before ended, holds the bytes of its content, and,
-/// when an LF ends it, ends after that LF and one CR before it; only the
-/// last line is not ended by an LF, and it ends with the transcript.
+/// when an LF ends it, ends after that LF and one CR before it, which its
+/// content does not keep; only the last line is not ended by an LF, and it
+/// ends with the transcript.
 #[track_caller]
 fn assert_lines(transcript: &[u8], lines: &[Line]) {
     let mut at = 0;
@@ -690,6 +690,11 @@ fn assert_lines(transcript: &[u8], lines: &[Line]) {
             };
             at = end + ending.len();
             assert_eq!(&transcript[end..at], ending, "line {number}");
+            let cr = line.content.last() == Some(&b'\r');
+            assert!(
+                ending == b"\r\n" || !cr,
+                "line {number} keeps the CR before its LF"
+            );
         } else {
             assert!(number == lines.len() - 1 && !line.content.is_empty());
             at = end;
@@ -698,6 +703,82 @@ fn assert_lines(transcript: &[u8], lines: &[Line]) {
     assert_eq!(at, transcript.len());
     let feeds = transcript.iter().filter(|byte| **byte == b'\n').count();
     assert_eq!(lines.iter().filter(|line| line.terminated).count(), feeds);
+}
+
+/// Asserts that the markers and steps of `seen` are those that the rules
+/// give, found here from `lines` and `sends` without a matcher: each line,
+/// in order, shows the markers of the board whose forms match its content,
+/// each as `board.<name>`, then those of `entry`. Only complete lines arm
+/// and answer steps: the first step is armed by a line of its `after`
+/// marker, and each later one by such a line from the response of the step
+/// before it on; the response of a step that was sent is the first line
+/// that starts at or after the bytes received before the send and matches
+/// what the step expects.
+#[track_caller]
+fn assert_matched(
+    board: &Board,
+    entry: &Entry,
+    lines: &[Line],
+    sends: &[Sent],
+    seen: &Observations,
+) {
+    let mut markers = Vec::new();
+    for line in lines {
+        let content = &line.content[..];
+        let forms = board.markers.iter();
+        let boards = forms.filter(|marker| marker.form.pattern.is_match(content));
+        let own = entry
+            .markers
+            .iter()
+            .filter(|marker| marker.line.is_match(content));
+        let names = boards
+            .map(|marker| format!("board.{}", marker.name))
+            .chain(own.map(|marker| marker.name.clone()));
+        markers.extend(names.map(|name| (name, line.offset)));
+    }
+    let found: Vec<(String, u64)> = seen
+        .markers
+        .iter()
+        .map(|marker| (marker.name.clone(), marker.line))
+        .collect();
+    assert_eq!(found, markers, "markers");
+    let steps = entry.steps();
+    let mut expected: Vec<(usize, u64, Option<usize>, Option<u64>)> = Vec::new();
+    let send_of = |step: usize| sends.iter().find(|send| send.step == step);
+    for line in lines.iter().filter(|line| line.terminated) {
+        if let Some((step, _, _, response @ None)) = expected.last_mut() {
+            let after_send = send_of(*step).is_some_and(|send| line.offset >= send.received);
+            if after_send && steps[*step].expect.is_match(&line.content) {
+                *response = Some(line.offset);
+            }
+        }
+        let ready = expected
+            .last()
+            .is_none_or(|(.., response)| response.is_some());
+        let next = expected.len();
+        let mut shown = markers.iter().filter(|(_, at)| *at == line.offset);
+        if ready
+            && steps
+                .get(next)
+                .is_some_and(|step| shown.any(|(name, _)| *name == step.after))
+        {
+            let event = send_of(next).map(|send| send.event);
+            expected.push((next, line.offset, event, None));
+        }
+    }
+    let found: Vec<_> = seen
+        .steps
+        .iter()
+        .map(|step| {
+            (
+                step.step,
+                step.trigger_line,
+                step.send_event,
+                step.response_line,
+            )
+        })
+        .collect();
+    assert_eq!(found, expected, "steps");
 }
 
 /// Asserts that every segment of `seen` is the SHA-256 of the bytes of
@@ -799,8 +880,23 @@ fn rechunked(rng: &mut Rng, length: usize, sends: &[Sent]) -> Vec<[u64; 2]> {
     starts.into_iter().map(|start| [start, 0]).collect()
 }
 
-/// An index of chunks of any offsets and times, mostly near the length.
-fn any_index(rng: &mut Rng, length: usize) -> Vec<[u64; 2]> {
+/// An index of `length` bytes: `index` with an entry removed, repeated or
+/// moved by a byte or a time made a nanosecond earlier, or chunks of any
+/// offsets and times, mostly near the length.
+fn any_index(rng: &mut Rng, index: &[[u64; 2]], length: usize) -> Vec<[u64; 2]> {
+    if !index.is_empty() && rng.chance(50) {
+        let (mut changed, at) = (index.to_vec(), rng.below(index.len()));
+        match rng.below(5) {
+            0 => {
+                changed.remove(at);
+            }
+            1 => changed.insert(at, changed[at]),
+            2 => changed[at][0] += 1,
+            3 => changed[at][0] = changed[at][0].saturating_sub(1),
+            _ => changed[at][1] -= 1,
+        }
+        return changed;
+    }
     let entry = |rng: &mut Rng| {
         let offset = match rng.below(4) {
             0 => rng.next(),
@@ -825,6 +921,7 @@ struct TranscriptCover {
     segments: u64,
     split_line_end: u64,
     not_utf8: u64,
+    indexes: BTreeSet<&'static str>,
 }
 
 /// One case of the transcripts.
@@ -880,17 +977,36 @@ fn transcript_case(
     let other = rechunked(rng, transcript.len(), &run.sends);
     let again = context.observe(transcript, &other, &run.sends);
     assert_eq!(untimed(again), untimed(seen.clone()), "chunks: {other:?}");
+    assert_matched(board, entry, &lines, &run.sends, &seen);
     assert_segments(entry, transcript, &lines, &seen);
     assert_bounded(board, entry, lines.len(), &seen);
-    // An index of any offsets and times describes the bytes or is refused.
-    let any = any_index(rng, transcript.len());
-    if let Ok(chunks) = lines::chunks(transcript, &any) {
+    // An index of any offsets and times describes the bytes when it keeps
+    // the rules of an index, and is refused when it does not: it is empty
+    // only for no bytes, starts at offset 0, its offsets increase and stay
+    // below the length, and its times do not decrease.
+    let any = any_index(rng, index, transcript.len());
+    let length = transcript.len() as u64;
+    let valid = any.first().map_or(length == 0, |first| first[0] == 0)
+        && any.iter().all(|chunk| chunk[0] < length)
+        && any
+            .windows(2)
+            .all(|pair| pair[0][0] < pair[1][0] && pair[0][1] <= pair[1][1]);
+    let read = lines::chunks(transcript, &any);
+    assert_eq!(read.is_ok(), valid, "{any:?}: {read:?}");
+    if let Ok(chunks) = &read {
         let joined: Vec<u8> = chunks
             .iter()
             .flat_map(|(_, bytes)| bytes.to_vec())
             .collect();
         assert_eq!(joined, transcript);
     }
+    cover.indexes.insert(match &read {
+        Ok(_) => "read",
+        Err(IndexError::NotFromStart) => "not from the start",
+        Err(IndexError::OffsetNotIncreasing { .. }) => "an offset not increasing",
+        Err(IndexError::OffsetPastEnd { .. }) => "an offset past the end",
+        Err(IndexError::TimeDecreasing { .. }) => "a time decreasing",
+    });
     // Events in any order, with any times and sends of any step, are
     // judged by the same rules.
     if rng.chance(20) {
@@ -939,13 +1055,14 @@ fn transcript_case(
 /// files and lines of the seeds with line ends of every kind, read in chunks
 /// of any size by a run that sends each armed step after a chunk and whose
 /// board answers most sends. The record of what the run read gives the
-/// observations of its matcher; other chunks that keep every send where it
-/// came give the same, but for the times of markers; the lines put back
-/// together are the bytes; segments are digests of the raw bytes; what a
-/// cold boot shows is bounded by its lines; the checks of a cold boot are
-/// of its rules, in their order, the same in every reading, also of events
-/// in any order; and an index of any offsets and times describes the bytes
-/// or is refused.
+/// observations of its matcher, whose markers and steps are those that the
+/// rules give from the lines and the sends; other chunks that keep every
+/// send where it came give the same, but for the times of markers; the
+/// lines put back together are the bytes; segments are digests of the raw
+/// bytes; what a cold boot shows is bounded by its lines; the checks of a
+/// cold boot are of its rules, in their order, the same in every reading,
+/// also of events in any order; and an index of any offsets and times
+/// describes the bytes exactly when it keeps the rules of an index.
 fn transcripts(cases: u64) {
     let board = pi5();
     let (seeds, contexts) = (Seeds::new(&board), Context::all(&board));
@@ -967,6 +1084,8 @@ fn transcripts(cases: u64) {
         cover.not_utf8,
     ];
     assert!(counts.iter().all(|count| *count > cases / 50), "{counts:?}");
+    // Indexes were read, and refused under each rule.
+    assert_eq!(cover.indexes.len(), 5, "{:?}", cover.indexes);
 }
 
 #[test]

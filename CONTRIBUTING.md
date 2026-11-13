@@ -215,11 +215,12 @@ change that adds it.
   supply, never by the relay's own reply. A run switches the supply off and
   waits for readings to confirm it before the first cold boot and after
   every cold boot that started, one that failed or faulted too, and its
-  receipt records the commands and the readings; a run that stops on an
-  error of the tool switches the supply off and says whether readings
-  confirmed it. Operations that write firmware, EEPROM contents or storage
-  media are off by default: a run refuses a payload file that the board
-  description lists as letting the firmware make such a write, before
+  receipt records the commands and the readings; a run that a fault ends
+  before readings confirmed the last power off, and a run that stops on an
+  error of the tool, switch the supply off once more and say whether
+  readings confirmed it. Operations that write firmware, EEPROM contents or
+  storage media are off by default: a run refuses a payload file that the
+  board description lists as letting the firmware make such a write, before
   anything is staged or powered, unless its run plan entry enables that
   class of write explicitly. An enable is needed for a write but does not
   authorize one; that is decided outside the tool.

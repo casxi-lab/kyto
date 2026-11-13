@@ -54,7 +54,7 @@ fn receipt(out: &Path) -> Receipt {
 #[test]
 fn the_example_runs_to_pass_with_the_release_binary() {
     let (dir, examples) = (scratch("example"), examples());
-    let mut nonces = Vec::new();
+    let mut receipts = Vec::new();
     for run in ["first", "second"] {
         let out = dir.join(run);
         let plan = examples.join("run-plan.toml");
@@ -75,9 +75,14 @@ fn the_example_runs_to_pass_with_the_release_binary() {
         assert!(rules.contains(&"evidence.simulated"));
         let public = fs::read(out.join("receipt.public.json")).unwrap();
         assert_eq!(PublicReceipt::parse(&public).unwrap().replacements.len(), 3);
-        nonces.push(receipt.nonce);
+        receipts.push(receipt);
     }
-    assert_ne!(nonces[0], nonces[1], "each receipt has its own nonce");
+    let [first, mut second] = <[Receipt; 2]>::try_from(receipts).unwrap();
+    assert_ne!(first.nonce, second.nonce, "each receipt has its own nonce");
+    // Apart from its nonce, a run on simulated devices gives the same
+    // receipt every time, its times included.
+    second.nonce.clone_from(&first.nonce);
+    assert_eq!(first, second);
 }
 
 #[test]

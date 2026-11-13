@@ -10,13 +10,18 @@ use std::cell::RefCell;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use serde::Deserialize;
 
-use kyto_bench::cli;
-use kyto_bench::device::{Console, Delivery, DeviceError, Nanos, PowerState, Received};
+use kyto_bench::device::{
+    Clock, Console, Delivery, DeviceError, Meter, Nanos, PowerState, PowerSwitch, Received, Role,
+};
 use kyto_bench::env::{self, Bench, Env};
-use kyto_bench::sim::{Files, Responder, Script, ScriptProvider, SimTftp, SimWorld};
+use kyto_bench::sim::{
+    Files, Responder, Script, ScriptProvider, SimSupplyMeter, SimTftp, SimWorld,
+};
+use kyto_bench::{cli, output};
 use kyto_bench_core::board::{Board, RASPBERRY_PI_5};
 use kyto_bench_core::digest::Sha256;
 use kyto_bench_core::instance::Instance;
@@ -25,7 +30,7 @@ use kyto_bench_core::plan::RunPlan;
 use kyto_bench_core::power;
 use kyto_bench_core::public::PublicReceipt;
 use kyto_bench_core::receipt::{
-    Base64, Command, EndReason, Event, EventKind, Outcome, Receipt, Verdict,
+    Base64, Check, ColdBootRecord, Command, EndReason, Event, EventKind, Outcome, Receipt, Verdict,
 };
 use kyto_bench_core::rejudge::rejudge;
 
@@ -118,13 +123,55 @@ impl Console for Deaf {
     }
 }
 
+/// A console that reports its deadline early: it gives what arrives within
+/// 100 ms of each read, or reports a deadline then.
+struct Early(Box<dyn Console>, Rc<dyn Clock>);
+
+impl Console for Early {
+    fn open(&mut self, deadline: Nanos) -> Result<Nanos, DeviceError> {
+        self.0.open(deadline)
+    }
+
+    fn receive(&mut self, deadline: Nanos) -> Result<Received, DeviceError> {
+        let soon = self.1.now().saturating_add(Nanos::from_millis(100));
+        self.0.receive(deadline.min(soon))
+    }
+
+    fn send(&mut self, bytes: &[u8]) -> Result<Nanos, DeviceError> {
+        self.0.send(bytes)
+    }
+
+    fn close(&mut self) -> Result<(), DeviceError> {
+        self.0.close()
+    }
+}
+
+/// A power switch whose command of the number given, from 1, fails before
+/// it is sent.
+struct Failing(Box<dyn PowerSwitch>, u32, u32);
+
+impl PowerSwitch for Failing {
+    fn command(&mut self, state: PowerState) -> Result<Nanos, DeviceError> {
+        self.1 += 1;
+        if self.1 == self.2 {
+            return Err(DeviceError::new(Role::Power, "the command was not sent"));
+        }
+        self.0.command(state)
+    }
+}
+
 /// Surroundings whose bench is a simulated device of each role on `world`,
-/// with a [`Deaf`] console when `deaf` is set.
+/// with a [`Deaf`] console when `deaf` is set, an [`Early`] one when `early`
+/// is, and a [`Failing`] switch when `failing` gives a command. When the
+/// bench is opened, a directory is made at `block`, if it is given.
 struct TestEnv {
     world: SimWorld,
     script: RefCell<Option<ScriptProvider>>,
     boards: Vec<&'static str>,
     deaf: bool,
+    early: bool,
+    failing: Option<u32>,
+    block: Option<PathBuf>,
 }
 
 impl TestEnv {
@@ -136,6 +183,9 @@ impl TestEnv {
             script,
             boards,
             deaf: false,
+            early: false,
+            failing: None,
+            block: None,
         }
     }
 
@@ -159,6 +209,15 @@ impl Env for TestEnv {
         let mut bench = env::simulated(&self.world, script);
         if self.deaf {
             bench.console = Box::new(Deaf(bench.console, 0));
+        }
+        if self.early {
+            bench.console = Box::new(Early(bench.console, Rc::clone(&bench.clock)));
+        }
+        if let Some(command) = self.failing {
+            bench.power = Box::new(Failing(bench.power, 0, command));
+        }
+        if let Some(block) = &self.block {
+            fs::create_dir(block).unwrap();
         }
         Ok(bench)
     }
@@ -208,13 +267,14 @@ fn run(dir: &Path, plan: &Path, payloads: &Path, env: &TestEnv) -> Ran {
 
 /// Runs the example plan on the example payloads.
 fn run_example(name: &str, env: &TestEnv) -> Ran {
+    run_example_in(&scratch(name), env)
+}
+
+/// Runs the example plan on the example payloads, in `dir`.
+fn run_example_in(dir: &Path, env: &TestEnv) -> Ran {
     let examples = examples();
-    run(
-        &scratch(name),
-        &examples.join("run-plan.toml"),
-        &examples.join("payload"),
-        env,
-    )
+    let plan = examples.join("run-plan.toml");
+    run(dir, &plan, &examples.join("payload"), env)
 }
 
 /// The example plan with `edit` made, written into `dir`.
@@ -320,6 +380,39 @@ fn times(receipt: &Receipt, events: &[Event]) -> Times {
     }
 }
 
+/// Why the cold boot of `events` ended.
+fn end(events: &[Event]) -> Option<EndReason> {
+    events.iter().find_map(|event| match event.event {
+        EventKind::End { reason } => Some(reason),
+        _ => None,
+    })
+}
+
+/// The rules that failed among the checks of `cold_boot`.
+fn failed(cold_boot: &ColdBootRecord) -> Vec<&str> {
+    let failed = cold_boot
+        .checks
+        .iter()
+        .filter(|c| c.result == Outcome::Fail);
+    failed.map(|check| check.rule.as_str()).collect()
+}
+
+/// The steps that the cold boot of `events` sent, with their bytes.
+fn sends(events: &[Event]) -> Vec<(usize, &[u8])> {
+    let send = |event| match event {
+        &Event {
+            event:
+                EventKind::Send {
+                    step,
+                    ref bytes_base64,
+                },
+            ..
+        } => Some((step, &bytes_base64.0[..])),
+        _ => None,
+    };
+    events.iter().filter_map(send).collect()
+}
+
 fn occurrences(bytes: &[u8], value: &str) -> usize {
     bytes
         .windows(value.len())
@@ -340,6 +433,22 @@ fn a_two_entry_plan_runs_to_pass_on_simulated_devices() {
     );
     let boots: Vec<usize> = receipt.entries.iter().map(|e| e.cold_boots.len()).collect();
     assert_eq!(boots, [3, 1]);
+    // One serial step, which the echo entry has and its cold boot sends
+    // once and gets the response to; the firmware-only entry sends nothing.
+    assert!(plan.entries[0].steps.is_none());
+    assert_eq!(plan.entries[1].steps().len(), 1);
+    for cold_boot in &receipt.entries[0].cold_boots {
+        assert_eq!(sends(&cold_boot.events), []);
+    }
+    let echo_boot = &receipt.entries[1].cold_boots[0];
+    assert_eq!(sends(&echo_boot.events), [(0, &b"?\r"[..])]);
+    let response = echo_boot
+        .checks
+        .iter()
+        .find(|c| c.rule == "step.response")
+        .map(|c| (c.subject.as_str(), c.result));
+    assert_eq!(response, Some(("0", Outcome::Pass)));
+    assert!(echo_boot.observations.steps[0].response_line.is_some());
     // Two payloads, each checked from its source, as staged and as served.
     for (record, entry) in receipt.entries.iter().zip(&plan.entries) {
         assert_eq!(record.verdict, Verdict::Pass);
@@ -373,7 +482,7 @@ fn a_two_entry_plan_runs_to_pass_on_simulated_devices() {
     let board = Board::parse(&receipt.inputs.board_description.text).unwrap();
     let interval = board.cold_boot.off_interval_ms * MS;
     let mut off_at = power::off_confirmed_at(confirmation, &receipt.start.events).unwrap();
-    for record in &receipt.entries {
+    for (record, entry) in receipt.entries.iter().zip(&plan.entries) {
         let switch = position(&record.events, |k| matches!(k, EventKind::Switch { .. }));
         let switched = record.events[switch.unwrap()].at_ns;
         assert!(
@@ -390,8 +499,11 @@ fn a_two_entry_plan_runs_to_pass_on_simulated_devices() {
             assert!(t.order.is_sorted_by(|a, b| a < b), "{:?}", t.order);
             assert!(t.ready <= t.on && t.on < t.on_confirmed && t.on_confirmed <= t.end);
             assert!(t.end <= t.off && t.off < t.off_confirmed && t.off_confirmed <= t.closed);
-            if let Some(send) = t.send {
+            if entry.steps.is_some() {
+                let send = t.send.expect("the echo entry sends its step");
                 assert!(t.on_confirmed < send && send < t.end);
+            } else {
+                assert_eq!(t.send, None);
             }
             off_at = t.off_confirmed.0;
             // The console output, exactly as the board wrote it, ends with
@@ -737,16 +849,119 @@ fn residual_voltage_above_the_off_threshold_is_not_off() {
     assert_eq!(ran.status, cli::BENCH_FAULT);
     let receipt = ran.receipt();
     let first = &receipt.entries[0];
-    assert!(first.cold_boots.is_empty() && first.events.is_empty());
+    assert!(first.cold_boots.is_empty());
     let check = &first.checks[0];
     let found = (check.rule.as_str(), check.subject.as_str(), check.result);
     assert_eq!(found, ("power.off_unconfirmed", "start", Outcome::Fault));
     assert_eq!(receipt.entries[1].verdict, Verdict::NotRun);
-    assert_eq!(
-        env.world.power_commands().len(),
-        1,
-        "nothing is switched on"
-    );
+    // The run switches the supply off once more, which readings do not
+    // confirm either, and it records that in the first entry.
+    let confirmation = &receipt.inputs.instance.parameters.confirmation;
+    let commands: Vec<Command> = first.events.iter().filter_map(power::command).collect();
+    assert_eq!(commands, [Command::Off]);
+    assert_eq!(power::off_confirmed_at(confirmation, &first.events), None);
+    let sent: Vec<PowerState> = env.world.power_commands().iter().map(|c| c.1).collect();
+    assert_eq!(sent, [PowerState::Off; 2], "nothing is switched on");
+}
+
+#[test]
+fn a_fault_that_leaves_the_supply_unconfirmed_switches_it_off_again() {
+    // The switch fails to send its third command, the power off after the
+    // first cold boot, or its first, the power off at the start.
+    let after_cold_boot = [PowerState::Off, PowerState::On, PowerState::Off];
+    for (command, sent) in [(3, &after_cold_boot[..]), (1, &[PowerState::Off])] {
+        let mut env = TestEnv::example();
+        env.failing = Some(command);
+        let ran = run_example(&format!("off-again-{command}"), &env);
+        assert_eq!(ran.status, cli::BENCH_FAULT);
+        let receipt = ran.receipt();
+        let verdicts: Vec<Verdict> = receipt.entries.iter().map(|e| e.verdict).collect();
+        assert_eq!(verdicts, [Verdict::BenchFault, Verdict::NotRun]);
+        // The failed command and the one sent again after it.
+        let commands: Vec<PowerState> = env.world.power_commands().iter().map(|c| c.1).collect();
+        assert_eq!(commands, sent, "command {command}");
+        let first = &receipt.entries[0];
+        let boots = first.cold_boots.iter().flat_map(|c| &c.checks);
+        let error = |c: &&Check| (c.rule.as_str(), c.subject.as_str()) == ("device.error", "power");
+        let checks = first.checks.iter().chain(boots);
+        assert_eq!(checks.filter(error).count(), 1, "command {command}");
+        // Readings confirmed the power off sent again, which the entry
+        // records, and the supply is off.
+        let confirmation = &receipt.inputs.instance.parameters.confirmation;
+        let commands: Vec<Command> = first.events.iter().filter_map(power::command).collect();
+        assert_eq!(commands, [Command::Off]);
+        assert!(power::off_confirmed_at(confirmation, &first.events).is_some());
+        let mut meter = SimSupplyMeter::new(&env.world);
+        assert_eq!(meter.sample().unwrap().micro, 0);
+    }
+}
+
+#[test]
+fn a_deadline_that_the_console_reports_early_ends_no_cold_boot() {
+    // The firmware-only entry captures until its boot timeout, and the
+    // console reports a deadline 100 ms after each read that gets nothing.
+    let dir = scratch("early-deadline");
+    let plan = plan_with(&dir, |plan| {
+        let end = "boot_timeout_ms = 60000\nend = { marker = \"started\" }";
+        plan.replacen(end, "boot_timeout_ms = 2000\nend = \"timeout\"", 1)
+    });
+    let mut env = TestEnv::example();
+    env.early = true;
+    let ran = run(&dir, &plan, &examples().join("payload"), &env);
+    assert_eq!(ran.status, cli::PASS);
+    let receipt = ran.receipt();
+    for cold_boot in &receipt.entries[0].cold_boots {
+        assert_eq!(end(&cold_boot.events), Some(EndReason::BootTimeout));
+        let t = times(&receipt, &cold_boot.events);
+        assert_eq!(t.end.0, t.on.0 + 2000 * MS, "the boot timeout of the plan");
+    }
+}
+
+#[test]
+fn an_end_marker_without_its_line_feed_ends_no_cold_boot() {
+    // The last line of the first cold boot, its end marker, has no CR LF.
+    let mut example = script(None, STATS);
+    let env = TestEnv::new(Box::new(move |power_on, files: &Files| {
+        let mut script = example(power_on, files);
+        if power_on == 1 {
+            let last = &mut script.chunks.last_mut().unwrap().1;
+            assert!(last.ends_with(b"started\r\n"));
+            last.truncate(last.len() - 2);
+        }
+        script
+    }));
+    let ran = run_example("unterminated-end", &env);
+    assert_eq!(ran.status, cli::FAIL);
+    let receipt = ran.receipt();
+    let verdicts: Vec<Verdict> = receipt.entries.iter().map(|e| e.verdict).collect();
+    assert_eq!(verdicts, [Verdict::Fail, Verdict::Pass]);
+    let cold_boot = &receipt.entries[0].cold_boots[0];
+    assert!(cold_boot.serial.bytes_base64.0.ends_with(b"started"));
+    assert_eq!(end(&cold_boot.events), Some(EndReason::BootTimeout));
+    assert_eq!(failed(cold_boot), ["boot.end"]);
+}
+
+#[test]
+fn an_output_file_that_cannot_be_written_has_a_status_of_its_own() {
+    // A directory takes the place of the file once the run has created its
+    // output directory.
+    let both = [
+        (output::PUBLIC, cli::PUBLIC_REFUSED),
+        (output::RECEIPT, cli::INPUT_ERROR),
+    ];
+    for (file, status) in both {
+        let dir = scratch(&format!("unwritable-{file}"));
+        let mut env = TestEnv::example();
+        env.block = Some(dir.join("out").join(file));
+        let ran = run_example_in(&dir, &env);
+        assert_eq!(ran.status, status, "{file}");
+        // A receipt is written whole or not at all.
+        let receipt = ran.out.join(output::RECEIPT).is_file();
+        assert_eq!(receipt, file == output::PUBLIC, "{file}");
+        if receipt {
+            assert_eq!(ran.receipt().verdict, Some(Verdict::Pass));
+        }
+    }
 }
 
 #[test]
@@ -778,6 +993,10 @@ fn inputs_that_cannot_be_used_are_refused_before_anything_is_written() {
     let ran = run(&dir, &plan, &payloads, &env);
     assert_eq!(ran.status, cli::INPUT_ERROR);
     assert!(!ran.out.exists());
+    // A command line without every path, or with no command.
+    for line in [&["kyto-bench", "run", "--plan", "p"][..], &["kyto-bench"]] {
+        assert_eq!(cli::run(line, &env), cli::INPUT_ERROR, "{line:?}");
+    }
     // An instance configuration that is not one.
     let ran = run_with(
         &dir,

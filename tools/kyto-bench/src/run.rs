@@ -10,7 +10,8 @@
 //! ends, sending each step once its trigger line has appeared, then switches
 //! the supply off, confirmed by readings, after every cold boot that
 //! started, and closes the console. A cold boot that does not pass ends its
-//! entry, and a fault ends the run.
+//! entry, and a fault ends the run; when readings did not confirm the last
+//! power off, the run switches the supply off once more first.
 //!
 //! The steps that serve more than one cold boot are functions of their own,
 //! which the flow calls: [`check_sources`] and [`prepare_entry`] before any
@@ -76,12 +77,24 @@ pub fn run(env: &dyn Env, inputs: &Inputs) -> Result<Receipt, String> {
     // it.
     if let Err(panic) = panic::catch_unwind(AssertUnwindSafe(|| flow.run_entries())) {
         let confirmation = &inputs.instance.parameters().confirmation;
-        let off = power_off_confirmed(&mut flow.bench, confirmation, &mut Vec::new(), 0);
-        let not = if off.is_some() { "" } else { "not " };
-        eprintln!("kyto-bench: the run stopped; readings did {not}confirm the power off");
+        abort_off(
+            &mut flow.bench,
+            confirmation,
+            &mut Vec::new(),
+            "the run stopped",
+        );
         panic::resume_unwind(panic);
     }
     Ok(assemble::finish(flow.receipt))
+}
+
+/// Switches the supply off once more after a run stopped with the board
+/// perhaps on, records it in `events`, and says on standard error, after
+/// `why`, whether readings confirmed it.
+fn abort_off(bench: &mut Bench, confirmation: &Confirmation, events: &mut Vec<Event>, why: &str) {
+    let off = power_off_confirmed(bench, confirmation, events, 0);
+    let not = if off.is_some() { "" } else { "not " };
+    eprintln!("kyto-bench: {why}; readings did {not}confirm the power off");
 }
 
 /// Records the source files `read` of entry `index` of `inputs` in `record`
@@ -247,7 +260,9 @@ struct Flow<'a> {
 
 impl Flow<'_> {
     /// Switches the supply off before the first entry, then runs the
-    /// entries in order until one is a bench fault.
+    /// entries in order until one is a bench fault. When readings did not
+    /// confirm the last power off, which only a fault leaves, the supply is
+    /// switched off once more, recorded in the events of the entry.
     fn run_entries(&mut self) {
         let (inputs, mut start) = (self.inputs, Vec::new());
         let confirmation = &inputs.instance.parameters().confirmation;
@@ -259,6 +274,11 @@ impl Flow<'_> {
                 if self.cold_boot(index, number) != Some(Verdict::Pass) {
                     break;
                 }
+            }
+            if self.off_at.is_none() {
+                let events = &mut self.receipt.entries[index].events;
+                let why = "the supply was switched off again after a fault";
+                abort_off(&mut self.bench, confirmation, events, why);
             }
             let payload = inputs.payload(entry);
             verdict::close_entry(&mut self.receipt, index, payload, entry.cold_boots);
@@ -325,8 +345,8 @@ impl Flow<'_> {
 
     /// Reads the console of a cold boot of `entry`, switched on at `on`,
     /// sending each step once it is armed, until the cold boot ends; the
-    /// reason it ended. A deadline that the bench clock has reached ends it
-    /// whatever the console reports.
+    /// reason it ended. A deadline ends it once the bench clock has reached
+    /// it, whatever the console reports.
     fn capture(&mut self, capture: &mut Capture<'_>, entry: &Entry, on: Nanos) -> EndReason {
         let boot = on.saturating_add(Nanos::from_millis(entry.boot_timeout_ms));
         let (clock, console) = (&self.bench.clock, &mut *self.bench.console);
@@ -348,6 +368,7 @@ impl Flow<'_> {
             };
             match got {
                 Ok(Got::Bytes) => {}
+                Ok(Got::Deadline) if clock.now() < deadline => {}
                 Ok(Got::Deadline) if deadline == boot => return EndReason::BootTimeout,
                 Ok(Got::Deadline) => return EndReason::StepTimeout,
                 Ok(Got::Limit(reason)) => return reason,

@@ -824,14 +824,16 @@ hour, of the send. Steps run in order:
   before the send and matches `expect`; it must be complete, ended by its
   LF, within `timeout_ms` of the send.
 
-Only complete lines arm and answer steps: the unterminated last line of a
-capture does neither.
+Only complete lines arm and answer steps and end a cold boot at its marker:
+the unterminated last line of a capture does none of these.
 
-`end = { marker = "<marker>" }` ends a cold boot once the marker has appeared
-and every step has its response. `end = "timeout"` captures until the boot
-timeout. A run ends a cold boot at the boot timeout, or when the
-`timeout_ms` of the step that waits for its response has passed, once its
-bench clock reaches that time, whatever the console reports.
+`end = { marker = "<marker>" }` ends a cold boot once a complete line of the
+marker has appeared and every step has its response. `end = "timeout"`
+captures until the boot timeout. A run ends a cold boot at the boot timeout,
+or when the `timeout_ms` of the step that waits for its response has passed,
+once its bench clock reaches that time, whatever the console reports: a
+console that reports nothing by then does not keep the cold boot going, and
+one that reports a deadline earlier does not end it.
 
 ### Checks of a run plan
 
@@ -1063,7 +1065,7 @@ The record of an entry has these keys:
 | `index` | The position of the entry in the plan, from 0 |
 | `name`, `reference` | The `name` and `reference` of the plan's entry; `reference` is `null` when it has none |
 | `payload` | `pin`, the `payload_pin` of the entry, or `null`; `generation`, the generation that holds its staged payload, or `null`; and `files` |
-| `events` | The events of the entry outside its cold boots, such as the switch to its generation |
+| `events` | The events of the entry outside its cold boots: the switch to its generation and the failures of devices then, and, when a fault ended the run before readings confirmed the last power off, the power off that the run sent once more and its readings |
 | `checks` | The [checks](#checks) of the entry |
 | `cold_boots` | The record of each cold boot that was run, at most the `cold_boots` of the plan's entry |
 | `verdict` | `"PASS"`, `"FAIL"`, `"BENCH FAULT"` or `"NOT RUN"`; only an entry is ever `"NOT RUN"`, and an entry that was not run has no cold boot |
@@ -1321,7 +1323,12 @@ closed. A device error can come in any phase.
 
 A cold boot that does not pass is the last of its entry: an entry fails at
 its first failed cold boot, and the next entry follows. A fault ends the
-run, and every entry after the one that holds it is `"NOT RUN"`.
+run, and every entry after the one that holds it is `"NOT RUN"`. When
+readings did not confirm the last power off before the fault ended the run,
+the run switches the supply off once more and records that command, its
+readings and any failure of a device in the `events` of the entry that holds
+the fault, and its error output says whether readings confirmed that power
+off.
 
 ### Refused runs
 

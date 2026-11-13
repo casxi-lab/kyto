@@ -123,6 +123,21 @@ const PASSED_ON: [(&str, usize); 4] = [
 /// `evidence::eligibility` pass a rule on.
 const RECORDS: [&str; 3] = ["Check", "Refusal", "Reason"];
 
+/// The starts of the names of the methods that change a `String` in place.
+const CHANGES: [&str; 11] = [
+    "clear",
+    "drain",
+    "extend",
+    "insert",
+    "make_ascii",
+    "pop",
+    "push",
+    "remove",
+    "replace_range",
+    "retain",
+    "truncate",
+];
+
 /// The source that lists the rules of evidence, `EVIDENCE_RULES`.
 const EVIDENCE_SOURCE: &str = "tools/kyto-bench-core/src/receipt.rs";
 
@@ -379,6 +394,62 @@ fn built_records(file: &str, code: &str, problems: &mut Vec<String>) -> usize {
     passed
 }
 
+/// The name of the function that `line` of code defines, if any.
+fn defined(line: &str) -> Option<&str> {
+    let at = line.find("fn ")?;
+    let starts = at == 0 || line[..at].ends_with(' ');
+    let name = line[at + "fn ".len()..].split(['(', '<']).next()?.trim();
+    starts.then_some(name)
+}
+
+/// The other ways in which `code`, the code of the file `file`, could give
+/// a rule, each a problem: a function of one of [`RECORDS`], in any of its
+/// `impl` blocks, other than its `new`; such a block that builds a record of
+/// `Self` outside `new`; and a `rule` field that is assigned, changed in
+/// place or borrowed to be changed.
+fn other_ways(file: &str, code: &str, problems: &mut Vec<String>) {
+    let lines: Vec<&str> = code.lines().collect();
+    for (at, line) in lines.iter().enumerate() {
+        let header = line.trim_start();
+        if !(header.starts_with("impl ") || header.starts_with("impl<")) {
+            continue;
+        }
+        let header = header.split('{').next().unwrap_or(header);
+        let mut words = header.split(|c: char| !(c.is_alphanumeric() || c == '_'));
+        let target = words.rfind(|word| !word.is_empty()).unwrap_or("");
+        let Some(record) = RECORDS.iter().find(|record| **record == target) else {
+            continue;
+        };
+        let indent = line.len() - line.trim_start().len();
+        let close = format!("{}}}", " ".repeat(indent));
+        let end = lines[at..].iter().position(|line| *line == close);
+        let block = &lines[at..end.map_or(lines.len(), |end| at + end + 1)];
+        let new = function(block, 0, "new").unwrap_or_default();
+        let rest = block.join("\n").replacen(&new, "", 1);
+        for name in rest.lines().filter_map(defined) {
+            problems.push(format!("{file}: {record} has the function {name}"));
+        }
+        if rest.contains("Self::new(") || rest.contains("Self {") {
+            problems.push(format!("{file}: a {record} is built outside its new"));
+        }
+    }
+    for (at, _) in code.match_indices(".rule") {
+        let after = &code[at + ".rule".len()..];
+        if after.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
+            continue;
+        }
+        let after = after.trim_start();
+        let assigned = after.starts_with('=') && !after.starts_with("==");
+        let changed = after
+            .strip_prefix('.')
+            .is_some_and(|call| CHANGES.iter().any(|change| call.starts_with(change)));
+        let owner = code[..at].trim_end_matches(|c: char| c.is_alphanumeric() || "_.".contains(c));
+        if assigned || changed || after.starts_with("+=") || owner.ends_with("&mut ") {
+            problems.push(format!("{file}: a rule is assigned or changed"));
+        }
+    }
+}
+
 /// The rules of `EVIDENCE_RULES` in `source`.
 fn evidence_rules(source: &str) -> Vec<String> {
     let code = code(source);
@@ -583,6 +654,7 @@ fn problems(
         let code = code(text);
         let passed = named_rules(file, &code, &mut named, &mut problems)
             + built_records(file, &code, &mut problems);
+        other_ways(file, &code, &mut problems);
         let expected = PASSED_ON.iter().find(|(f, _)| f == file).map_or(0, |p| p.1);
         if passed != expected {
             problems.push(format!(
@@ -957,6 +1029,35 @@ fn the_contract_lists_every_requirement_and_rule() {
         &found,
         "evidence::eligibility does not name evidence.simulated",
     );
+    // A function of a record other than its `new`, in its own `impl` block
+    // or in that of a trait, a record built from `Self` outside its `new`,
+    // and a rule that is assigned, changed in place or borrowed to be
+    // changed.
+    let failed = "impl Check {\n    pub fn failed(rule: &str, subject: &str) -> Self {\n        \
+        Self::new(rule, subject, Outcome::Fail, None)\n    }\n}\n\n";
+    let found = prepend(receipt, failed);
+    assert_finds(&found, "receipt.rs: Check has the function failed");
+    assert_finds(&found, "receipt.rs: a Check is built outside its new");
+    let named = "impl From<&str> for Refusal {\n    fn from(rule: &str) -> Self {\n        \
+        Self { rule: rule.into(), entry: None, subject: String::new(), detail: String::new() }\n    \
+        }\n}\n\n";
+    let found = prepend(receipt, named);
+    assert_finds(&found, "receipt.rs: Refusal has the function from");
+    assert_finds(&found, "receipt.rs: a Refusal is built outside its new");
+    let blank = "impl Reason {\n    const BLANK: Self = Self {\n        rule: String::new(),\n        \
+        detail: String::new(),\n    };\n}\n\n";
+    let found = prepend(receipt, blank);
+    assert_finds(&found, "receipt.rs: a Reason is built outside its new");
+    for change in [
+        "check.rule = \"x\".into();",
+        "check.rule += \"x\";",
+        "check.rule.push_str(\"x\");",
+        "std::mem::take(&mut check.rule);",
+    ] {
+        let rename = format!("fn rename(check: &mut Check) {{\n    {change}\n}}\n\n");
+        let found = prepend(rejudge, &rename);
+        assert_finds(&found, "rejudge.rs: a rule is assigned or changed");
+    }
     // A module declared in a crate root or in any other source, whatever its
     // visibility, and one whose file is a source of the test.
     let core = "tools/kyto-bench-core/src/lib.rs";

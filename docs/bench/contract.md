@@ -44,15 +44,15 @@ functions on a receipt.
 | `payload::check_served` | `kyto-bench-core` | `run::publish_entry`; `verdict::entry_checks` | `PROV-R03` |
 | `verdict::judge` | `kyto-bench-core` | `assemble::cold_boot`; `rejudge::rejudge` | `VERD-R05` to `VERD-R11`, `POWER-R03` |
 | `verdict::entry_checks`, `verdict::close_entry` | `kyto-bench-core` | the flow of `run::run`; `rejudge::rejudge` | `VERD-R02`, `PROV-R03`, `POWER-R03` |
-| `verdict::cold_boot`, `verdict::entry`, `verdict::run` | `kyto-bench-core` | `assemble`; `verdict::close_entry`; `rejudge::rejudge` | `VERD-R01`, `VERD-R02`, `VERD-R03` |
+| `verdict::cold_boot`, `verdict::entry`, `verdict::run` | `kyto-bench-core` | `assemble::cold_boot`, `assemble::finish`; `verdict::close_entry`; `rejudge::rejudge` | `VERD-R01`, `VERD-R02`, `VERD-R03` |
 | `power::Confirming`, `power::confirmed`, `power::off_confirmed_at` | `kyto-bench-core` | `run::switch_confirmed`; the flow of `run::run`; `power::cold_boot_checks`; `rejudge::rejudge` | `POWER-R01`, `POWER-R02` |
 | `power::start_check`, `power::cold_boot_checks`, `power::device_errors` | `kyto-bench-core` | `verdict::entry_checks`; `verdict::judge` | `POWER-R02`, `POWER-R03` |
 | `evidence::eligibility` | `kyto-bench-core` | `assemble::start`; `rejudge::rejudge` | `PROV-R07` |
 | `receipt::Receipt::parse` | `kyto-bench-core` | readers of a receipt | `VERD-R03`, `VERD-R10`, `PROV-R07` |
 | `rejudge::rejudge` | `kyto-bench-core` | readers of a receipt | `VERD-R04`, `VERD-R12`, `PROV-R04` |
-| `run::run` | `kyto-bench` | `cli::run` | `VERD-R04`, `PROV-R01`, `PROV-R02`, `POWER-R02`, `POWER-R04` |
+| `run::run` | `kyto-bench` | `cli::run_plan` | `VERD-R04`, `PROV-R01`, `PROV-R02`, `POWER-R02`, `POWER-R04` |
 | `run::switch_confirmed`, `run::power_off_confirmed` | `kyto-bench` | the flow of `run::run` | `POWER-R01`, `POWER-R02` |
-| `cli::run` | `kyto-bench` | the `kyto-bench` binary | `POWER-R05`, `POWER-R06` |
+| `cli::run` | `kyto-bench` | `main::main`, the binary | `POWER-R05`, `POWER-R06` |
 | `provenance::ToolRevision::built`, with the build script | `kyto-bench` | `env::Env::tool` | `PROV-R08` |
 
 ## Rule names
@@ -93,11 +93,11 @@ change.
 | `evidence.commit_unknown` | `PROV-R07` | reason | `evidence::eligibility` | [evidence](formats.md#evidence) |
 | `evidence.tree_changed` | `PROV-R07`, `PROV-R08` | reason | `evidence::eligibility` | [evidence](formats.md#evidence) |
 | `evidence.simulated` | `PROV-R07` | reason | `evidence::eligibility` | [evidence](formats.md#evidence) |
-| `power.off_unconfirmed` | `POWER-R02`, `POWER-R03` | fault | `power::start_check`, `power::cold_boot_checks` | [the supply](formats.md#the-supply) |
+| `power.off_unconfirmed` | `POWER-R02`, `POWER-R03` | fault | `power::start_check`, `power::cold_boot_checks` | [checks](formats.md#checks) |
 | `console.not_ready` | `POWER-R03` | fault | `power::cold_boot_checks` | [checks](formats.md#checks) |
-| `power.on_unconfirmed` | `POWER-R01`, `POWER-R03` | fault | `power::cold_boot_checks` | [the supply](formats.md#the-supply) |
+| `power.on_unconfirmed` | `POWER-R01`, `POWER-R03` | fault | `power::cold_boot_checks` | [checks](formats.md#checks) |
 | `power.off_interval` | `POWER-R02`, `POWER-R03` | fault | `power::cold_boot_checks` | [checks](formats.md#checks) |
-| `power.order` | `POWER-R03` | fault | `power::cold_boot_checks` | [the supply](formats.md#the-supply) |
+| `power.order` | `POWER-R03` | fault | `power::cold_boot_checks` | [checks](formats.md#checks) |
 | `console.before_power_on` | `POWER-R03` | fault | `power::cold_boot_checks` | [checks](formats.md#checks) |
 | `device.error` | `POWER-R03` | fault | `power::device_errors` | [checks](formats.md#checks) |
 
@@ -179,19 +179,38 @@ boot is not powered.
   address, MAC address or serial number of a real board or bench.
 - `tools/kyto-bench/tests/contract.rs` reads the
   [requirements page](requirements.md), this page, the
-  [formats page](formats.md) and the sources of the tests and of the rules,
-  and checks that:
+  [formats page](formats.md), every source of `kyto-bench-core` and
+  `kyto-bench` and the files of their tests, and checks that:
+  - every module that the crates declare is among those sources;
   - every level-three heading of the requirements page is a requirement id,
-    two to five capital letters, `-R` and two digits, and the ids of each
-    prefix run from `R01` in order without a gap;
+    two to five capital letters, `-R` and two digits, the ids of each prefix
+    run from `R01` in order without a gap, and each prefix has the number of
+    requirements that the test sets;
   - the requirements of the [requirement tests](#requirement-tests) are
-    exactly those ids, each with a `negative` row, and every row names a
-    test function of its file;
+    exactly those ids, each with a `negative` row; every row names a test
+    function of its file that runs, one that no attribute ignores or builds
+    only under a condition; and the table has the number of rows that the
+    test sets;
   - the [rule names](#rule-names) are exactly the rules that the code of
-    `verdict`, `power` and `payload` gives checks and refusals and those of
-    `receipt::EVIDENCE_RULES`, with the result that the code gives each;
-    every group is a requirement id, every function is defined in its
-    module, and every rule appears on the formats page.
+    both crates, outside their tests, gives checks and refusals through
+    `Check::new`, `Refusal::new` and the helpers of `verdict`, `power` and
+    `payload`, and the rules of `receipt::EVIDENCE_RULES`, with the result
+    that the code gives each, and the table has the number of rows that the
+    test sets. Only those helpers and `evidence::eligibility` pass a rule
+    on, every other rule is a string literal, and apart from the
+    constructors in `receipt`, only `evidence::eligibility` builds a check,
+    a refusal or a reason with braces;
+  - every group is a requirement id, the code of every function names its
+    rule as a string literal, or reads `EVIDENCE_RULES` for a reason, and
+    every link leads to a heading of the formats page whose section names
+    the rule;
+  - every entry point is a function or type of its module in its crate,
+    every caller is a function of its module, and every requirement of the
+    [entry points](#entry-points) is a requirement id.
+
+  A change that adds or removes a requirement, a row of the requirement
+  tests or a rule changes the numbers that the test sets in the same
+  change.
 
 ## Requirement tests
 

@@ -3,8 +3,9 @@
 //! after a failure (`docs/bench/requirements.md`, `docs/bench/contract.md`),
 //! against the code and the tests: every requirement has tests in the
 //! contract, a negative one among them, every test that the contract names
-//! exists, and the rule names of the contract are those that the code gives
-//! checks, refusals and reasons.
+//! exists and runs, the rule names of the contract are those that the code
+//! gives checks, refusals and reasons, and the functions, formats sections
+//! and entry points that the contract names exist and say what it says.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -12,96 +13,131 @@ const REQUIREMENTS: &str = include_str!("../../../docs/bench/requirements.md");
 const CONTRACT: &str = include_str!("../../../docs/bench/contract.md");
 const FORMATS: &str = include_str!("../../../docs/bench/formats.md");
 
-/// The sources that the contract may name, by their paths from the
-/// repository root: those of the tests it names and of the modules that
-/// name rules.
-const SOURCES: [(&str, &str); 15] = [
+/// The sources `paths`, by their paths from the repository root, with their
+/// text.
+macro_rules! sources {
+    ($($path:literal),* $(,)?) => {
+        [$(($path, include_str!(concat!("../../../", $path)))),*]
+    };
+}
+
+/// Every source of the library and of the command, and the test files that
+/// the contract may name. The modules that the crates declare are checked
+/// against this list, so a new module joins it.
+const SOURCES: [(&str, &str); 42] = sources![
+    "tools/kyto-bench-core/src/board.rs",
+    "tools/kyto-bench-core/src/bootloader.rs",
+    "tools/kyto-bench-core/src/digest.rs",
+    "tools/kyto-bench-core/src/document.rs",
+    "tools/kyto-bench-core/src/evidence.rs",
+    "tools/kyto-bench-core/src/identity.rs",
+    "tools/kyto-bench-core/src/instance.rs",
+    "tools/kyto-bench-core/src/lib.rs",
+    "tools/kyto-bench-core/src/lines.rs",
+    "tools/kyto-bench-core/src/names.rs",
+    "tools/kyto-bench-core/src/observe.rs",
+    "tools/kyto-bench-core/src/pattern.rs",
+    "tools/kyto-bench-core/src/payload.rs",
+    "tools/kyto-bench-core/src/plan.rs",
+    "tools/kyto-bench-core/src/power.rs",
+    "tools/kyto-bench-core/src/public.rs",
+    "tools/kyto-bench-core/src/receipt.rs",
+    "tools/kyto-bench-core/src/rejudge.rs",
+    "tools/kyto-bench-core/src/roles.rs",
+    "tools/kyto-bench-core/src/verdict.rs",
+    "tools/kyto-bench-core/src/write.rs",
+    "tools/kyto-bench/src/assemble.rs",
+    "tools/kyto-bench/src/cli.rs",
+    "tools/kyto-bench/src/device.rs",
+    "tools/kyto-bench/src/env.rs",
+    "tools/kyto-bench/src/gate.rs",
+    "tools/kyto-bench/src/inputs.rs",
+    "tools/kyto-bench/src/lib.rs",
+    "tools/kyto-bench/src/main.rs",
+    "tools/kyto-bench/src/output.rs",
+    "tools/kyto-bench/src/provenance.rs",
+    "tools/kyto-bench/src/record.rs",
+    "tools/kyto-bench/src/run.rs",
+    "tools/kyto-bench/src/sim/console.rs",
+    "tools/kyto-bench/src/sim/meter.rs",
+    "tools/kyto-bench/src/sim/mod.rs",
+    "tools/kyto-bench/src/sim/relay.rs",
+    "tools/kyto-bench/src/sim/tftp.rs",
+    "tools/kyto-bench/src/sim/world.rs",
+    "tools/kyto-bench/tests/manifest.rs",
+    "tools/kyto-bench/tests/release.rs",
+    "tools/kyto-bench/tests/run.rs",
+];
+
+/// The files that declare modules, with the directory of those modules.
+const MODULE_LISTS: [(&str, &str); 3] = [
     (
-        "tools/kyto-bench-core/src/evidence.rs",
-        include_str!("../../kyto-bench-core/src/evidence.rs"),
+        "tools/kyto-bench-core/src/lib.rs",
+        "tools/kyto-bench-core/src/",
     ),
+    ("tools/kyto-bench/src/lib.rs", "tools/kyto-bench/src/"),
     (
-        "tools/kyto-bench-core/src/lines.rs",
-        include_str!("../../kyto-bench-core/src/lines.rs"),
+        "tools/kyto-bench/src/sim/mod.rs",
+        "tools/kyto-bench/src/sim/",
     ),
+];
+
+/// The number of requirements of each prefix, of rows of the requirement
+/// tests and of rule names. A change that adds or removes a requirement, a
+/// row or a rule changes these in the same change.
+const REQUIREMENT_COUNTS: [(&str, usize); 3] = [("POWER", 6), ("PROV", 8), ("VERD", 12)];
+const REQUIREMENT_TEST_ROWS: usize = 87;
+const RULE_ROWS: usize = 32;
+
+/// The constructors that name a rule as their first argument, called in
+/// any source, with the result that they give it; that of a check is read
+/// from its arguments.
+const CONSTRUCTORS: [(&str, Option<&str>); 2] =
+    [("Check::new(", None), ("Refusal::new(", Some("refusal"))];
+
+/// The helpers that name a rule as their first argument, each called in
+/// the one file that defines it: the file, the call, the result that the
+/// helper gives the rule, and the start of its definition.
+const HELPERS: [(&str, &str, &str, &str); 3] = [
     (
-        "tools/kyto-bench-core/src/observe.rs",
-        include_str!("../../kyto-bench-core/src/observe.rs"),
-    ),
-    (
-        "tools/kyto-bench-core/src/payload.rs",
-        include_str!("../../kyto-bench-core/src/payload.rs"),
+        "tools/kyto-bench-core/src/verdict.rs",
+        "fail(",
+        "fail",
+        "fn fail(&mut self, rule: &str,",
     ),
     (
         "tools/kyto-bench-core/src/power.rs",
-        include_str!("../../kyto-bench-core/src/power.rs"),
+        "fault(",
+        "fault",
+        "fn fault(rule: &str,",
     ),
     (
-        "tools/kyto-bench-core/src/receipt.rs",
-        include_str!("../../kyto-bench-core/src/receipt.rs"),
+        "tools/kyto-bench-core/src/payload.rs",
+        "refusal(",
+        "refusal",
+        "let refusal = |rule, detail|",
     ),
-    (
-        "tools/kyto-bench-core/src/rejudge.rs",
-        include_str!("../../kyto-bench-core/src/rejudge.rs"),
-    ),
-    (
-        "tools/kyto-bench-core/src/verdict.rs",
-        include_str!("../../kyto-bench-core/src/verdict.rs"),
-    ),
-    ("tools/kyto-bench/src/cli.rs", include_str!("../src/cli.rs")),
-    (
-        "tools/kyto-bench/src/gate.rs",
-        include_str!("../src/gate.rs"),
-    ),
-    (
-        "tools/kyto-bench/src/provenance.rs",
-        include_str!("../src/provenance.rs"),
-    ),
-    (
-        "tools/kyto-bench/src/sim/meter.rs",
-        include_str!("../src/sim/meter.rs"),
-    ),
-    (
-        "tools/kyto-bench/src/sim/tftp.rs",
-        include_str!("../src/sim/tftp.rs"),
-    ),
-    (
-        "tools/kyto-bench/tests/release.rs",
-        include_str!("release.rs"),
-    ),
-    ("tools/kyto-bench/tests/run.rs", include_str!("run.rs")),
 ];
 
-/// The modules that name rules, by the first segment of a function of the
-/// rule names table, with their sources.
-const MODULES: [(&str, &str); 4] = [
-    ("evidence", "tools/kyto-bench-core/src/evidence.rs"),
-    ("payload", "tools/kyto-bench-core/src/payload.rs"),
-    ("power", "tools/kyto-bench-core/src/power.rs"),
-    ("verdict", "tools/kyto-bench-core/src/verdict.rs"),
+/// The files whose code passes a `rule` on to a constructor of a check, a
+/// refusal or a reason, each with how many times: the helpers, and
+/// `evidence::eligibility`, which makes a reason of each rule of
+/// `EVIDENCE_RULES` that applies. Every other file names its rules as
+/// string literals.
+const PASSED_ON: [(&str, usize); 4] = [
+    ("tools/kyto-bench-core/src/evidence.rs", 1),
+    ("tools/kyto-bench-core/src/payload.rs", 1),
+    ("tools/kyto-bench-core/src/power.rs", 1),
+    ("tools/kyto-bench-core/src/verdict.rs", 1),
 ];
 
-/// The sources whose code gives checks and refusals their rule names.
-const RULE_SOURCES: [&str; 3] = [
-    "tools/kyto-bench-core/src/payload.rs",
-    "tools/kyto-bench-core/src/power.rs",
-    "tools/kyto-bench-core/src/verdict.rs",
-];
+/// The records that hold a rule, which code builds through their
+/// constructors; written with braces, only the reasons of
+/// `evidence::eligibility` pass a rule on.
+const RECORDS: [&str; 3] = ["Check", "Refusal", "Reason"];
 
 /// The source that lists the rules of evidence, `EVIDENCE_RULES`.
 const EVIDENCE_SOURCE: &str = "tools/kyto-bench-core/src/receipt.rs";
-
-/// The calls that name a rule as their first argument, with the result that
-/// they give it: the helpers that make a failed check, a fault and a
-/// refusal, and the constructors of a refusal and of a check, whose result
-/// is then read from its arguments.
-const CALLS: [(&str, Option<&str>); 5] = [
-    ("fail(", Some("fail")),
-    ("fault(", Some("fault")),
-    ("refusal(", Some("refusal")),
-    ("Refusal::new(", Some("refusal")),
-    ("Check::new(", None),
-];
 
 /// The outcomes that a check's constructor can be given, with their
 /// results.
@@ -113,8 +149,7 @@ const OUTCOMES: [(&str, &str); 3] = [
 
 /// The code of `source` before its tests, without its comment lines.
 fn code(source: &str) -> String {
-    let end = source.find("#[cfg(test)]").unwrap_or(source.len());
-    let lines = source[..end].lines();
+    let lines = source.lines().take_while(|line| *line != "#[cfg(test)]");
     let code: Vec<&str> = lines
         .filter(|line| !line.trim_start().starts_with("//"))
         .collect();
@@ -137,6 +172,48 @@ fn section<'a>(markdown: &'a str, title: &str) -> Option<&'a str> {
     let start = markdown.find(&heading)? + heading.len();
     let rest = &markdown[start..];
     Some(&rest[..rest.find("\n## ").unwrap_or(rest.len())])
+}
+
+/// The sections of `markdown` by the anchors of their headings, as the
+/// documentation check makes them: each from its heading to the next
+/// heading of its level or above, outside fenced code.
+fn sections(markdown: &str) -> BTreeMap<String, String> {
+    let (mut fenced, mut headings) = (false, Vec::new());
+    let lines: Vec<&str> = markdown.lines().collect();
+    for (at, line) in lines.iter().enumerate() {
+        if line.starts_with("```") || line.starts_with("~~~") {
+            fenced = !fenced;
+        }
+        let level = line.bytes().take_while(|b| *b == b'#').count();
+        let title = line[level..].strip_prefix(' ');
+        if let Some(title) = title.filter(|_| !fenced && (1..=6).contains(&level)) {
+            headings.push((at, level, title));
+        }
+    }
+    let mut seen: BTreeMap<String, usize> = BTreeMap::new();
+    let mut sections = BTreeMap::new();
+    for (index, &(at, level, title)) in headings.iter().enumerate() {
+        let next = headings[index + 1..].iter().find(|h| h.1 <= level);
+        let text = lines[at..next.map_or(lines.len(), |h| h.0)].join("\n");
+        let slug: String = title
+            .trim()
+            .to_lowercase()
+            .chars()
+            .filter_map(|c| match c {
+                ' ' => Some('-'),
+                c if c.is_alphanumeric() || c == '-' || c == '_' => Some(c),
+                _ => None,
+            })
+            .collect();
+        let count = seen.entry(slug.clone()).or_insert(0);
+        let anchor = match *count {
+            0 => slug,
+            n => format!("{slug}-{n}"),
+        };
+        *count += 1;
+        sections.insert(anchor, text);
+    }
+    sections
 }
 
 /// The rows of the table of the section `## {title}` of `markdown`, each a
@@ -169,19 +246,26 @@ fn span(cell: &str) -> Option<&str> {
     }
 }
 
-/// The names of the test functions of `source`.
-fn tests(source: &str) -> BTreeSet<&str> {
-    let mut names = BTreeSet::new();
-    let mut lines = source.lines().map(str::trim);
-    while let Some(line) = lines.next() {
-        if line != "#[test]" {
+/// The test functions of `source`, each with whether it runs: whether none
+/// of its attributes ignores it or builds it only under a condition.
+fn tests(source: &str) -> BTreeMap<&str, bool> {
+    let (mut names, mut attributes) = (BTreeMap::new(), Vec::new());
+    for line in source.lines().map(str::trim) {
+        if line.starts_with("#[") {
+            attributes.push(line);
             continue;
         }
-        let function = lines.find(|line| !line.starts_with("#[") && !line.starts_with("//"));
-        let name = function
-            .and_then(|line| line.strip_prefix("fn "))
+        if line.starts_with("//") {
+            continue;
+        }
+        let name = line
+            .strip_prefix("fn ")
             .and_then(|line| line.split('(').next());
-        names.extend(name);
+        if let Some(name) = name.filter(|_| attributes.contains(&"#[test]")) {
+            let held = |a: &&str| a.starts_with("#[ignore") || a.starts_with("#[cfg");
+            names.insert(name, !attributes.iter().any(held));
+        }
+        attributes.clear();
     }
     names
 }
@@ -201,31 +285,38 @@ fn arguments(after: &str) -> &str {
     after
 }
 
-/// The rules that the code of `source`, the file `file`, names in calls of
-/// [`CALLS`], each with the results it gives them, into `rules`. A call
-/// that is given another first argument than a string literal or the
-/// `rule` that a helper passes on is a problem.
+/// Whether the text `before` a name ends inside another identifier.
+fn joined(before: &str) -> bool {
+    let last = before.chars().next_back();
+    last.is_some_and(|c| c.is_alphanumeric() || c == '_')
+}
+
+/// The rules that `code`, the code of the file `file`, names in calls of
+/// [`CONSTRUCTORS`] and of its [`HELPERS`], each with the results it gives
+/// them, into `rules`; returns how many calls pass a `rule` on. A call that
+/// is given another first argument than a string literal or `rule` is a
+/// problem.
 fn named_rules(
     file: &str,
-    source: &str,
+    code: &str,
     rules: &mut BTreeMap<String, BTreeSet<String>>,
     problems: &mut Vec<String>,
-) {
-    let code = code(source);
-    for (call, result) in CALLS {
+) -> usize {
+    let helpers = HELPERS.iter().filter(|helper| helper.0 == file);
+    let helpers = helpers.map(|&(_, call, result, _)| (call, Some(result)));
+    let mut passed = 0;
+    for (call, result) in CONSTRUCTORS.into_iter().chain(helpers) {
         for (at, _) in code.match_indices(call) {
             let before = &code[..at];
-            let joined = before
-                .chars()
-                .next_back()
-                .is_some_and(|c| c.is_alphanumeric() || c == '_');
-            if joined || before.ends_with("fn ") {
+            if joined(before) || before.ends_with("fn ") {
                 continue;
             }
             let after = code[at + call.len()..].trim_start();
             let Some(literal) = after.strip_prefix('"') else {
-                let passed = after.strip_prefix("rule");
-                if !passed.is_some_and(|rest| rest.starts_with([',', ')'])) {
+                let rest = after.strip_prefix("rule");
+                if rest.is_some_and(|rest| rest.starts_with([',', ')'])) {
+                    passed += 1;
+                } else {
                     problems.push(format!("{file}: {call} is given a rule that is no literal"));
                 }
                 continue;
@@ -247,6 +338,31 @@ fn named_rules(
             results.insert(result.to_string());
         }
     }
+    passed
+}
+
+/// How many [`RECORDS`] `code`, the code of the file `file`, builds with
+/// braces from a `rule` that it passes on. Any other record built with
+/// braces is a problem.
+fn built_records(file: &str, code: &str, problems: &mut Vec<String>) -> usize {
+    let mut passed = 0;
+    for record in RECORDS {
+        let open = format!("{record} {{");
+        for (at, _) in code.match_indices(&open) {
+            let before = &code[..at];
+            let words = ["struct ", "enum ", "trait ", "impl ", "for ", "-> "];
+            if joined(before) || words.iter().any(|word| before.ends_with(word)) {
+                continue;
+            }
+            let fields = code[at + open.len()..].trim_start();
+            if fields.starts_with("rule,") || fields.starts_with("rule }") {
+                passed += 1;
+            } else {
+                problems.push(format!("{file}: a {record} is built with braces"));
+            }
+        }
+    }
+    passed
 }
 
 /// The rules of `EVIDENCE_RULES` in `source`.
@@ -264,6 +380,61 @@ fn evidence_rules(source: &str) -> Vec<String> {
         .collect()
 }
 
+/// The line of `lines`, from `from` on, that defines the function `name`,
+/// with the lines up to the brace that closes it at its indentation.
+fn function(lines: &[&str], from: usize, name: &str) -> Option<String> {
+    let defines = |line: &&str| {
+        let at = [format!("fn {name}("), format!("fn {name}<")]
+            .iter()
+            .find_map(|text| line.find(text.as_str()));
+        at.is_some_and(|at| at == 0 || line[..at].ends_with(' '))
+    };
+    let start = from + lines[from..].iter().position(defines)?;
+    let indent = lines[start].len() - lines[start].trim_start().len();
+    let close = format!("{}}}", " ".repeat(indent));
+    let end = lines[start..].iter().position(|line| *line == close);
+    let end = end.map_or(lines.len(), |end| start + end + 1);
+    Some(lines[start..end].join("\n"))
+}
+
+/// The source file and the code of the item that `path`, such as
+/// `verdict::Judging::markers`, names, when it is defined: a function, from
+/// its definition to the brace that closes it, or the line that declares a
+/// type.
+fn item<'a>(sources: &[(&'a str, &str)], path: &str) -> Option<(&'a str, String)> {
+    let segments: Vec<&str> = path.split("::").collect();
+    let word = |line: &str, name: &str| {
+        let mut words = line.split(|c: char| !(c.is_alphanumeric() || c == '_'));
+        words.any(|word| word == name)
+    };
+    (1..segments.len()).rev().find_map(|split| {
+        let module = format!("/src/{}.rs", segments[..split].join("/"));
+        let (file, text) = sources.iter().find(|(file, _)| file.ends_with(&module))?;
+        let code = code(text);
+        let lines: Vec<&str> = code.lines().collect();
+        let found = match segments[split..] {
+            [name] => function(&lines, 0, name).or_else(|| {
+                let kinds = ["struct ", "enum ", "trait "];
+                let declares = |line: &&&str| {
+                    let at = kinds.iter().find_map(|kind| line.find(kind));
+                    at.is_some_and(|at| word(&line[at..], name))
+                };
+                lines.iter().find(declares).map(|line| line.to_string())
+            }),
+            [owner, name] => {
+                let owns = |line: &&str| {
+                    let opens = line.starts_with("impl") || line.contains("trait ");
+                    opens && word(line, owner)
+                };
+                let from = lines.iter().position(owns)?;
+                function(&lines, from, name)
+            }
+            _ => None,
+        };
+        Some((*file, found?))
+    })
+}
+
 /// Every way in which `requirements`, `contract` and `formats` disagree
 /// with each other and with `sources`, the sources by their paths.
 fn problems(
@@ -275,7 +446,27 @@ fn problems(
     let mut problems = Vec::new();
     let source = |file: &str| sources.iter().find(|(path, _)| *path == file).map(|s| s.1);
 
-    // The requirement ids, from R01 in order in each prefix.
+    // Every module that the crates declare is a source of this test.
+    for (list, directory) in MODULE_LISTS {
+        for line in code(source(list).unwrap_or("")).lines() {
+            let line = line.trim().trim_start_matches("pub ");
+            let Some(module) = line.strip_prefix("mod ").and_then(|m| m.strip_suffix(';')) else {
+                continue;
+            };
+            let files = [
+                format!("{directory}{module}.rs"),
+                format!("{directory}{module}/mod.rs"),
+            ];
+            if !files.iter().any(|file| source(file).is_some()) {
+                problems.push(format!(
+                    "{list}: the module {module} is not a source of this test"
+                ));
+            }
+        }
+    }
+
+    // The requirement ids, from R01 in order in each prefix, as many as the
+    // test expects.
     let mut ids = BTreeSet::new();
     let mut numbers: BTreeMap<&str, Vec<u32>> = BTreeMap::new();
     for heading in requirements.lines().filter_map(|l| l.strip_prefix("### ")) {
@@ -291,18 +482,35 @@ fn problems(
         let expected: Vec<u32> = (1..=found.len() as u32).collect();
         if *found != expected {
             problems.push(format!(
-                "requirements: {prefix} has {found:?}, not R01 on in order"
+                "requirements: {prefix} runs {found:?}, not from R01 in order"
+            ));
+        }
+        if !REQUIREMENT_COUNTS.iter().any(|(known, _)| known == prefix) {
+            problems.push(format!("requirements: {prefix} is not a known prefix"));
+        }
+    }
+    for (prefix, expected) in REQUIREMENT_COUNTS {
+        let found = numbers.get(prefix).map_or(0, Vec::len);
+        if found != expected {
+            problems.push(format!(
+                "requirements: {prefix} has {found} requirements, not {expected}"
             ));
         }
     }
 
-    // The requirement tests: a known test of a known file for every row,
-    // and a negative one for every requirement.
+    // The requirement tests: a known test that runs, of a known file, for
+    // every row, and a negative one for every requirement.
     let header = ["Requirement", "Test", "File", "Kind"];
     let rows = table(contract, "Requirement tests", &header).unwrap_or_else(|problem| {
         problems.push(problem);
         Vec::new()
     });
+    if rows.len() != REQUIREMENT_TEST_ROWS {
+        problems.push(format!(
+            "contract: the requirement tests have {} rows, not {REQUIREMENT_TEST_ROWS}",
+            rows.len()
+        ));
+    }
     let (mut tested, mut negative, mut pairs) = (BTreeSet::new(), BTreeSet::new(), BTreeSet::new());
     for row in &rows {
         let [requirement, test, file, kind] = row[..] else {
@@ -339,12 +547,13 @@ fn problems(
                 "contract: {requirement} names {test} of {file} twice"
             ));
         }
-        match source(file) {
+        match source(file).map(tests) {
             None => problems.push(format!("contract: {file} is not a source of this test")),
-            Some(text) if !tests(text).contains(test) => {
-                problems.push(format!("contract: {file} has no test {test}"));
-            }
-            Some(_) => {}
+            Some(found) => match found.get(test) {
+                None => problems.push(format!("contract: {file} has no test {test}")),
+                Some(false) => problems.push(format!("contract: {test} of {file} does not run")),
+                Some(true) => {}
+            },
         }
     }
     for id in &ids {
@@ -356,22 +565,50 @@ fn problems(
     }
 
     // The rule names: those of the code, with their results, their
-    // requirements, their functions and their place on the formats page.
+    // requirements, the functions that name them and the sections of the
+    // formats page that give them.
     let mut named = BTreeMap::new();
-    for file in RULE_SOURCES {
-        named_rules(file, source(file).unwrap_or(""), &mut named, &mut problems);
+    for (file, text) in sources {
+        if !file.contains("/src/") {
+            continue;
+        }
+        let code = code(text);
+        let passed = named_rules(file, &code, &mut named, &mut problems)
+            + built_records(file, &code, &mut problems);
+        let expected = PASSED_ON.iter().find(|(f, _)| f == file).map_or(0, |p| p.1);
+        if passed != expected {
+            problems.push(format!(
+                "{file} passes a rule on {passed} times, not {expected}"
+            ));
+        }
     }
-    for rule in evidence_rules(source(EVIDENCE_SOURCE).unwrap_or("")) {
-        named.entry(rule).or_default().insert("reason".to_string());
+    for (file, _, _, definition) in HELPERS {
+        if !code(source(file).unwrap_or("")).contains(definition) {
+            problems.push(format!("{file} has no helper {definition}"));
+        }
+    }
+    let evidence = evidence_rules(source(EVIDENCE_SOURCE).unwrap_or(""));
+    for rule in &evidence {
+        named
+            .entry(rule.clone())
+            .or_default()
+            .insert("reason".to_string());
     }
     let header = ["Rule", "Group", "Result", "Function", "Formats"];
     let rows = table(contract, "Rule names", &header).unwrap_or_else(|problem| {
         problems.push(problem);
         Vec::new()
     });
+    if rows.len() != RULE_ROWS {
+        problems.push(format!(
+            "contract: the rule names have {} rows, not {RULE_ROWS}",
+            rows.len()
+        ));
+    }
+    let sections = sections(formats);
     let mut listed = BTreeSet::new();
     for row in &rows {
-        let [rule, group, result, functions, _] = row[..] else {
+        let [rule, group, result, functions, link] = row[..] else {
             problems.push(format!(
                 "contract: the row {row:?} has another number of cells"
             ));
@@ -398,25 +635,83 @@ fn problems(
             problems.push(format!("contract: the group of {rule} is not requirements"));
         }
         let functions = spans(functions);
-        let defined = |function: &&str| {
-            let (module, name) = (function.split("::").next(), function.rsplit("::").next());
-            let file = MODULES.iter().find(|(m, _)| Some(*m) == module);
-            let text = file.and_then(|(_, file)| source(file)).map(code);
-            name.zip(text)
-                .is_some_and(|(name, text)| text.contains(&format!("fn {name}(")))
-        };
-        if functions.is_empty() || !functions.iter().all(defined) {
-            problems.push(format!(
-                "contract: a function of {rule} is not one of its module"
-            ));
+        if functions.is_empty() {
+            problems.push(format!("contract: {rule} has no function"));
         }
-        if !formats.contains(&format!("`{rule}`")) {
-            problems.push(format!("formats: the rule {rule} is not on the page"));
+        let quoted = format!("\"{rule}\"");
+        let reads_evidence = |body: &str| {
+            evidence.iter().any(|known| known == rule) && body.contains("EVIDENCE_RULES")
+        };
+        for function in functions {
+            match item(sources, function) {
+                None => problems.push(format!(
+                    "contract: the function {function} of {rule} is not defined"
+                )),
+                Some((_, body)) if !body.contains(&quoted) && !reads_evidence(&body) => {
+                    problems.push(format!(
+                        "contract: the function {function} does not name {rule}"
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
+        let anchor = link
+            .split_once("](formats.md#")
+            .and_then(|(_, rest)| rest.strip_suffix(')'));
+        match anchor.and_then(|anchor| Some((anchor, sections.get(anchor)?))) {
+            None => problems.push(format!(
+                "contract: the link of {rule} is not a heading of the formats page"
+            )),
+            Some((anchor, text)) if !text.contains(&format!("`{rule}`")) => {
+                problems.push(format!(
+                    "formats: the section {anchor} does not name the rule {rule}"
+                ));
+            }
+            Some(_) => {}
         }
     }
     for rule in named.keys() {
         if !listed.contains(rule.as_str()) {
             problems.push(format!("contract: the rule names lack {rule}"));
+        }
+    }
+
+    // The entry points: functions and types of their modules and crates,
+    // called by functions that exist, for requirements that exist.
+    let header = ["Entry point", "Crate", "Called by", "Requirements"];
+    let rows = table(contract, "Entry points", &header).unwrap_or_else(|problem| {
+        problems.push(problem);
+        Vec::new()
+    });
+    for row in &rows {
+        let [entries, krate, callers, requirements] = row[..] else {
+            problems.push(format!(
+                "contract: the row {row:?} has another number of cells"
+            ));
+            continue;
+        };
+        let krate = span(krate).unwrap_or(krate);
+        for entry in spans(entries) {
+            match item(sources, entry) {
+                None => problems.push(format!("contract: the entry point {entry} is not defined")),
+                Some((file, _)) if !file.starts_with(&format!("tools/{krate}/")) => {
+                    problems.push(format!(
+                        "contract: the entry point {entry} is not of {krate}"
+                    ));
+                }
+                Some(_) => {}
+            }
+        }
+        for caller in spans(callers) {
+            if item(sources, caller).is_none() {
+                problems.push(format!("contract: the caller {caller} is not defined"));
+            }
+        }
+        let requirements = spans(requirements);
+        if requirements.is_empty() || !requirements.iter().all(|id| ids.contains(id)) {
+            problems.push(format!(
+                "contract: the requirements of {entries} are not requirements"
+            ));
         }
     }
     problems
@@ -433,9 +728,6 @@ fn assert_finds(problems: &[String], found: &str) {
 fn the_contract_lists_every_requirement_and_rule() {
     let none: Vec<String> = Vec::new();
     assert_eq!(problems(REQUIREMENTS, CONTRACT, FORMATS, &SOURCES), none);
-    let header = ["Rule", "Group", "Result", "Function", "Formats"];
-    let rules = table(CONTRACT, "Rule names", &header).map(|rows| rows.len());
-    assert_eq!(rules, Ok(32));
     // Each check finds what it looks for, in an edited copy of a page or a
     // source.
     let requirements = |from: &str, to: &str| {
@@ -458,15 +750,34 @@ fn the_contract_lists_every_requirement_and_rule() {
         let sources: Vec<(&str, &str)> = SOURCES.iter().map(pick).collect();
         problems(REQUIREMENTS, CONTRACT, FORMATS, &sources)
     };
-    // A heading that is not an id, and ids with a gap or out of order.
+    // A heading that is not an id, ids with a gap or out of order, and a
+    // prefix with a requirement more or less, its last one removed with its
+    // rows.
     let found = requirements("### VERD-R12", "### VERD-R1");
     assert_finds(&found, "VERD-R1 is not a requirement id");
-    assert_finds(&requirements("### VERD-R12", "### VERD-R13"), "VERD has");
-    assert_finds(&requirements("### PROV-R02", "### PROV-R03"), "PROV has");
+    let found = requirements("### VERD-R12", "### VERD-R13");
+    assert_finds(&found, "VERD runs");
+    assert_finds(&requirements("### PROV-R02", "### PROV-R03"), "PROV runs");
     let found = requirements("### POWER-R06", "### power-R06");
     assert_finds(&found, "power-R06 is not a requirement id");
-    // A requirement without a row or without a negative one, and a row of
-    // another requirement, anchor, test, file or kind.
+    let found = requirements("### POWER-R06", "### POWER-R06\n\n### POWER-R07");
+    assert_finds(&found, "POWER has 7 requirements, not 6");
+    assert_finds(&found, "POWER-R07 has no test");
+    let found = requirements("### VERD-R01", "### VER-R01");
+    assert_finds(&found, "VER is not a known prefix");
+    let last = REQUIREMENTS.find("### POWER-R06").unwrap();
+    let rest = REQUIREMENTS[last + 1..]
+        .find("\n#")
+        .map_or(REQUIREMENTS.len(), |at| last + at + 2);
+    let fewer = format!("{}{}", &REQUIREMENTS[..last], &REQUIREMENTS[rest..]);
+    let lines = CONTRACT
+        .lines()
+        .filter(|line| !line.starts_with("| [POWER-R06]"));
+    let without = lines.collect::<Vec<_>>().join("\n");
+    let found = problems(&fewer, &without, FORMATS, &SOURCES);
+    assert_finds(&found, "POWER has 5 requirements, not 6");
+    // A requirement without a row or without a negative one, a row removed,
+    // and a row of another requirement, anchor, test, file or kind.
     let row = "| [POWER-R05](requirements.md#power-r05) \
         | `a_run_that_panics_switches_the_supply_off_and_leaves_no_output` \
         | `tools/kyto-bench/tests/run.rs` | negative |\n";
@@ -476,6 +787,12 @@ fn the_contract_lists_every_requirement_and_rule() {
         &edit("negative", "positive"),
         "POWER-R05 has no negative test",
     );
+    let other = "| [VERD-R03](requirements.md#verd-r03) \
+        | `a_receipt_has_either_a_refusal_or_a_verdict` \
+        | `tools/kyto-bench-core/src/receipt.rs` | negative |\n";
+    let fewer = REQUIREMENT_TEST_ROWS - 1;
+    let rows = format!("the requirement tests have {fewer} rows, not {REQUIREMENT_TEST_ROWS}");
+    assert_finds(&contract(other, ""), &rows);
     let found = edit(
         "POWER-R05](requirements.md#power-r05",
         "POWER-R07](requirements.md#power-r07",
@@ -486,46 +803,92 @@ fn the_contract_lists_every_requirement_and_rule() {
     assert_finds(&found, "run.rs has no test a_run_that_panics");
     let found = edit("tests/run.rs", "tests/release.rs");
     assert_finds(&found, "release.rs has no test a_run_that_panics");
-    let found = edit("tests/run.rs", "tests/manifest.rs");
-    assert_finds(&found, "manifest.rs is not a source of this test");
+    let found = edit("tests/run.rs", "tests/data.rs");
+    assert_finds(&found, "data.rs is not a source of this test");
     assert_finds(&edit("negative", "fuzz"), "fuzz is not a kind of test");
     assert_finds(
         &contract(row, &format!("{row}{row}")),
         "names a_run_that_panics",
     );
+    // A test that is not one, and tests that do not run.
+    let run = "tools/kyto-bench/tests/run.rs";
+    let test = "#[test]\nfn a_run_that_panics";
+    let found = source(run, test, "fn a_run_that_panics");
+    assert_finds(&found, "run.rs has no test a_run_that_panics");
+    let found = source(run, test, "#[test]\n#[ignore]\nfn a_run_that_panics");
+    assert_finds(
+        &found,
+        "and_leaves_no_output of tools/kyto-bench/tests/run.rs does not run",
+    );
+    let found = source(
+        run,
+        test,
+        "#[ignore = \"slow\"]\n#[test]\nfn a_run_that_panics",
+    );
+    assert_finds(
+        &found,
+        "and_leaves_no_output of tools/kyto-bench/tests/run.rs does not run",
+    );
+    let found = source(run, test, "#[cfg(any())]\n#[test]\nfn a_run_that_panics");
+    assert_finds(
+        &found,
+        "and_leaves_no_output of tools/kyto-bench/tests/run.rs does not run",
+    );
     // A rule of the code that the table lacks, or lists with another result,
     // group or function; a rule that the code or the formats page does not
-    // name; and a rule listed twice.
+    // name; a rule listed twice; and a rule row removed.
     let rule = "| `device.error` | `POWER-R03` | fault | `power::device_errors` \
         | [checks](formats.md#checks) |\n";
     let edit = |from: &str, to: &str| contract(rule, &rule.replace(from, to));
-    assert_finds(&contract(rule, ""), "the rule names lack device.error");
+    let found = contract(rule, "");
+    assert_finds(&found, "the rule names lack device.error");
+    assert_finds(&found, "the rule names have 31 rows, not 32");
     assert_finds(
         &edit("| fault |", "| fail |"),
         "the code gives device.error",
     );
     assert_finds(&edit("POWER-R03", "POWER-R09"), "the group of device.error");
     let found = edit("device_errors", "device_faults");
-    assert_finds(&found, "a function of device.error");
+    assert_finds(&found, "the function power::device_faults of device.error");
     let found = edit("power::device_errors", "verdict::device_errors");
-    assert_finds(&found, "a function of device.error");
+    assert_finds(
+        &found,
+        "the function verdict::device_errors of device.error",
+    );
+    let found = edit("power::device_errors", "power::cold_boot_checks");
+    assert_finds(&found, "power::cold_boot_checks does not name device.error");
     let found = edit("device.error", "device.failure");
     assert_finds(&found, "the code does not name the rule device.failure");
     assert_finds(
         &found,
-        "formats: the rule device.failure is not on the page",
+        "the section checks does not name the rule device.failure",
     );
     let found = contract(rule, &format!("{rule}{rule}"));
     assert_finds(&found, "the rule device.error is listed twice");
+    // A function that does not name its rule, and a link to a section that
+    // is not one or that does not name the rule.
+    let rule = "| `boot.end` | `VERD-R06` | fail | `verdict::Judging::boot_end` \
+        | [checks](formats.md#checks) |\n";
+    let found = contract(rule, &rule.replace("boot_end", "markers"));
+    assert_finds(&found, "verdict::Judging::markers does not name boot.end");
+    let found = contract(rule, &rule.replace("#checks", "#no-such-section"));
+    assert_finds(&found, "the link of boot.end is not a heading");
+    let found = contract(rule, &rule.replace("#checks", "#the-supply"));
+    assert_finds(
+        &found,
+        "the section the-supply does not name the rule boot.end",
+    );
     let formats = FORMATS.replace("`identity.disagree`", "`identity.differ`");
     let found = problems(REQUIREMENTS, CONTRACT, &formats, &SOURCES);
     assert_finds(
         &found,
-        "formats: the rule identity.disagree is not on the page",
+        "the section checks does not name the rule identity.disagree",
     );
     // A rule that the code names under another name or with another result,
-    // a rule that is not a literal, a rule of evidence that is gone, and a
-    // test that is not one.
+    // in a module that names no other, through a helper that the test does
+    // not know or with braces; a rule that is not a literal; a helper that
+    // is gone; a rule of evidence that is gone or not read; and a module
+    // that is not a source.
     let verdict = "tools/kyto-bench-core/src/verdict.rs";
     let found = source(verdict, "\"identity.disagree\"", "\"identity.split\"");
     assert_finds(&found, "the rule names lack identity.split");
@@ -533,16 +896,66 @@ fn the_contract_lists_every_requirement_and_rule() {
     let payload = "tools/kyto-bench-core/src/payload.rs";
     let found = source(payload, "Outcome::Fault,\n", "Outcome::Fail,\n");
     assert_finds(&found, "the code gives payload.served_digest");
+    let rejudge = "tools/kyto-bench-core/src/rejudge.rs";
+    let start = "pub fn rejudge(receipt: &Receipt) -> Result<Receipt, ReceiptError> {\n";
+    let extra =
+        "    let _ = crate::receipt::Check::new(\"rejudge.extra\", \"x\", Outcome::Fault, None);\n";
+    let found = source(rejudge, start, &format!("{start}{extra}"));
+    assert_finds(&found, "the rule names lack rejudge.extra");
+    let at = "    /// The position among the lines";
+    let flag = "    fn flag(&mut self, rule: &str) {\n        \
+        self.checks.push(Check::new(rule, \"x\", Outcome::Fail, None));\n    }\n\n";
+    let found = source(verdict, at, &format!("{flag}{at}"));
+    assert_finds(&found, "verdict.rs passes a rule on 2 times, not 1");
+    let flag =
+        "    fn flag(&mut self, rule: &str) {\n        self.fail(rule, \"x\", None);\n    }\n\n";
+    let found = source(verdict, at, &format!("{flag}{at}"));
+    assert_finds(&found, "verdict.rs passes a rule on 2 times, not 1");
+    let assemble = "tools/kyto-bench/src/assemble.rs";
+    let at = "pub fn finish(";
+    let forged =
+        "fn forged() -> Reason {\n    Reason { detail: String::new(), rule: \"x\".into() }\n}\n\n";
+    let found = source(assemble, at, &format!("{forged}{at}"));
+    assert_finds(&found, "assemble.rs: a Reason is built with braces");
+    let forged =
+        "fn forged(rule: String) -> Reason {\n    Reason { rule, detail: String::new() }\n}\n\n";
+    let found = source(assemble, at, &format!("{forged}{at}"));
+    assert_finds(&found, "assemble.rs passes a rule on 1 times, not 0");
     let power = "tools/kyto-bench-core/src/power.rs";
     let found = source(power, "fault(\"power.order\"", "fault(order_rule");
     assert_finds(
         &found,
         "power.rs: fault( is given a rule that is no literal",
     );
+    let found = source(power, "fn fault(rule: &str,", "fn flaw(rule: &str,");
+    assert_finds(&found, "power.rs has no helper fn fault(rule: &str,");
     let receipt = "tools/kyto-bench-core/src/receipt.rs";
     let found = source(receipt, "\"evidence.simulated\",\n", "");
     assert_finds(&found, "the code does not name the rule evidence.simulated");
-    let run = "tools/kyto-bench/tests/run.rs";
-    let found = source(run, "#[test]\nfn a_run_that_panics", "fn a_run_that_panics");
-    assert_finds(&found, "run.rs has no test a_run_that_panics");
+    let evidence = "tools/kyto-bench-core/src/evidence.rs";
+    let found = source(evidence, "= EVIDENCE_RULES\n", "= RULES\n");
+    assert_finds(
+        &found,
+        "evidence::eligibility does not name evidence.simulated",
+    );
+    let core = "tools/kyto-bench-core/src/lib.rs";
+    let found = source(core, "pub mod write;", "pub mod write;\npub mod extra;");
+    assert_finds(&found, "the module extra is not a source of this test");
+    // An entry point or a caller that is not defined or is of another
+    // crate, and a requirement there that is not one.
+    let found = contract("| `run::check_sources`;", "| `run::check_source`;");
+    assert_finds(&found, "the caller run::check_source is not defined");
+    let row = "| `payload::check_staged` | `kyto-bench-core` |";
+    let found = contract(row, "| `payload::check_stage` | `kyto-bench-core` |");
+    assert_finds(
+        &found,
+        "the entry point payload::check_stage is not defined",
+    );
+    let found = contract(row, "| `payload::check_staged` | `kyto-bench` |");
+    assert_finds(&found, "payload::check_staged is not of kyto-bench");
+    let found = contract(
+        "| `PROV-R02`, `PROV-R04` |\n",
+        "| `PROV-R02`, `PROV-R09` |\n",
+    );
+    assert_finds(&found, "the requirements of `payload::check_staged`");
 }

@@ -1,8 +1,17 @@
 //! The write gate: payload files that let the board's firmware write
-//! firmware, EEPROM contents or storage media are staged only with a permit
-//! of their class, and only the gate of a run plan entry that enables the
-//! class gives one; a file that sets a refused property is never staged.
-//! Only this crate builds a gate, so no code outside it can make a permit:
+//! firmware, EEPROM contents or storage media are staged only when the run
+//! plan entry of the gate enables their class, and a file that sets a
+//! refused property is never staged. A delivery device writes only
+//! [`Checked`] files, which only [`WriteGate::stage`] makes, from the write
+//! triggers and refused properties of the gate's board description, so no
+//! caller chooses what the files are checked against, and no other code can
+//! make them:
+//!
+//! ```compile_fail
+//! let checked = kyto_bench::gate::Checked(&[]);
+//! ```
+//!
+//! Only this crate builds a gate, for the entry that a run stages:
 //!
 //! ```compile_fail
 //! use kyto_bench_core::board::{Board, RASPBERRY_PI_5};
@@ -12,46 +21,18 @@
 //! let gate = kyto_bench::gate::WriteGate::new(&WriteEnables::default(), &board);
 //! ```
 //!
-//! A permit borrows the gate that gave it, so it cannot outlive that gate.
-//! A delivery device writes only [`Checked`] files, which only
-//! [`WriteGate::stage`] makes, from the write triggers and refused
-//! properties of the gate's board description, so no caller chooses what
-//! the files are checked against, and no other code can make them:
-//!
-//! ```compile_fail
-//! let checked = kyto_bench::gate::Checked(&[]);
-//! ```
-//!
 //! An entry's enable is needed for such a write, but it does not authorize
 //! one: whoever runs a plan that enables a write decides that outside the
-//! tool. No class, permit or command exists for any other kind of write.
+//! tool. No class or command exists for any other kind of write.
 
 use std::fmt;
-use std::marker::PhantomData;
 
 use kyto_bench_core::board::Board;
 use kyto_bench_core::names::{GenerationName, PayloadName};
 use kyto_bench_core::payload;
-use kyto_bench_core::write::{self, Unpermitted, WriteClass, WriteEnables, WriteTrigger};
+use kyto_bench_core::write::{self, Unpermitted, WriteEnables};
 
 use crate::device::{Delivery, StageError};
-
-/// The permission to stage payload files that let the firmware write one
-/// class. It has no public constructor: only [`WriteGate::permit`] makes
-/// one, for a class that the entry enables, and it lives no longer than the
-/// gate `'g` that made it.
-#[derive(Debug, PartialEq, Eq)]
-pub struct WritePermit<'g> {
-    class: WriteClass,
-    gate: PhantomData<&'g ()>,
-}
-
-impl WritePermit<'_> {
-    /// The class the permit covers.
-    pub fn class(&self) -> WriteClass {
-        self.class
-    }
-}
 
 /// The gate of one run plan entry on the board of its description.
 #[derive(Debug)]
@@ -63,10 +44,8 @@ pub struct WriteGate<'b> {
 /// A write that the gate refuses.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WriteRefused {
-    /// The entry does not enable the class.
-    NotEnabled(WriteClass),
-    /// Payload files that let the firmware write a class that no permit
-    /// covers.
+    /// Payload files that let the firmware write a class that the entry
+    /// does not enable.
     Unpermitted(Vec<Unpermitted>),
     /// A payload file sets a refused property, which no enable permits.
     RefusedProperty(String),
@@ -80,35 +59,19 @@ impl<'b> WriteGate<'b> {
         Self { enables, board }
     }
 
-    /// A permit for `class`, if the entry enables it.
-    pub fn permit(&self, class: WriteClass) -> Result<WritePermit<'_>, WriteRefused> {
-        if self.enables.enabled(class) {
-            Ok(WritePermit {
-                class,
-                gate: PhantomData,
-            })
-        } else {
-            Err(WriteRefused::NotEnabled(class))
-        }
-    }
-
     /// Stages `files` on `delivery` as a new generation and returns its
     /// name, once the gate has checked them: a file that is a write trigger
-    /// of the board needs a permit of its class, which the gate gives for
-    /// the classes that the entry enables, and no file sets a refused
-    /// property of the board. A refused file leaves the device untouched.
+    /// of the board is staged only when the entry enables its class, and no
+    /// file sets a refused property of the board. A refused file leaves the
+    /// device untouched.
     pub fn stage(
         &self,
         delivery: &mut dyn Delivery,
         files: &[(PayloadName, Vec<u8>)],
     ) -> Result<GenerationName, StageError> {
         let refused = |refused| Err(StageError::Refused(refused));
-        let permits = WriteClass::ALL.map(|class| self.permit(class).map(|p| p.class()));
-        let permitted: Vec<WriteClass> = permits.into_iter().flatten().collect();
-        let triggers = self.board.write_triggers.iter().map(|t| t.trigger.clone());
-        let triggers: Vec<WriteTrigger> = triggers.collect();
-        let names = files.iter().map(|(name, _)| name);
-        if let Err(unpermitted) = write::check_triggers(names, &triggers, &permitted) {
+        let (names, triggers) = (files.iter().map(|(name, _)| name), self.board.triggers());
+        if let Err(unpermitted) = write::check_triggers(names, &triggers, &self.enables.classes()) {
             return refused(WriteRefused::Unpermitted(unpermitted));
         }
         let property = |(name, bytes): &(PayloadName, Vec<u8>)| {
@@ -138,9 +101,6 @@ impl<'f> Checked<'f> {
 impl fmt::Display for WriteRefused {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotEnabled(class) => {
-                write!(f, "the run plan entry does not enable writes of {class}")
-            }
             Self::Unpermitted(files) => {
                 let files: Vec<String> = files.iter().map(ToString::to_string).collect();
                 f.write_str(&files.join("; "))
@@ -155,38 +115,13 @@ impl std::error::Error for WriteRefused {}
 #[cfg(test)]
 mod tests {
     use kyto_bench_core::board::RASPBERRY_PI_5;
+    use kyto_bench_core::write::WriteClass;
 
     use super::*;
     use crate::sim::{SimTftp, SimWorld};
 
     fn pi5() -> Board {
         Board::parse(RASPBERRY_PI_5).unwrap()
-    }
-
-    #[test]
-    fn a_permit_is_given_only_for_an_enabled_class() {
-        let board = pi5();
-        let none = WriteGate::new(&WriteEnables::default(), &board);
-        for class in WriteClass::ALL {
-            assert_eq!(none.permit(class), Err(WriteRefused::NotEnabled(class)));
-        }
-        let eeprom = WriteEnables {
-            eeprom: true,
-            ..WriteEnables::default()
-        };
-        let eeprom = WriteGate::new(&eeprom, &board);
-        assert_eq!(
-            eeprom
-                .permit(WriteClass::Eeprom)
-                .map(|permit| permit.class()),
-            Ok(WriteClass::Eeprom)
-        );
-        assert!(eeprom.permit(WriteClass::Firmware).is_err());
-        assert!(eeprom.permit(WriteClass::Storage).is_err());
-        assert_eq!(
-            none.permit(WriteClass::Storage).unwrap_err().to_string(),
-            "the run plan entry does not enable writes of storage"
-        );
     }
 
     #[test]
@@ -209,6 +144,8 @@ mod tests {
                 class: WriteClass::Eeprom,
             }];
             let expected = WriteRefused::Unpermitted(unpermitted);
+            let lets = "PIEEPROM.UPD lets the firmware write eeprom, which is not enabled";
+            assert!(expected.to_string().ends_with(lets), "{expected}");
             assert_eq!(refused, Err(StageError::Refused(expected)));
             assert!(tftp.read_staged(&first, &files[0].0).is_err());
         }

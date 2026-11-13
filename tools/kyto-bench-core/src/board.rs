@@ -345,6 +345,12 @@ impl Description {
             read.field == field.field && (read.part.is_none() || read.part == field.part)
         })
     }
+
+    /// The write triggers, without their sources.
+    pub fn triggers(&self) -> Vec<WriteTrigger> {
+        let triggers = self.write_triggers.iter();
+        triggers.map(|listed| listed.trigger.clone()).collect()
+    }
 }
 
 /// Builds a [`Description`], checking every rule and recording citations.

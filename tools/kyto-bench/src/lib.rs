@@ -1,7 +1,7 @@
 //! The kyto hardware-in-the-loop bench tool. It drives a bench through the
 //! device interfaces of [`device`], of which [`sim`] has one simulated device
 //! per class, stages payload files that let the board's firmware write only
-//! with a permit of the [`gate`], and knows the revision that its build
+//! through the write [`gate`], and knows the revision that its build
 //! embeds. Its command line, [`cli`], reads the files of a run ([`inputs`]),
 //! opens the bench of the instance configuration ([`env`]), runs the plan
 //! ([`run`]) while it records what happens ([`record`]), and writes the

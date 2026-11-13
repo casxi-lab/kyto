@@ -317,8 +317,8 @@ still.
 ### Write triggers and refused properties
 
 The writes that a payload can let the firmware make fall into three classes:
-`firmware`, `eeprom` and `storage`. The tool has no class, permit or command
-for any other kind of write, such as a write to one-time-programmable memory
+`firmware`, `eeprom` and `storage`. The tool has no class or command for
+any other kind of write, such as a write to one-time-programmable memory
 or secure-boot provisioning.
 
 `[[write_triggers]]` each give `class`, `files`, at least one file name, and
@@ -326,10 +326,10 @@ or secure-boot provisioning.
 last segment of its payload name, is one of `files` ignoring ASCII case. A
 delivery device of the tool writes only payload files that the write gate of
 a run plan entry has checked against the write triggers and the refused
-properties of the board description: a trigger is staged only with a permit
-of its class, which only the gate of an entry that enables the class gives,
-and a file that sets a refused property is never staged; only the tool
-itself builds a write gate. Every class is off
+properties of the board description: a trigger is staged only through the
+gate of an entry that enables its class, and a file that sets a refused
+property is never staged; only the tool itself builds a write gate. Every
+class is off
 unless a [run plan](#run-plans) entry enables it in `[entries.writes]`, and
 a run refuses a payload with a trigger of a class that its entry does not
 enable before anything is staged or powered, under the rule

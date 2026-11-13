@@ -12,7 +12,7 @@ use crate::identity::{IdentityRecord, Value};
 use crate::instance::PinnedFile;
 use crate::names::PayloadName;
 use crate::receipt::{Check, Outcome, PayloadFile, Refusal};
-use crate::write::{self, WriteClass, WriteEnables, WriteTrigger};
+use crate::write::{self, WriteEnables};
 
 /// Checks the payload of entry `entry` before anything is staged, in this
 /// order: for each file of `payload`, in increasing order of the bytes of
@@ -31,15 +31,7 @@ pub fn check_entry(
     sources: &[(PayloadName, Sha256)],
     refused: &dyn Fn(&PayloadName) -> Option<String>,
 ) -> Result<(), Refusal> {
-    let permitted: Vec<WriteClass> = WriteClass::ALL
-        .into_iter()
-        .filter(|class| enables.enabled(*class))
-        .collect();
-    let triggers: Vec<WriteTrigger> = board
-        .write_triggers
-        .iter()
-        .map(|trigger| trigger.trigger.clone())
-        .collect();
+    let (permitted, triggers) = (enables.classes(), board.triggers());
     for file in by_name(payload) {
         let name = &file.name;
         let refusal = |rule, detail| Err(Refusal::new(rule, entry, name, detail));

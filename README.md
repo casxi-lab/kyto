@@ -36,8 +36,9 @@ Electrical design:
 - **Debug and expansion connections.** Access to the compute module's
   dedicated debug UART, which the module does not bring out on its
   board-to-board connectors, kept apart from the peripherals behind the RP1
-  I/O controller, and expansion connections with stated pins, buses, voltage
-  levels and connectors.
+  I/O controller; a covered service port for the bench's test signals; and
+  externally reachable USB host ports with a stated current allowance. There
+  is no on-board expansion header; data acquisition uses a separate box.
 - **Carrier boards.** For each form, a carrier board for the compute module
   that holds the circuits that power, boot and debug it and connects the
   input, display and power parts to it; these circuits are one design shared

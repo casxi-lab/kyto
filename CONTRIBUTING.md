@@ -123,8 +123,9 @@ supply; battery capacity and runtime are fixed only after the consumption at
 idle, under computation load, with the display and peripherals, and during
 shutdown and wake has been measured. Consumption and temperatures measured on
 the whole Raspberry Pi 5 do not stand for the Raspberry Pi Compute Module 5.
-Where raw measurement files are kept, and up to what size they are committed,
-has not been decided.
+Raw files of measurements taken by hand, not by the bench tool, and photos
+are kept outside this repository: each record names them by file name and
+SHA-256, and the repository holds the summary tables.
 
 ## Mockups, prints and fit tests
 

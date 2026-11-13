@@ -145,11 +145,11 @@ impl Delivery for SimTftp {
 #[cfg(test)]
 mod tests {
     use kyto_bench_core::board::{self, Board};
-    use kyto_bench_core::write::WriteEnables;
+    use kyto_bench_core::write::{Unpermitted, WriteClass, WriteEnables};
 
     use super::*;
     use crate::device::StageError;
-    use crate::gate::WriteGate;
+    use crate::gate::{WriteGate, WriteRefused};
 
     fn name(text: &str) -> PayloadName {
         PayloadName::parse(text).unwrap()
@@ -174,26 +174,53 @@ mod tests {
     }
 
     /// Stages `files` through the gate of an entry on the Raspberry Pi 5
+    /// that enables `enables`.
+    fn stage_with(
+        enables: &WriteEnables,
+        tftp: &mut SimTftp,
+        files: &[(PayloadName, Vec<u8>)],
+    ) -> Result<GenerationName, StageError> {
+        let board = Board::parse(board::RASPBERRY_PI_5).unwrap();
+        WriteGate::new(enables, &board).stage(tftp, files)
+    }
+
+    /// Stages `files` through the gate of an entry on the Raspberry Pi 5
     /// that enables no write.
     fn stage(
         tftp: &mut SimTftp,
         files: &[(PayloadName, Vec<u8>)],
     ) -> Result<GenerationName, StageError> {
-        let board = Board::parse(board::RASPBERRY_PI_5).unwrap();
-        WriteGate::new(&WriteEnables::default(), &board).stage(tftp, files)
+        stage_with(&WriteEnables::default(), tftp, files)
     }
 
     #[test]
-    fn a_refused_payload_stages_nothing() {
+    fn stage_refuses_a_trigger_file_without_a_permit() {
         let (world, mut tftp) = sim_tftp();
         let payload = files(&[("config.txt", b"x"), ("PIEEPROM.UPD", b"image")]);
-        assert!(matches!(
-            stage(&mut tftp, &payload),
-            Err(StageError::Refused(_))
-        ));
+        // No write enabled, and every class but the one of the trigger file.
+        let other_classes = WriteEnables {
+            firmware: true,
+            storage: true,
+            ..WriteEnables::default()
+        };
+        for enables in [WriteEnables::default(), other_classes] {
+            assert_eq!(
+                stage_with(&enables, &mut tftp, &payload),
+                Err(StageError::Refused(WriteRefused::Unpermitted(vec![
+                    Unpermitted {
+                        file: name("PIEEPROM.UPD"),
+                        class: WriteClass::Eeprom
+                    }
+                ])))
+            );
+        }
         // Nothing was staged: no generation exists, and the next payload
         // gets the first name.
         assert!(world.borrow().tftp.generations.is_empty());
+        assert!(
+            tftp.read_staged(&generation(1), &name("config.txt"))
+                .is_err()
+        );
         assert_eq!(stage(&mut tftp, &payload[..1]), Ok(generation(1)));
     }
 

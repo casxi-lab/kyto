@@ -1,0 +1,15 @@
+[package]
+name = "kyto-bench"
+description = "The kyto hardware-in-the-loop bench tool"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+kyto-bench-core = { path = "../kyto-bench-core" }
+toml = { workspace = true }
+
+[lints]
+workspace = true

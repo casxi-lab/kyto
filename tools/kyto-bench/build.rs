@@ -1,9 +1,12 @@
 //! Embeds the revision of the tool: the commit it is built from as
 //! `KYTO_BENCH_COMMIT` (40 lowercase hexadecimal digits) and whether the
-//! working tree was clean, untracked files included, as `KYTO_BENCH_CLEAN`
-//! (`true` or `false`). Both are given on every build; a value that Git
-//! cannot give is given empty, and the tool reads it as unknown, so a value
-//! of the same name in the build's environment never reaches the tool.
+//! working tree was clean as `KYTO_BENCH_CLEAN` (`true` or `false`): no
+//! change and no untracked file, no tracked file marked assume-unchanged or
+//! skip-worktree, and no untracked file hidden by anything but the
+//! `.gitignore` files of the tree. Both are given on every build; a value
+//! that Git cannot give is given empty, and the tool reads it as unknown, so
+//! a value of the same name in the build's environment never reaches the
+//! tool.
 //!
 //! Git runs in the repository root with the variables that point it at
 //! another repository or index removed, and its values are used only when
@@ -71,7 +74,24 @@ fn revision() -> Option<(Option<String>, Option<bool>)> {
         &root,
         "--no-optional-locks status --porcelain --untracked-files=all",
     );
-    let clean = status.map(|status| status.is_empty());
+    // `git status` does not show a change to a tracked file marked
+    // assume-unchanged (a lowercase tag) or skip-worktree (`S`), nor an
+    // untracked file that a local exclude hides; the second listing applies
+    // only the `.gitignore` files of the tree.
+    let hidden = git(&root, "ls-files -v -z").map(|out| {
+        let mut entries = out.split(|byte| *byte == 0);
+        entries.any(|entry| matches!(entry.first(), Some(b'a'..=b'z' | b'S')))
+    });
+    let local = git(
+        &root,
+        "ls-files -z --others --exclude-per-directory=.gitignore",
+    );
+    let clean = match (status, hidden, local) {
+        (Some(status), Some(hidden), Some(local)) => {
+            Some(status.is_empty() && !hidden && local.is_empty())
+        }
+        _ => None,
+    };
     Some((commit.filter(|commit| is_commit(commit)), clean))
 }
 

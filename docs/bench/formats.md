@@ -1027,8 +1027,13 @@ changes, is eligible as evidence.
 `tool.commit` and `tool.clean` describe the tree as it was when the tool was
 built. Every build of the tool asks Git for them again, so a change made
 after an earlier build, an untracked file included, makes the next build's
-`clean` `false`. A build from a source tree that is not a Git checkout of its
-own records both as `null`; neither comes from the environment of the build.
+`clean` `false`. `clean` is `true` only when `git status` shows no change and
+no untracked file, no tracked file is marked assume-unchanged or
+skip-worktree, and no untracked file is hidden by anything but the
+`.gitignore` files of the tree, such as `.git/info/exclude` or the excludes
+file of the Git configuration. A build from a source tree that is not a Git
+checkout of its own records both as `null`; neither comes from the
+environment of the build.
 
 ### Inputs of judgement
 

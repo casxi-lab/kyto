@@ -1,12 +1,14 @@
 //! The revision of the tool, as its build embedded it.
 
 /// The commit the tool was built from and whether the working tree was
-/// clean, untracked files included; `None` when the build could not tell.
+/// clean, untracked files and changes hidden from `git status` included;
+/// `None` when the build could not tell.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolRevision {
     /// The commit, as 40 lowercase hexadecimal digits.
     pub commit: Option<String>,
-    /// Whether the working tree had no change and no untracked file.
+    /// Whether the working tree had no change and no untracked file, as the
+    /// build script tells them.
     pub clean: Option<bool>,
 }
 

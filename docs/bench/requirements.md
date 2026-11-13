@@ -306,11 +306,14 @@ commit is unknown or whose working tree changed.
 ### PROV-R08
 
 **The tool's revision comes from its build alone.** Every build of the
-tool asks Git for the commit and whether the working tree had changes,
-untracked files included, and embeds them; nothing at run time or in the
-environment of the build overrides them. A value that Git cannot give, or
-that has another form, is unknown, so `tool.commit` and `tool.clean`
-describe the tree at the build that made the binary.
+tool asks Git for the commit and whether the working tree had changes, and
+embeds them; nothing at run time or in the environment of the build
+overrides them. The tree counts as clean only when `git status` shows no
+change, no untracked file included, no tracked file is marked
+assume-unchanged or skip-worktree, and no untracked file is hidden by
+anything but the `.gitignore` files of the tree. A value that Git cannot
+give, or that has another form, is unknown, so `tool.commit` and
+`tool.clean` describe the tree at the build that made the binary.
 
 **Evidence.** A test that reads what the build script gave Cargo for the
 build of the tests: it watches only paths that do not exist, so that Cargo

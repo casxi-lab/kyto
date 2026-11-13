@@ -993,7 +993,7 @@ like this:
 | `nonce` | 128 random bits, as 32 lowercase hexadecimal digits |
 | `tool` | `commit`, the commit of the tool as 40 lowercase hexadecimal digits, or `null` when it is unknown; and `clean`, whether the tool's working tree had no changes, or `null` when it is unknown |
 | `evidence` | Whether the receipt is [eligible as evidence](#evidence) |
-| `bench` | `hardware_revision`, with `kind`, `"devices-sha256"`, and `value`, the [bench hardware revision](#devices); and `simulated`, whether the devices of the bench are simulated |
+| `bench` | `hardware_revision`, with `kind`, `"devices-sha256"`, and `value`, the [bench hardware revision](#devices); and `simulated`, whether any device of the bench is of the kind `simulated` |
 | `inputs` | The [inputs of judgement](#inputs-of-judgement) |
 | `reference` | The [reference](#references) of the run plan, or `null` when it has none |
 | `refusal` | `null`, or why the run was [refused](#refused-runs) |
@@ -1013,8 +1013,8 @@ receipt, each once and in this order, with `detail` saying what was found:
 - `evidence.simulated`: `bench.simulated` is `true`.
 
 `eligible` is `true` exactly when `reasons` is empty: only a receipt of a run
-on real devices, made by a tool of a known commit without changes, is
-eligible as evidence.
+whose every device is real, made by a tool of a known commit without
+changes, is eligible as evidence.
 
 ### Inputs of judgement
 

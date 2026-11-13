@@ -16,14 +16,11 @@ use std::rc::Rc;
 use serde::Deserialize;
 
 use kyto_bench_core::board::{Board, EMBEDDED};
-use kyto_bench_core::instance::{Instance, Role};
+use kyto_bench_core::instance::{Instance, Role, SIMULATED};
 
 use crate::device::{Clock, Console, Delivery, MeterConfirm, PowerConfirm, PowerSwitch};
 use crate::provenance::ToolRevision;
 use crate::sim::{self, ScriptProvider, SimConsole, SimRelay, SimSupplyMeter, SimTftp, SimWorld};
-
-/// The kind of a simulated device.
-pub const SIMULATED: &str = "simulated";
 
 /// The devices of a bench and the clock that they share.
 pub struct Bench {
@@ -104,13 +101,6 @@ impl Env for HostEnv {
     }
 }
 
-/// Whether every device of `instance` is simulated.
-pub fn is_simulated(instance: &Instance) -> bool {
-    Role::ALL
-        .iter()
-        .all(|role| instance.devices().device(*role).kind == SIMULATED)
-}
-
 /// The bench of a simulated device of each role on `world`, whose console
 /// plays what `script` gives.
 pub fn simulated(world: &SimWorld, script: ScriptProvider) -> Bench {
@@ -176,7 +166,7 @@ mod tests {
         let mut bench = HostEnv
             .open_bench(&board, &instance(SIMULATED, replay), &base)
             .unwrap();
-        assert!(is_simulated(&instance(SIMULATED, "")));
+        assert!(instance(SIMULATED, "").devices().any_simulated());
         assert_eq!(bench.relay, None);
         bench.console.open(Nanos(0)).unwrap();
         bench.power.command(PowerState::On).unwrap();
@@ -204,6 +194,7 @@ mod tests {
             let opened = HostEnv.open_bench(&board, &instance, &base);
             assert!(opened.err().unwrap().starts_with(error), "{error}");
         }
-        assert!(!is_simulated(&instance("relay", "")));
+        // A bench with any simulated device counts as simulated.
+        assert!(instance("relay", "").devices().any_simulated());
     }
 }

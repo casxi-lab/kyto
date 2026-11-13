@@ -130,7 +130,18 @@ impl Devices {
             Role::Delivery => &self.delivery,
         }
     }
+
+    /// Whether any device is of the kind [`SIMULATED`]; a run on such a
+    /// bench is never evidence.
+    pub fn any_simulated(&self) -> bool {
+        Role::ALL
+            .iter()
+            .any(|role| self.device(*role).kind == SIMULATED)
+    }
 }
+
+/// The kind of a simulated device.
+pub const SIMULATED: &str = "simulated";
 
 /// An instance value that a public receipt must not show, with its rule.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -382,7 +393,7 @@ impl RawInstance {
             }
         }
         let salt = self.local.get("salt").and_then(toml::Value::as_str);
-        let real = Role::ALL.map(|role| devices.device(role).kind != "simulated");
+        let real = Role::ALL.map(|role| devices.device(role).kind != SIMULATED);
         check! {
             "local.salt" => salt.is_some_and(|salt| is_lower_hex(salt, SALT_DIGITS)),
                 "the salt is 32 lowercase hexadecimal digits, 128 random bits";

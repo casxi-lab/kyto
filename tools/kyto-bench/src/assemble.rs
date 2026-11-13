@@ -13,7 +13,6 @@ use kyto_bench_core::receipt::{
 };
 use kyto_bench_core::verdict::{self, ColdBoot};
 
-use crate::env;
 use crate::inputs::Inputs;
 use crate::provenance::ToolRevision;
 use crate::record::Capture;
@@ -23,7 +22,7 @@ use crate::record::Capture;
 /// plan not run, with the files of its payload, none read yet.
 pub fn start(inputs: &Inputs, nonce: String, tool: ToolRevision) -> Receipt {
     let (plan, board, instance) = (&inputs.plan, &inputs.board, &inputs.instance);
-    let simulated = env::is_simulated(instance);
+    let simulated = instance.devices().any_simulated();
     let tool = Tool {
         commit: tool.commit,
         clean: tool.clean,

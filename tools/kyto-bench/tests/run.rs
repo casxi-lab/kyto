@@ -623,6 +623,61 @@ fn devices_and_local_settings_enter_the_receipt_only_as_the_hardware_revision() 
 }
 
 #[test]
+fn power_records_name_only_the_command() {
+    let env = TestEnv::example();
+    let receipt = run_example("power-records", &env).receipt();
+    let boots = receipt.entries.iter().flat_map(|e| &e.cold_boots);
+    let events = receipt
+        .start
+        .events
+        .iter()
+        .chain(boots.flat_map(|c| &c.events));
+    let recorded: Vec<(u64, PowerState)> = events
+        .filter_map(|event| match &event.event {
+            EventKind::Power { command, relay } => {
+                assert_eq!(relay, &None, "a simulated power device names no relay");
+                let state = match command {
+                    Command::On => PowerState::On,
+                    Command::Off => PowerState::Off,
+                };
+                Some((event.at_ns, state))
+            }
+            _ => None,
+        })
+        .collect();
+    // Each command as the switch sent it, at the time it reported.
+    let sent: Vec<(u64, PowerState)> = env
+        .world
+        .power_commands()
+        .iter()
+        .map(|(at, s)| (at.0, *s))
+        .collect();
+    assert_eq!(recorded, sent);
+}
+
+#[test]
+fn residual_voltage_above_the_off_threshold_is_not_off() {
+    // A supply that keeps 0.6 V while off, above the 0.5 V of the example
+    // configuration: the power off at the start is never confirmed.
+    let env = TestEnv::example();
+    env.world.knobs().supply.residual_micro = 600_000;
+    let ran = run_example("residual", &env);
+    assert_eq!(ran.status, cli::BENCH_FAULT);
+    let receipt = ran.receipt();
+    let first = &receipt.entries[0];
+    assert!(first.cold_boots.is_empty() && first.events.is_empty());
+    let check = &first.checks[0];
+    let found = (check.rule.as_str(), check.subject.as_str(), check.result);
+    assert_eq!(found, ("power.off_unconfirmed", "start", Outcome::Fault));
+    assert_eq!(receipt.entries[1].verdict, Verdict::NotRun);
+    assert_eq!(
+        env.world.power_commands().len(),
+        1,
+        "nothing is switched on"
+    );
+}
+
+#[test]
 fn a_public_version_that_would_show_a_value_is_not_written() {
     // A segment of the echo entry over the lines with the serial number,
     // the MAC address and the server address.

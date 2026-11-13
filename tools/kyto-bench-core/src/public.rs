@@ -196,10 +196,9 @@ impl PublicReceipt {
 }
 
 /// The values of at least 4 bytes that the public version of `receipt`
-/// must not show, sorted, as `docs/bench/formats.md` lists them, with the
-/// `instance` values and the nonce, last. Beyond [`MAX_VALUES`] or
-/// [`MAX_VALUE_BYTES`], the error is a leak of [`LIMIT_RULE`] at the whole
-/// receipt.
+/// must not show, as `docs/bench/formats.md` lists them, with `instance`,
+/// sorted by rule and value, then the nonce. Beyond [`MAX_VALUES`] or
+/// [`MAX_VALUE_BYTES`], the error is a leak of [`LIMIT_RULE`] at the empty pointer.
 pub fn secrets(receipt: &Receipt, instance: &[InstanceValue]) -> Result<Vec<Secret>, Vec<Leak>> {
     let boards = boards_of(&receipt.inputs.board_description.text)?;
     let mut found = BTreeSet::new();
@@ -239,7 +238,7 @@ pub fn public_version(
 ) -> Result<PublicReceipt, Vec<Leak>> {
     let boards = boards_of(&receipt.inputs.board_description.text)?;
     let secrets = secrets(receipt, instance)?;
-    let finder = Finder::new(&secrets[..secrets.len() - 1]);
+    let finder = Finder::new(secrets.iter().filter(|secret| secret.rule != NONCE_RULE));
     let mut value = serde_json::to_value(receipt).expect("a receipt is JSON");
     let withheld = withheld(&value);
     for w in &withheld {
@@ -397,7 +396,7 @@ struct Finder {
 }
 
 impl Finder {
-    fn new(secrets: &[Secret]) -> Self {
+    fn new<'s>(secrets: impl IntoIterator<Item = &'s Secret>) -> Self {
         let (next, suffix, ends) = (vec![BTreeMap::new()], vec![0], vec![(0, BTreeSet::new())]);
         let mut finder = Self { next, suffix, ends };
         for secret in secrets {

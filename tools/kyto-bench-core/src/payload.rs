@@ -11,7 +11,7 @@ use crate::digest::Sha256;
 use crate::identity::{IdentityRecord, Value};
 use crate::instance::PinnedFile;
 use crate::names::PayloadName;
-use crate::receipt::{Check, Outcome, Refusal};
+use crate::receipt::{Check, Outcome, PayloadFile, Refusal};
 use crate::write::{self, WriteClass, WriteEnables, WriteTrigger};
 
 /// Checks the payload of entry `entry` before anything is staged, in this
@@ -64,6 +64,16 @@ pub fn refused_property(board: &Board, name: &PayloadName, bytes: &[u8]) -> Opti
     let properties: Vec<String> = refused.properties.iter().map(|p| p.name.clone()).collect();
     let hits = write::find_refused_properties([(name, bytes)], &refused.files.pattern, &properties);
     hits.first().map(ToString::to_string)
+}
+
+/// The digests of the copies of `files` that `copy` gives, by payload name,
+/// leaving out the files whose copy was not read.
+pub fn digests(
+    files: &[PayloadFile],
+    copy: fn(&PayloadFile) -> Option<&Sha256>,
+) -> Vec<(PayloadName, Sha256)> {
+    let digest = |file: &PayloadFile| Some((file.name.clone(), copy(file)?.clone()));
+    files.iter().filter_map(digest).collect()
 }
 
 /// Checks the digests of the staged copy, read back from where the board

@@ -5,11 +5,10 @@
 //! console output of every cold boot. [`rejudge`] reads nothing else.
 
 use crate::board::Board;
-use crate::digest::Sha256;
 use crate::document::check;
 use crate::names::PayloadName;
 use crate::plan::RunPlan;
-use crate::receipt::{PayloadFile, Receipt, ReceiptError, Refusal, Verdict, invalid};
+use crate::receipt::{Receipt, ReceiptError, Refusal, Verdict, invalid};
 use crate::verdict::{self, ColdBoot};
 use crate::{evidence, payload, power};
 
@@ -43,15 +42,11 @@ pub fn rejudge(receipt: &Receipt) -> Result<Receipt, ReceiptError> {
         power::off_confirmed_at(confirmation, &receipt.start.events),
         false,
     );
-    for (index, (record, entry)) in again.entries.iter_mut().zip(&plan.entries).enumerate() {
+    for (index, entry) in plan.entries.iter().enumerate() {
         let payload = entry.files(&parameters.pins).unwrap_or_default();
-        let start = if index == 0 {
-            &receipt.start.events[..]
-        } else {
-            &[]
+        let Some(record) = again.entries.get_mut(index) else {
+            break;
         };
-        let files = &record.payload.files;
-        record.checks = verdict::entry_checks(parameters, start, &record.events, payload, files);
         let mut last = Verdict::Pass;
         for (number, cold_boot) in record.cold_boots.iter_mut().enumerate() {
             let at = |key: &str| format!("/entries/{index}/cold_boots/{number}/{key}");
@@ -75,10 +70,11 @@ pub fn rejudge(receipt: &Receipt) -> Result<Receipt, ReceiptError> {
             (cold_boot.observations, cold_boot.checks, cold_boot.verdict) = (seen, checks, last);
             off_at = power::off_confirmed_at(confirmation, events);
         }
-        record.verdict = verdict::entry(record, entry.cold_boots);
-        let not_run = record.verdict == Verdict::NotRun;
+        verdict::close_entry(&mut again, index, payload, entry.cold_boots);
+        let verdict = again.entries[index].verdict;
+        let not_run = verdict == Verdict::NotRun;
         check! { format!("/entries/{index}") => !faulted || not_run, "an entry ran after a bench fault"; }
-        faulted |= record.verdict == Verdict::BenchFault;
+        faulted |= verdict == Verdict::BenchFault;
     }
     let verdicts: Vec<Verdict> = again.entries.iter().map(|entry| entry.verdict).collect();
     again.verdict = Some(verdict::run(&verdicts));
@@ -92,13 +88,6 @@ pub fn rejudge(receipt: &Receipt) -> Result<Receipt, ReceiptError> {
 /// its place in that order.
 fn refusal(receipt: &Receipt, plan: &RunPlan, board: &Board) -> Option<Refusal> {
     let parameters = &receipt.inputs.instance.parameters;
-    type Copy = fn(&PayloadFile) -> Option<&Sha256>;
-    let digests = |files: &[PayloadFile], copy: Copy| -> Vec<(PayloadName, Sha256)> {
-        files
-            .iter()
-            .filter_map(|file| Some((file.name.clone(), copy(file)?.clone())))
-            .collect()
-    };
     let entries = || receipt.entries.iter().zip(&plan.entries).enumerate();
     for (index, (record, entry)) in entries() {
         let recorded = |name: &PayloadName| {
@@ -107,7 +96,7 @@ fn refusal(receipt: &Receipt, plan: &RunPlan, board: &Board) -> Option<Refusal> 
             (found && refusal.subject == name.as_str()).then(|| refusal.detail.clone())
         };
         let payload = entry.files(&parameters.pins).unwrap_or_default();
-        let sources = digests(&record.payload.files, |file| file.source_sha256.as_ref());
+        let sources = payload::digests(&record.payload.files, |file| file.source_sha256.as_ref());
         let identity = &parameters.identity;
         let checked = payload::check_entry(
             index,
@@ -124,7 +113,7 @@ fn refusal(receipt: &Receipt, plan: &RunPlan, board: &Board) -> Option<Refusal> 
     }
     entries().find_map(|(index, (record, entry))| {
         let payload = entry.files(&parameters.pins).unwrap_or_default();
-        let staged = digests(&record.payload.files, |file| file.staged_sha256.as_ref());
+        let staged = payload::digests(&record.payload.files, |file| file.staged_sha256.as_ref());
         payload::check_staged(index, payload, &staged).err()
     })
 }
@@ -132,8 +121,9 @@ fn refusal(receipt: &Receipt, plan: &RunPlan, board: &Board) -> Option<Refusal> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::digest::Sha256;
     use crate::receipt::tests::{PLAN, example};
-    use crate::receipt::{ColdBootRecord, EntryRecord, Outcome, Text};
+    use crate::receipt::{ColdBootRecord, EntryRecord, Outcome, PayloadFile, Text};
 
     /// The files of the entry of the worked example: its `config.txt` and the
     /// device tree files that the D0 stepping of the board of the example

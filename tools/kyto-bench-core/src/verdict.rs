@@ -13,7 +13,8 @@ use crate::observe::{
 use crate::plan::{BOARD_MARKER, End, Entry};
 use crate::power::{self, nanos};
 use crate::receipt::{
-    Check, Command, EndReason, EntryRecord, Event, EventKind, Outcome, PayloadFile, Verdict,
+    Check, Command, EndReason, EntryRecord, Event, EventKind, Outcome, PayloadFile, Receipt,
+    Verdict,
 };
 
 /// What the rules of a cold boot read: its context and its record.
@@ -224,11 +225,27 @@ pub fn entry_checks(
     checks.extend(power::device_errors(start).chain(power::device_errors(events)));
     let switched = |event: &Event| matches!(event.event, EventKind::Switch { .. });
     if events.iter().any(switched) {
-        let served = |file: &PayloadFile| Some((file.name.clone(), file.served_sha256.clone()?));
-        let found: Vec<_> = files.iter().filter_map(served).collect();
+        let found = crate::payload::digests(files, |file| file.served_sha256.as_ref());
         checks.extend(crate::payload::check_served(payload, &found));
     }
     checks
+}
+
+/// Judges entry `index` of `receipt`, whose payload is `payload` and which
+/// plans `planned` cold boots, from its record and, for the first entry,
+/// the events of the start: its checks ([`entry_checks`]) and its verdict
+/// ([`entry`]).
+pub fn close_entry(receipt: &mut Receipt, index: usize, payload: &[PinnedFile], planned: u32) {
+    let start = if index == 0 {
+        &receipt.start.events[..]
+    } else {
+        &[]
+    };
+    let parameters = &receipt.inputs.instance.parameters;
+    let record = &mut receipt.entries[index];
+    let files = &record.payload.files;
+    record.checks = entry_checks(parameters, start, &record.events, payload, files);
+    record.verdict = entry(record, planned);
 }
 
 /// The verdict of a cold boot from its checks: BENCH FAULT when one is a

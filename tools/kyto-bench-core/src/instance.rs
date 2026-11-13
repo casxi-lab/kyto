@@ -351,11 +351,6 @@ impl Parameters {
 impl RawInstance {
     /// Checks the rules of `[local]` and `[devices]`.
     fn check(&self, devices: &Devices) -> Result<(), InstanceError> {
-        let salt = self.local.get("salt").and_then(toml::Value::as_str);
-        check! {
-            "local.salt" => salt.is_some_and(|salt| is_lower_hex(salt, SALT_DIGITS)),
-                "the salt is 32 lowercase hexadecimal digits, 128 random bits";
-        }
         for (key, settings) in self.local.iter().filter(|(key, _)| *key != "salt") {
             if !Role::ALL.iter().any(|role| role.name() == key) || !settings.is_table() {
                 let message = format!("[local.{key}] is not the settings table of a role");
@@ -376,11 +371,12 @@ impl RawInstance {
                     "both ends of a connection are lines of text";
             }
         }
-        let simulated = Role::ALL
-            .iter()
-            .all(|role| devices.device(*role).kind == "simulated");
+        let salt = self.local.get("salt").and_then(toml::Value::as_str);
+        let real = Role::ALL.map(|role| devices.device(role).kind != "simulated");
         check! {
-            "local.salt" => simulated || salt.is_none_or(|salt| !PUBLISHED_SALTS.contains(&salt)),
+            "local.salt" => salt.is_some_and(|salt| is_lower_hex(salt, SALT_DIGITS)),
+                "the salt is 32 lowercase hexadecimal digits, 128 random bits";
+            "local.salt" => !real.contains(&true) || salt.is_none_or(|salt| !PUBLISHED_SALTS.contains(&salt)),
                 "kyto publishes this salt; generate one with openssl rand -hex 16";
         }
         Ok(())
@@ -391,7 +387,7 @@ impl RawInstance {
 /// only a configuration of simulated devices may use.
 const PUBLISHED_SALTS: [&str; 2] = [
     "9c1f5e0a7b3d48e2a6c0f4b8d2e71a35",
-    "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+    "6b2d9f41c07e8a35d4e19b7c2f60a853",
 ];
 
 const SEARCHABLE: &str = "the value is 4 to 255 printable ASCII characters without spaces";
@@ -538,7 +534,7 @@ from = "console"
 to = "board debug UART"
 
 [local]
-salt = "0f1e2d3c4b5a69788796a5b4c3d2e1f0"
+salt = "6b2d9f41c07e8a35d4e19b7c2f60a853"
 
 [local.console]
 replay = ["captures/firmware-only.bin", "captures/echo.bin"]
@@ -706,7 +702,7 @@ B = { z = "", y = "q\"b\\c\n\t\u0001é/" }
             pairs,
             [
                 ("instance.tftp.server_address", "192.0.2.10"),
-                ("instance.local.salt", "0f1e2d3c4b5a69788796a5b4c3d2e1f0"),
+                ("instance.local.salt", "6b2d9f41c07e8a35d4e19b7c2f60a853"),
                 (
                     "instance.local.console.replay",
                     "captures/firmware-only.bin"
@@ -729,7 +725,7 @@ B = { z = "", y = "q\"b\\c\n\t\u0001é/" }
             [
                 ("instance.tftp.server_address", "192.0.2.10"),
                 ("instance.tftp.path_prefix", "bench/"),
-                ("instance.local.salt", "0f1e2d3c4b5a69788796a5b4c3d2e1f0"),
+                ("instance.local.salt", "6b2d9f41c07e8a35d4e19b7c2f60a853"),
                 ("instance.local.power.bus.name", "bus-a"),
                 ("instance.local.power.port", "/dev/example"),
                 (
@@ -863,17 +859,17 @@ B = { z = "", y = "q\"b\\c\n\t\u0001é/" }
 
     #[test]
     fn an_instance_without_a_128_bit_salt_is_rejected() {
-        let salt = "salt = \"0f1e2d3c4b5a69788796a5b4c3d2e1f0\"";
+        let salt = "salt = \"6b2d9f41c07e8a35d4e19b7c2f60a853\"";
         let refused = [
             edited(salt, ""),
-            edited(salt, "salt = \"0f1e2d3c4b5a69788796a5b4c3d2e1\""),
-            edited(salt, "salt = \"0f1e2d3c4b5a69788796a5b4c3d2e1f00\""),
-            edited(salt, "salt = \"0F1E2D3C4B5A69788796A5B4C3D2E1F0\""),
-            edited(salt, "salt = \"0f1e2d3c4b5a69788796a5b4c3d2e1fg\""),
+            edited(salt, "salt = \"6b2d9f41c07e8a35d4e19b7c2f60a8\""),
+            edited(salt, "salt = \"6b2d9f41c07e8a35d4e19b7c2f60a8530\""),
+            edited(salt, "salt = \"6B2D9F41C07E8A35D4E19B7C2F60A853\""),
+            edited(salt, "salt = \"6b2d9f41c07e8a35d4e19b7c2f60a85g\""),
             edited(salt, "salt = 128"),
             edited(
                 salt,
-                "salt = { value = \"0f1e2d3c4b5a69788796a5b4c3d2e1f0\" }",
+                "salt = { value = \"6b2d9f41c07e8a35d4e19b7c2f60a853\" }",
             ),
         ];
         for text in refused {
@@ -895,13 +891,13 @@ B = { z = "", y = "q\"b\\c\n\t\u0001é/" }
         let real = edited(power, "power = { kind = \"relay-board\", model = \"R4\" }");
         assert_eq!(at_of(&real), "local.salt");
         let documented = real.replace(
-            "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+            "6b2d9f41c07e8a35d4e19b7c2f60a853",
             "9c1f5e0a7b3d48e2a6c0f4b8d2e71a35",
         );
         assert_eq!(at_of(&documented), "local.salt");
         // A salt of the bench's own, made here so that no text holds it.
         let salt = Sha256::of(b"a bench").to_string();
-        let own = real.replace("0f1e2d3c4b5a69788796a5b4c3d2e1f0", &salt[..32]);
+        let own = real.replace("6b2d9f41c07e8a35d4e19b7c2f60a853", &salt[..32]);
         assert_eq!(
             Instance::parse(&own).unwrap().devices().power.kind,
             "relay-board"
@@ -1001,6 +997,63 @@ B = { z = "", y = "q\"b\\c\n\t\u0001é/" }
             Instance::parse(&read).unwrap().check_board(&board),
             Err(InstanceError::Identity(IdentityError::Read { .. }))
         ));
+    }
+
+    #[test]
+    fn every_salt_that_kyto_writes_is_published_and_found_in_no_example() {
+        let tests = [
+            include_str!("instance.rs"),
+            include_str!("receipt.rs"),
+            include_str!("public.rs"),
+            include_str!("observe.rs"),
+            include_str!("plan.rs"),
+            include_str!("payload.rs"),
+        ];
+        let mut written = BTreeSet::new();
+        for text in tests.iter().chain([&FORMATS_PAGE]) {
+            for prefix in ["salt = \"", "salt = \\\""] {
+                for (at, _) in text.match_indices(prefix) {
+                    let start = at + prefix.len();
+                    if let Some(salt) = text.get(start..start + SALT_DIGITS)
+                        && is_lower_hex(salt, SALT_DIGITS)
+                    {
+                        written.insert(salt);
+                    }
+                }
+            }
+        }
+        assert_eq!(written, BTreeSet::from(PUBLISHED_SALTS));
+        let read = [
+            include_str!("../../examples/run-plan.toml"),
+            include_str!("../../examples/payload/firmware-only/config.txt"),
+            include_str!("../../examples/payload/firmware-only/bcm2712-rpi-5-b.dtb"),
+            include_str!("../../examples/payload/firmware-only/overlays/bcm2712d0.dtbo"),
+            include_str!("../../examples/payload/firmware-only/kernel.img"),
+            include_str!("../../examples/payload/echo/config.txt"),
+            include_str!("../../examples/payload/echo/bcm2712-rpi-5-b.dtb"),
+            include_str!("../../examples/payload/echo/overlays/bcm2712d0.dtbo"),
+            include_str!("../../examples/payload/echo/kernel.img"),
+            RASPBERRY_PI_5,
+        ];
+        // The documented instance values, the salts among them.
+        let documented = [example(), Instance::parse(documented_example()).unwrap()];
+        let values: Vec<String> = documented
+            .iter()
+            .flat_map(Instance::deidentify_values)
+            .map(|value| value.value.to_ascii_lowercase())
+            .collect();
+        for text in read.map(str::to_ascii_lowercase) {
+            for value in &values {
+                assert!(!text.contains(value.as_str()), "{value}");
+            }
+        }
+        // The console output that the tests build holds the documented TFTP
+        // server on purpose, but no salt.
+        for text in tests[1..].iter().map(|text| text.to_ascii_lowercase()) {
+            for salt in PUBLISHED_SALTS {
+                assert!(!text.contains(salt), "{salt}");
+            }
+        }
     }
 
     #[test]

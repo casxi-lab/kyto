@@ -486,11 +486,12 @@ impl Builder {
                 &at => !lines.iter().any(|known| known.name == line.name), "the name is used twice";
                 &at => list == "markers" || !form.pattern.group_names().is_empty(),
                     "the pattern has at least one named group";
-                &at => list == "firmware_versions" || line.sources.is_empty(),
+                &at => list == "firmware_versions" || line.sources.is_none(),
                     "only firmware version lines cite sources";
             }
-            self.cite(&at, &line.sources)?;
-            let (name, sources) = (line.name, line.sources);
+            let sources = line.sources.unwrap_or_default();
+            self.cite(&at, &sources)?;
+            let name = line.name;
             lines.push(NamedLine {
                 name,
                 form,
@@ -744,8 +745,7 @@ struct RawNamed {
     name: String,
     line: String,
     example: Examples,
-    #[serde(default)]
-    sources: Vec<String>,
+    sources: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -1425,7 +1425,12 @@ mod tests {
 
     #[test]
     fn a_description_that_breaks_a_rule_is_refused() {
-        let cases: [(&str, &str, &str); 21] = [
+        let cases: [(&str, &str, &str); 22] = [
+            (
+                "line = '^ *[0-9]+\\.[0-9]+ RPi: BOOTSYS release '",
+                "line = '^ *[0-9]+\\.[0-9]+ RPi: BOOTSYS release '\nsources = []",
+                "markers.bootsys",
+            ),
             (
                 "how = \"The manufacturer and the part number printed on the memory package\",",
                 "how = \"The manufacturer and the part number printed on the memory package\", note = \"x\",",

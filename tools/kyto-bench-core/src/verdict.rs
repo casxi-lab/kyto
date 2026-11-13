@@ -889,6 +889,33 @@ firmware.bootloader = {{ hash = "1accd665", date = "2026/09/25" }}
     }
 
     #[test]
+    fn a_line_that_started_before_the_send_does_not_answer_it() {
+        // The board wrote `STATS seq` with `READY` and the rest of its line
+        // after the step was sent.
+        let split = |lines: &[&str]| {
+            let mut case = case(lines);
+            let (ready, stats) = (case.index[8], case.index[9][0]);
+            case.index[9][1] = ready[1];
+            case.index.insert(10, [stats + 9, ready[1] + STEP]);
+            let send = case.at(|e| matches!(e, EventKind::Send { .. }));
+            assert_eq!((send.at_ns, send.received), (ready[1], stats));
+            send.received = stats + 9;
+            case
+        };
+        let early = split(&LINES);
+        let stats = early.index[9][0] as usize;
+        assert_eq!(&early.serial[stats..stats + 9], b"STATS seq");
+        let (seen, _) = early.judged();
+        assert_eq!(seen.steps[0].response_line, None);
+        assert_eq!(early.result("step.response", "0"), Outcome::Fail);
+        // A line of the same bytes that starts after the send answers it.
+        let late = split(&lines_with(|lines| lines.push("STATS seq=1")));
+        let (seen, _) = late.judged();
+        assert_eq!(seen.steps[0].response_line, Some(late.index[11][0]));
+        assert_eq!(late.result("step.response", "0"), Outcome::Pass);
+    }
+
+    #[test]
     fn an_entry_that_declares_no_sends_fails_when_one_is_sent() {
         let mut case = case(&LINES);
         let steps = "steps = [{ after = \"ready\", send = \"?\\r\", expect = '^STATS seq=1', timeout_ms = 1000 }]";

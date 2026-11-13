@@ -2,9 +2,10 @@
 
 kyto is newly initialized. It has no design files or models yet. Its Cargo
 workspaces are the repository tasks in `xtask/` and the bench tool in
-`tools/`, which has no command that runs a bench yet. Before proposing a
-change, enable the commit message hook once and run these commands from the
-repository root:
+`tools/`, whose library reads [board descriptions, identity records and
+instance configurations](docs/bench/formats.md) but which has no command that
+runs a bench yet. Before proposing a change, enable the commit message hook
+once and run these commands from the repository root:
 
 ```sh
 git config --local core.hooksPath .githooks

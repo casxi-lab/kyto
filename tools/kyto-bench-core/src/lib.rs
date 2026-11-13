@@ -1,13 +1,18 @@
 //! The part of the kyto bench tool that has no input or output: digests,
-//! names, console lines, line patterns, the write rules and the device roles.
-//! It reaches no device, clock, file, network or environment variable, so
-//! everything it decides can be decided again from recorded data.
+//! names, console lines, line patterns, the write rules, the documents it
+//! reads, the device roles and the minimum-bootloader rule. It reaches no
+//! device, clock, file, network or environment variable, so everything it
+//! decides can be decided again from recorded data.
 
 // A member's Clippy settings cannot add lints, so output is denied here.
 #![deny(clippy::print_stdout, clippy::print_stderr, clippy::dbg_macro)]
 
+pub mod board;
+pub mod bootloader;
 pub mod digest;
 pub mod document;
+pub mod identity;
+pub mod instance;
 pub mod lines;
 pub mod names;
 pub mod pattern;

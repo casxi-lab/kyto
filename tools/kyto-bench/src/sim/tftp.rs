@@ -154,6 +154,7 @@ impl Delivery for SimTftp {
 
 #[cfg(test)]
 mod tests {
+    use kyto_bench_core::board::{self, Board};
     use kyto_bench_core::write::{Unpermitted, WriteClass, WriteEnables};
 
     use super::*;
@@ -175,13 +176,16 @@ mod tests {
         GenerationName::new(number).unwrap()
     }
 
-    /// The TFTP directory of a world, for a board whose firmware writes its
-    /// boot EEPROM when a payload holds `pieeprom.upd` or `recovery.bin`.
-    fn eeprom_tftp() -> (SimWorld, SimTftp) {
-        let files = ["pieeprom.upd", "recovery.bin"].map(String::from).to_vec();
-        let trigger = WriteTrigger::new(WriteClass::Eeprom, files).unwrap();
+    /// The TFTP directory of a world, for the Raspberry Pi 5.
+    fn pi5_tftp() -> (SimWorld, SimTftp) {
+        let board = Board::parse(board::RASPBERRY_PI_5).unwrap();
+        let triggers = board
+            .write_triggers
+            .iter()
+            .map(|trigger| trigger.trigger.clone())
+            .collect();
         let world = SimWorld::new();
-        let tftp = SimTftp::new(&world, vec![trigger]);
+        let tftp = SimTftp::new(&world, triggers);
         (world, tftp)
     }
 
@@ -194,7 +198,7 @@ mod tests {
 
     #[test]
     fn stage_refuses_a_trigger_file_without_a_permit() {
-        let (world, mut tftp) = eeprom_tftp();
+        let (world, mut tftp) = pi5_tftp();
         let payload = files(&[("config.txt", b"x"), ("PIEEPROM.UPD", b"image")]);
         let firmware = WriteGate::new(&WriteEnables {
             firmware: true,
@@ -229,7 +233,7 @@ mod tests {
 
     #[test]
     fn stage_accepts_a_trigger_file_with_a_permit_of_its_class() {
-        let (_, mut tftp) = eeprom_tftp();
+        let (_, mut tftp) = pi5_tftp();
         let payload = files(&[("config.txt", b"x"), ("pieeprom.upd", b"image")]);
         let gate = eeprom_gate();
         let permits = [gate.permit(WriteClass::Eeprom).unwrap()];
@@ -242,7 +246,7 @@ mod tests {
 
     #[test]
     fn sim_tftp_stages_a_whole_new_generation_and_never_overwrites() {
-        let (_, mut tftp) = eeprom_tftp();
+        let (_, mut tftp) = pi5_tftp();
         let first = files(&[("config.txt", b"one"), ("overlays/a.dtbo", b"")]);
         let second = files(&[("config.txt", b"two")]);
         assert_eq!(tftp.stage(&first, &[]), Ok(generation(1)));
@@ -282,7 +286,7 @@ mod tests {
 
     #[test]
     fn read_served_reads_through_the_current_pointer() {
-        let (_, mut tftp) = eeprom_tftp();
+        let (_, mut tftp) = pi5_tftp();
         assert!(tftp.read_served(&name("config.txt")).is_err());
         tftp.stage(&files(&[("config.txt", b"one")]), &[]).unwrap();
         tftp.stage(&files(&[("config.txt", b"two")]), &[]).unwrap();
@@ -299,7 +303,7 @@ mod tests {
 
     #[test]
     fn tftp_knobs_fail_or_change_their_step() {
-        let (world, mut tftp) = eeprom_tftp();
+        let (world, mut tftp) = pi5_tftp();
         let payload = files(&[("config.txt", b"one"), ("empty", b"")]);
         world.knobs().tftp.stage_fails = true;
         assert!(matches!(

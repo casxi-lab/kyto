@@ -5,8 +5,8 @@ which other parts of casξ it works with, and the status of each part. The two
 forms and the compute module they are built on are fixed; no other part has
 been chosen, and the screen size, the key count and the arrangement within
 each form are open. kyto has no design files or models yet. The bench tool
-is partly written and cannot run a bench yet; every other part has the status
-`planned`.
+and the board descriptions are partly written, and the bench tool cannot run
+a bench yet; every other part has the status `planned`.
 
 | Status | Meaning |
 | --- | --- |
@@ -101,8 +101,8 @@ Other parts of casξ work with kyto's hardware:
 
 | Part | What kyto will provide | Works with | Status |
 | --- | --- | --- | --- |
-| Bench tool | A Rust program under `tools/` that drives a bench through device interfaces: power control with a confirmation of power-on and power-off that does not rely on the relay's own reply, the serial console, image delivery and network boot, input injection, display capture and measurement. Host tests run it against simulated devices | krepi runs on the Raspberry Pi 5; measurements and sample checks | `partial`: [`tools/`](../tools) holds the write gate and the interfaces of four kinds of device, each with one simulated device: power commands, a supply meter that also confirms power-on and power-off, the serial console, and payload delivery to the directory that the board reads over TFTP. A command that runs a bench and records what it measures, drivers for real devices, input injection and display capture remain |
-| Board descriptions | For each supported board, how it boots and what its boot log must show, such as the network boot markers and the firmware versions; the Raspberry Pi 5 comes first | krepi version records | `planned` |
+| Bench tool | A Rust program under `tools/` that drives a bench through device interfaces: power control with a confirmation of power-on and power-off that does not rely on the relay's own reply, the serial console, image delivery and network boot, input injection, display capture and measurement. Host tests run it against simulated devices | krepi runs on the Raspberry Pi 5; measurements and sample checks | `partial`: [`tools/`](../tools) holds the library that reads the [formats](bench/formats.md) of board descriptions, identity records and instance configurations, the write gate, and the interfaces of four kinds of device, each with one simulated device: power commands, a supply meter that also confirms power-on and power-off, the serial console, and payload delivery to the directory that the board reads over TFTP. A command that runs a bench and records what it measures, drivers for real devices, input injection and display capture remain |
+| Board descriptions | For each supported board, how it boots and what its boot log must show, such as the network boot markers and the firmware versions; the Raspberry Pi 5 comes first | krepi version records | `partial`: the [Raspberry Pi 5 description](../tools/boards/raspberry-pi-5.toml), in the [board description format](bench/formats.md#board-descriptions). Checking a boot log against a description, which needs a command that runs a bench, and the descriptions of other boards remain |
 | Run plans and receipts | A run plan names the image by digest and the steps to run; a receipt records the tool revision, the bench hardware revision, the image digest, the commands sent, the console transcript and every observation, with a verdict. A run refuses an image whose digest does not match, and a run that fails powers the board off and says that it did | krepi version records and regression runs | `planned` |
 | Bench self-test | A pinned self-test image and run that show a bench works; its result says nothing about any system tested on the bench | — | `planned` |
 | Input injection and display capture | A device that injects key presses (press, release, repeat, modifier keys, long press and cancel) as a USB HID keyboard under the bench's control, and a device that captures the display and compares regions or test patterns with what is expected; the receipt records the time from input to display and from cancel to the final state. A failed injection and a frame that did not change are each detected | krepi input and display tests; product screen and keyboard | `planned` |

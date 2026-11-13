@@ -1,0 +1,429 @@
+# The Raspberry Pi 5 as the bench tool sees it during a network boot: the
+# lines its boot firmware writes to the debug UART, the order of a cold boot,
+# how each identity field of a board is read, the device tree files of each
+# stepping, the earliest bootloader release a board needs, the payload files
+# that let the firmware write the EEPROM, the settings a payload must not
+# contain, and the lines that hold values a public receipt must not show.
+#
+# The address of the TFTP server and the path prefix of the files the board
+# reads are parameters of the instance configuration, not of this
+# description. The example lines hold no value of a real board: the serial
+# number fedc9876 is made up, the MAC addresses 00:00:5e:00:53:a1 (the board)
+# and :a2 (the TFTP server) and the IPv4 addresses of 192.0.2.0/24 are
+# reserved for documentation, and bench/ stands for the path prefix.
+#
+# Line patterns are matched against one line without its line ending. A line
+# can appear more than once in one cold boot: the BOOTMODE, EEPROM ID and
+# MFG_VER lines appear once for each stage of the bootloader. Every match of a
+# line that gives an identity value or a firmware version must give the same
+# value.
+format = "kyto-bench board description"
+format_version = 1
+id = "raspberry-pi-5"
+name = "Raspberry Pi 5"
+
+# Official documents, each at a fixed commit or release.
+[[sources]]
+id = "revision-codes"
+title = "Raspberry Pi documentation: Raspberry Pi revision codes"
+url = "https://github.com/raspberrypi/documentation/blob/21d772e7ee022e36a8f43c3ee75e20ca359fb832/documentation/asciidoc/computers/raspberry-pi/revision-codes.adoc"
+version = "21d772e7ee022e36a8f43c3ee75e20ca359fb832"
+
+[[sources]]
+id = "bootloader"
+title = "Raspberry Pi documentation: bootloader configuration"
+url = "https://github.com/raspberrypi/documentation/blob/21d772e7ee022e36a8f43c3ee75e20ca359fb832/documentation/asciidoc/computers/raspberry-pi/eeprom-bootloader.adoc"
+version = "21d772e7ee022e36a8f43c3ee75e20ca359fb832"
+
+[[sources]]
+id = "boot-eeprom"
+title = "Raspberry Pi documentation: Raspberry Pi boot EEPROM"
+url = "https://github.com/raspberrypi/documentation/blob/21d772e7ee022e36a8f43c3ee75e20ca359fb832/documentation/asciidoc/computers/raspberry-pi/boot-eeprom.adoc"
+version = "21d772e7ee022e36a8f43c3ee75e20ca359fb832"
+
+[[sources]]
+id = "config-boot"
+title = "Raspberry Pi documentation: config.txt boot options"
+url = "https://github.com/raspberrypi/documentation/blob/21d772e7ee022e36a8f43c3ee75e20ca359fb832/documentation/asciidoc/computers/config_txt/boot.adoc"
+version = "21d772e7ee022e36a8f43c3ee75e20ca359fb832"
+
+[[sources]]
+id = "boot-usb"
+title = "Raspberry Pi documentation: USB boot modes"
+url = "https://github.com/raspberrypi/documentation/blob/21d772e7ee022e36a8f43c3ee75e20ca359fb832/documentation/asciidoc/computers/raspberry-pi/boot-usb.adoc"
+version = "21d772e7ee022e36a8f43c3ee75e20ca359fb832"
+
+[[sources]]
+id = "release-notes"
+title = "rpi-eeprom: Raspberry Pi 5 bootloader EEPROM release notes"
+url = "https://github.com/raspberrypi/rpi-eeprom/blob/3831e51dba65f4493f3f88c1d049de73165c082e/firmware-2712/release-notes.md"
+version = "3831e51dba65f4493f3f88c1d049de73165c082e"
+
+[[sources]]
+id = "versions"
+title = "rpi-eeprom: Raspberry Pi 5 bootloader firmware versions"
+url = "https://github.com/raspberrypi/rpi-eeprom/blob/3831e51dba65f4493f3f88c1d049de73165c082e/firmware-2712/versions.txt"
+version = "3831e51dba65f4493f3f88c1d049de73165c082e"
+
+[[sources]]
+id = "eeprom-update"
+title = "rpi-eeprom: rpi-eeprom-update"
+url = "https://github.com/raspberrypi/rpi-eeprom/blob/3831e51dba65f4493f3f88c1d049de73165c082e/rpi-eeprom-update"
+version = "3831e51dba65f4493f3f88c1d049de73165c082e"
+
+[[sources]]
+id = "overlays-readme"
+title = "Raspberry Pi Linux: device tree overlays README"
+url = "https://github.com/raspberrypi/linux/blob/ab4372076bb840600e522ae776887ae2bc488fa6/arch/arm/boot/dts/overlays/README"
+version = "ab4372076bb840600e522ae776887ae2bc488fa6"
+
+[[sources]]
+id = "pcn-22"
+title = "PCN 22: Raspberry Pi 5 Revision 4 PCB"
+url = "https://pip-assets.raspberrypi.com/categories/1129-pcn/documents/RP-006041-PC-2-PCN%20Raspberry%20Pi%205B%20Rev%204.pdf"
+version = "RP-006041 release 1.1, 2025-04-24"
+
+[[sources]]
+id = "pcn-46"
+title = "PCN 46: Alternative sources of RAM"
+url = "https://pip-assets.raspberrypi.com/categories/1129-pcn/documents/RP-009750-PC-6-PCN%2046_%20Pi%205%20Alternative%20sources%20of%20RAM.pdf"
+version = "RP-009750 release 5, 2026-10-26"
+
+[[sources]]
+id = "pcn-53"
+title = "PCN 53: Alternative sources of SPI flash"
+url = "https://pip-assets.raspberrypi.com/categories/1129-pcn/documents/RP-010140-PC-1-PCN53_%20Raspberry%20Pi%205%20Alternative%20sources%20of%20SPI%20flash.pdf"
+version = "RP-010140 release 1, 2026-06-05"
+
+[[sources]]
+id = "pcn-65"
+title = "PCN 65: Revision 7 PCB"
+url = "https://pip-assets.raspberrypi.com/categories/1129-pcn/documents/RP-010685-PC-2-PCN%2065_%20Change%20of%20Raspberry%20Pi%205%20PCB%20to%20Revision%207.pdf"
+version = "RP-010685 release 1, 2026-10-02"
+
+# The debug UART. The bootloader writes to it when its configuration sets
+# BOOT_UART=1, at the rate UART_BAUD sets, which must be unset or 115200. The
+# lines of the later firmware stage, which start with MESS: (the start of the
+# operating system and the overlays loaded), appear only when the payload's
+# config.txt sets uart_2ndstage=1.
+[console]
+baud = 115200
+data_bits = 8
+parity = "none"
+stop_bits = 1
+sources = ["bootloader", "config-boot"]
+
+# The payload is published while the board is off, the console is opened
+# before the supply is switched on, and the supply is switched on last. The
+# off interval of 5000 ms is a chosen interval, counted from the confirmation
+# that the supply is off; no official document gives it, and it is not a
+# measured discharge time of the supply rails.
+[cold_boot]
+order = ["publish", "wait_off_interval", "open_console", "power_on"]
+off_interval_ms = 5000
+
+[[markers]]
+name = "bootsys"
+line = '^ *[0-9]+\.[0-9]+ RPi: BOOTSYS release '
+example = '  1.08 RPi: BOOTSYS release VERSION:1accd665 DATE: 2026/09/25 TIME: 15:59:09'
+
+[[markers]]
+name = "bootloader"
+line = '^ *[0-9]+\.[0-9]+ RPi: BOOTLOADER release '
+example = '  4.37 RPi: BOOTLOADER release VERSION:1accd665 DATE: 2026/09/25 TIME: 15:59:09'
+
+[[markers]]
+name = "recovery"
+line = '^ *[0-9]+\.[0-9]+ RPi: RECOVERY release '
+example = '  1.49 RPi: RECOVERY release VERSION:1accd665 DATE: 2026/09/25 TIME: 15:59:09'
+
+[[markers]]
+name = "network_boot"
+line = '^ *[0-9]+\.[0-9]+ Boot mode: NETWORK \(02\) order [0-9a-f]+$'
+example = '  4.94 Boot mode: NETWORK (02) order f1'
+
+[[markers]]
+name = "sd_boot"
+line = '^ *[0-9]+\.[0-9]+ Boot mode: SD \(01\) order [0-9a-f]+$'
+example = ' 76.99 Boot mode: SD (01) order f'
+
+# The firmware can retry after TFTP timeouts and still boot.
+[[markers]]
+name = "tftp_timeout"
+line = '^ *[0-9]+\.[0-9]+ TFTP: disconnect: timeouts [0-9]+$'
+example = ' 46.63 TFTP: disconnect: timeouts 14'
+
+# Needs uart_2ndstage=1 in the payload's config.txt.
+[[markers]]
+name = "os_start"
+line = '^ *[0-9]+\.[0-9]+ MESS:[0-9:.]+: Starting OS [0-9]+ ms$'
+example = ' 26.96 MESS:00:00:26.964387:0: Starting OS 26964 ms'
+
+[[markers]]
+name = "eeprom_write"
+line = '^ *[0-9]+\.[0-9]+ Writing EEPROM$'
+example = '  5.64 Writing EEPROM'
+
+[[markers]]
+name = "eeprom_updated"
+line = '^ *[0-9]+\.[0-9]+ BOOT-EEPROM: UPDATED$'
+example = ' 16.45 BOOT-EEPROM: UPDATED'
+
+# The boot mode the bootloader tries, with its code in BOOT_ORDER: 2 is a
+# network boot and 1 the SD card.
+[boot_mode]
+line = '^ *[0-9]+\.[0-9]+ Boot mode: (?P<mode>[A-Z0-9-]+) \((?P<code>[0-9a-f]{2})\) order [0-9a-f]+$'
+example = ['  4.94 Boot mode: NETWORK (02) order f1', ' 76.99 Boot mode: SD (01) order f']
+network = "NETWORK"
+network_marker = "network_boot"
+sources = ["bootloader"]
+
+# Lines of a network boot. A path read over TFTP starts with the path prefix
+# of the instance configuration, here bench/, and can hold a doubled /. A
+# failed read after TFTP timeouts can name a path without the prefix.
+[tftp]
+servers = [
+  { line = '^ *[0-9]+\.[0-9]+ NETWORK: [0-9a-f:]{17} wait for link TFTP: (?P<server>[0-9.]+)$', example = '  5.51 NETWORK: 00:00:5e:00:53:a1 wait for link TFTP: 192.0.2.50' },
+  { line = '^ *[0-9]+\.[0-9]+ NET [0-9.]+ [0-9.]+ gw [0-9.]+ tftp (?P<server>[0-9.]+)$', example = '  7.97 NET 192.0.2.60 255.255.255.0 gw 0.0.0.0 tftp 192.0.2.50' },
+  { line = '^ *[0-9]+\.[0-9]+ TFTP_GET: [0-9a-f:]{17} (?P<server>[0-9.]+) [^ ]+$', example = ' 16.75 TFTP_GET: 00:00:5e:00:53:a2 192.0.2.50 bench/config.txt' },
+]
+read = { line = '^ *[0-9]+\.[0-9]+ Read (?P<path>[^ ]+) bytes +(?P<bytes>[0-9]+) hnd 0x[0-9a-f]+$', example = [' 16.03 Read bench/config.txt bytes      246 hnd 0x0', ' 18.14 Read bench//overlays/bcm2712d0.dtbo bytes     1363 hnd 0x0'] }
+read_failed = { line = '^ *[0-9]+\.[0-9]+ Read (?P<path>[^ ]+) failed$', example = [' 16.97 Read bench/pieeprom.upd failed', ' 76.65 Read config.txt failed'] }
+
+# The release of the bootloader in the EEPROM. Its date names the release in
+# the release notes and in the list of firmware versions.
+[[firmware_versions]]
+name = "bootloader"
+line = '^ *[0-9]+\.[0-9]+ RPi: BOOTLOADER release VERSION:(?P<hash>[0-9a-f]+) DATE: (?P<date>[0-9]{4}/[0-9]{2}/[0-9]{2}) TIME: (?P<time>[0-9]{2}:[0-9]{2}:[0-9]{2})$'
+example = '  4.37 RPi: BOOTLOADER release VERSION:1accd665 DATE: 2026/09/25 TIME: 15:59:09'
+sources = ["release-notes", "versions"]
+
+[[firmware_versions]]
+name = "bootsys"
+line = '^ *[0-9]+\.[0-9]+ RPi: BOOTSYS release VERSION:(?P<hash>[0-9a-f]+) DATE: (?P<date>[0-9]{4}/[0-9]{2}/[0-9]{2}) TIME: (?P<time>[0-9]{2}:[0-9]{2}:[0-9]{2})$'
+example = '  1.08 RPi: BOOTSYS release VERSION:1accd665 DATE: 2026/09/25 TIME: 15:59:09'
+
+# The manufacturing version of the bootloader image that is read, not that of
+# the board.
+[[firmware_versions]]
+name = "bootloader_image_mfg"
+line = '^ *[0-9]+\.[0-9]+ MFG_VER: (?P<value>[0-9]+)$'
+example = '  4.37 MFG_VER: 2'
+sources = ["eeprom-update", "release-notes"]
+
+[[firmware_versions]]
+name = "bl31"
+line = '^NOTICE:  BL31: (?P<version>v[^ ]+)$'
+example = 'NOTICE:  BL31: v2.6(release):v2.6-241-g36761b276'
+
+[[firmware_versions]]
+name = "bl31_built"
+line = '^NOTICE:  BL31: Built : (?P<built>.+)$'
+example = 'NOTICE:  BL31: Built : 23:45:12, Sep 11 2026'
+
+# Identity fields. A firmware_log read gives the group `value` of its line; a
+# firmware_log_presence read gives its value when the line appears and leaves
+# the field unknown when it does not; visual and software reads say how a
+# person reads the value for the identity record.
+
+[identity.revision_code]
+read = [
+  { from = "firmware_log", line = '^ *[0-9]+\.[0-9]+ BOOTMODE: 0x[0-9a-f]+ .* boardrev (?P<value>[0-9a-f]{6}) stc [0-9]+$', example = '  4.37 BOOTMODE: 0x06 partition 0 build-ts BUILD_TIMESTAMP=1790351949 serial fedc9876 boardrev d04171 stc 4378801', sources = ["revision-codes"] },
+  { from = "software", how = "The Revision line of /proc/cpuinfo on a running Linux system", sources = ["revision-codes"] },
+]
+
+# Written as the PCB revision number alone, such as 4 or 7.
+[identity.pcb_version]
+read = [
+  { from = "visual", how = "Compare the board with the identification of the PCB revision change notices: revision 4 has an extra link option in the memory box silkscreen and six similar components above the PMIC; revision 7 is shown in its notice's comparison images", sources = ["pcn-22", "pcn-65"] },
+  { from = "software", how = "The revision field of the revision code: revision 1.1 is PCB revision 4; on PCB revision 7, /proc/cpuinfo reports the model as Raspberry Pi 5 Model B+ Rev 1.7, a revision the cited revision code table does not list", sources = ["revision-codes", "pcn-22", "pcn-65"] },
+]
+
+# D0 when the bcm2712d0 overlay is loaded, which the downstream device tree
+# does on D0 devices; its absence leaves the stepping unknown, never C1.
+# Needs uart_2ndstage=1 in the payload's config.txt.
+[identity.soc_stepping]
+read = [
+  { from = "firmware_log_presence", line = '''^ *[0-9]+\.[0-9]+ MESS:[0-9:.]+: Loaded overlay 'bcm2712d0'$''', value = "D0", example = ''' 18.33 MESS:00:00:18.331117:0: Loaded overlay 'bcm2712d0'''', sources = ["release-notes", "overlays-readme"] },
+  { from = "visual", how = "The final characters of the marking on the BCM2712 package, which contain D0 on a D0 device", sources = ["pcn-22"] },
+]
+
+[identity.memory]
+read = [
+  { from = "visual", how = "The manufacturer and the part number printed on the memory package", sources = ["pcn-46"] },
+]
+
+[identity.ethernet_phy]
+read = [
+  { from = "visual", how = "The part number on the Ethernet PHY package; PCB revision 7 uses the MaxLinear MXL86110 in place of the Broadcom BCM54213", sources = ["pcn-65"] },
+]
+
+# The JEDEC identifier names a manufacturer and a device type, not a part
+# number; no official document describes this line.
+[identity.spi_flash]
+read = [
+  { from = "firmware_log", part = "jedec_id", line = '^ *[0-9]+\.[0-9]+ EEPROM ID 0x(?P<value>[0-9a-f]+)$', example = '  1.11 EEPROM ID 0xef4015' },
+  { from = "visual", part = "part", how = "The change notice of the alternative SPI flash parts says that the new product cannot be distinguished by visual inspection; write unknown unless the marking on the package names the part", sources = ["pcn-53"] },
+]
+
+# The release date of the bootloader, written YYYY/MM/DD.
+[identity.eeprom_version]
+read = [
+  { from = "firmware_version", name = "bootloader", group = "date", sources = ["release-notes", "versions"] },
+]
+
+# The board's manufacturing version, the quantity rpi-min-boot-ver reports.
+# The bootloader prints this line only when it evaluates an update file, so
+# in a plain network boot the value is usually unknown.
+[identity.manufacturing_version]
+read = [
+  { from = "firmware_log", line = '^ *[0-9]+\.[0-9]+ MFG ver device (?P<value>[0-9]+) image [0-9]+ *$', example = ['  2.92 MFG ver device 1 image 2', ' 77.23 MFG ver device 1 image 2 '], sources = ["eeprom-update", "release-notes"] },
+]
+
+[identity.min_boot_version]
+read = [
+  { from = "software", how = "Read /proc/device-tree/chosen/rpi-min-boot-ver on a running Linux system, a big-endian 32-bit integer; write unknown when the file is absent or holds 0", sources = ["eeprom-update", "release-notes"] },
+]
+
+# The device tree files of the variants below that the board reads; the
+# payload's own overlays are not part of the identity.
+[identity.boot_files]
+read = [
+  { from = "tftp_reads", files = ["bcm2712-rpi-5-b.dtb", "overlays/bcm2712d0.dtbo"] },
+]
+
+# The device tree files the firmware requests on a board of each stepping.
+# They assume the defaults of upstream_kernel, os_prefix, overlay_prefix and
+# device_tree: a config.txt that sets one of them makes the firmware request
+# other files.
+#
+# No official sentence says that the firmware requests this file on a C1
+# board: the release notes name the 2712C1 stepping and this file as the
+# device tree of the Raspberry Pi 5, and the overlay README calls the stepping
+# before D0 C0.
+[[variants]]
+field = "soc_stepping"
+value = "C1"
+payload = ["bcm2712-rpi-5-b.dtb"]
+sources = ["release-notes", "overlays-readme"]
+
+# The downstream device tree loads the bcm2712d0 overlay on D0 devices. No
+# official document says that the firmware requests bcm2712d0-rpi-5-b.dtb;
+# with upstream_kernel=1 the firmware uses bcm2712-d-rpi-5-b instead.
+[[variants]]
+field = "soc_stepping"
+value = "D0"
+payload = ["bcm2712-rpi-5-b.dtb", "overlays/bcm2712d0.dtbo"]
+sources = ["release-notes", "overlays-readme"]
+
+# The earliest bootloader release a board needs is the latest of the dates
+# below that apply to it. A board's rpi-min-boot-ver is the manufacturing
+# version written when it was made; the board needs the earliest release
+# whose own manufacturing version is at least that number. `releases` lists
+# the earliest release of each manufacturing version.
+[min_bootloader]
+sources = ["eeprom-update", "versions", "release-notes"]
+releases = [
+  { version = 1, date = "2026/05/11" },
+  { version = 2, date = "2026/09/23" },
+  { version = 3, date = "2026/10/23" },
+]
+
+# The notice says "from March 2024 onwards".
+[[min_bootloader.bounds]]
+field = "pcb_version"
+any_of = ["4"]
+at_least = "2024/03/01"
+source = "pcn-22"
+
+[[min_bootloader.bounds]]
+field = "pcb_version"
+any_of = ["7"]
+at_least = "2026/09/25"
+source = "pcn-65"
+
+# Release 5 of the notice gives this date for every part it lists.
+[[min_bootloader.bounds]]
+field = "memory.part"
+any_of = [
+  "RS1G32LV4D2BDS-46BT", "W66DP2RQQAHJ",
+  "RS2G32LV4D4BDT-46BT",
+  "CXDB5CBAM-MA-B", "CXDB6CCBM-MA-A",
+  "RS1G32LR4D2BNR-46BT", "FLXC2002G-N2", "FLXC2004G-N1", "KAL4M13DCAXF-C00",
+  "TEL4XCD32ACY-32G", "TEL4XMA32ACX-32G", "TEL4XCD32ACY-64G", "TEL4XMB32ACX-16G",
+  "RS256M32LS4D4BNR-53BT", "RS2G32LR4D4BNR-46BT",
+]
+at_least = "2026/09/25"
+source = "pcn-46"
+
+# The first bootloader release on or after this date is that of 2026/05/11.
+[[min_bootloader.bounds]]
+field = "spi_flash.part"
+any_of = ["W25Q16RVXHJQ", "GD25Q16EEIGR", "PY25Q16HB-UXH-IR"]
+at_least = "2026/05/05"
+source = "pcn-53"
+
+# Files whose presence lets the firmware write the boot EEPROM.
+[[write_triggers]]
+class = "eeprom"
+files = ["pieeprom.upd", "pieeprom.sig", "pieeprom.bin", "recovery.bin"]
+source = "boot-eeprom"
+
+# Settings that program one-time-programmable memory, lock the boot EEPROM
+# against writes, or let the bootloader accept an image older than the board.
+# No payload file may contain one, whatever a run plan enables. The include
+# directive of config.txt can name a file of any name, so every payload file
+# is read.
+[refused_properties]
+files = '.'
+example = ["config.txt", "EXTRA.TXT", "extra.cfg", "overlays/x.dtbo"]
+properties = [
+  { name = "program_pubkey", source = "config-boot" },
+  { name = "revoke_devkey", source = "config-boot" },
+  { name = "program_rpiboot_gpio", source = "config-boot" },
+  { name = "program_jtag_lock", source = "config-boot" },
+  { name = "eeprom_write_protect", source = "config-boot" },
+  { name = "program_arb", source = "release-notes" },
+  { name = "bootloader_allow_mfg_downgrade", source = "release-notes" },
+  { name = "disable_sd_emmc_boot", source = "release-notes" },
+  # Documented for the Raspberry Pi 3, where it programs OTP memory.
+  { name = "program_usb_boot_mode", source = "boot-usb" },
+  { name = "program_usb_boot_timeout", source = "boot-usb" },
+]
+
+# Lines that hold the board's serial number, MAC addresses, IP addresses and
+# the SD card identifier. The bytes of each named group are replaced in a
+# public receipt. These forms cover static addressing.
+[[sensitive]]
+name = "board-serial"
+line = '^ *[0-9]+\.[0-9]+ BOOTMODE: .* serial (?P<serial>[0-9a-f]+) boardrev '
+example = '  4.37 BOOTMODE: 0x06 partition 0 build-ts BUILD_TIMESTAMP=1790351949 serial fedc9876 boardrev d04171 stc 4378801'
+
+[[sensitive]]
+name = "network-link"
+line = '^ *[0-9]+\.[0-9]+ NETWORK: (?P<mac>[0-9a-f]{2}(?::[0-9a-f]{2}){5}) wait for link TFTP: (?P<server>[0-9.]+)$'
+example = '  5.51 NETWORK: 00:00:5e:00:53:a1 wait for link TFTP: 192.0.2.50'
+
+[[sensitive]]
+name = "network-addresses"
+line = '^ *[0-9]+\.[0-9]+ NET (?P<client>[0-9.]+) [0-9.]+ gw (?P<gateway>[0-9.]+) tftp (?P<server>[0-9.]+)$'
+example = '  7.97 NET 192.0.2.60 255.255.255.0 gw 192.0.2.70 tftp 192.0.2.50'
+
+[[sensitive]]
+name = "arp"
+line = '^ *[0-9]+\.[0-9]+ ARP (?P<address>[0-9.]+) (?P<mac>[0-9a-f]{2}(?::[0-9a-f]{2}){5})$'
+example = ' 16.18 ARP 192.0.2.50 00:00:5e:00:53:a2'
+
+[[sensitive]]
+name = "tftp-request"
+line = '^ *[0-9]+\.[0-9]+ TFTP_GET: (?P<mac>[0-9a-f]{2}(?::[0-9a-f]{2}){5}) (?P<server>[0-9.]+) '
+example = ' 16.75 TFTP_GET: 00:00:5e:00:53:a2 192.0.2.50 bench/config.txt'
+
+[[sensitive]]
+name = "sd-card-id"
+line = '^CID: (?P<cid>[0-9a-f]{32})$'
+example = 'CID: 00112233445566778899aabbccddeeff'
+
+# 0.0.0.0 stands for no address, such as a gateway the network does not have.
+[deidentify]
+never = ["0.0.0.0"]

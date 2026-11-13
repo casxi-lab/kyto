@@ -2,20 +2,23 @@
 
 This page describes the documents that the kyto bench tool in
 [`tools/`](../../tools) reads: [board descriptions](#board-descriptions),
-[identity records](#identity-records) and
-[instance configurations](#instance-configurations), together with the
+[identity records](#identity-records),
+[instance configurations](#instance-configurations) and
+[run plans](#run-plans), together with the
 [rules common to them](#common-rules). The library of the tool,
-`kyto-bench-core`, reads and checks each of them. The `kyto-bench` command
-has no subcommand yet, so no command reads a document yet. The tests of the
-tool read the Raspberry Pi 5 description, the identity record template and
-example documents, and run from the repository root with:
+`kyto-bench-core`, reads and checks each of them, checks payloads and reads
+what a cold boot shows. The `kyto-bench` command has
+no subcommand yet, so no command reads a document or runs a plan yet. The
+tests of the tool read the Raspberry Pi 5 description, the identity record
+template, the example run plan and example documents, and run from the
+repository root with:
 
 ```sh
 cargo test --locked --manifest-path tools/Cargo.toml
 ```
 
-Run plans, receipts and the public versions of receipts are not defined yet;
-the tool has no format for them.
+Receipts and the public versions of receipts are not defined yet; the tool
+has no format for them.
 
 ## Common rules
 
@@ -204,8 +207,10 @@ has at least one way of reading it.
 | `software` | `how`, a line of text | Software running on the board, as `how` says | Text and number fields |
 
 The ways that read the firmware log, a firmware version or the TFTP reads
-describe what a cold boot shows; `visual` and `software` tell the person who
-fills in an identity record how to read the value.
+describe what a cold boot shows, as [a cold boot is read](#how-a-cold-boot-is-read):
+`tftp_reads` gives the boot files, each with the SHA-256 that the payload of
+the run plan entry gives for a file of that name. `visual` and `software` tell
+the person who fills in an identity record how to read the value.
 
 ### Variants
 
@@ -266,10 +271,10 @@ delivery device of the tool checks every payload file against the write
 triggers before it writes anything: a trigger is staged only with a permit of
 its class, and only the write gate of a run plan entry that enables the class
 gives one; only the tool itself builds a write gate. Every class is off
-unless an entry enables it; run plans are not defined yet, so nothing
-enables a write. An entry's enable is needed for a write, but it does not
-authorize one: whoever runs a plan that enables a write decides that outside
-the tool.
+unless a [run plan](#run-plans) entry enables it in `[entries.writes]`; no
+command runs a plan yet, so nothing enables a write. An entry's enable is
+needed for a write, but it does not authorize one: whoever runs a plan that
+enables a write decides that outside the tool.
 
 `[refused_properties]` lists settings that no payload file may contain,
 whatever writes are enabled: `files`, a line pattern over payload names that
@@ -500,7 +505,7 @@ to = "board debug UART"
 | `[confirmation]` | yes | How readings of the supply confirm that it is on or off, in micro-units of `quantity`, `"supply_voltage"` (microvolts) or `"supply_current"` (microamperes): `on_at_least_micro`, a reading at or above which the supply is on; `off_at_most_micro`, below the on threshold, a reading at or below which it is off; `consecutive`, the number of readings in a row that confirm a state, 1 to 1000; `poll_ms`, the interval between readings, 1 ms to one minute; `on_timeout_ms` and `off_timeout_ms`, the longest waits for each confirmation, 1 ms to one hour. The thresholds are integers and can be negative |
 | `[console]` | yes | `ready_timeout_ms`, how long the console may take to be ready, 1 ms to one hour |
 | `[identity]` | yes | The [identity record](#identity-records) of the board on the bench; its `board` is the `board` of the configuration |
-| `[[pins]]` | no | Sets of payload digests that the bench pins, each with `name`, a name, and `files`, at least one `{ name, sha256 }` of a payload name and its SHA-256; the names of one set keep the rule for the names in one list of [payload names](#common-rules) |
+| `[[pins]]` | no | Sets of payload digests that the bench pins, each with `name`, a name, and `files`, at least one `{ name, sha256 }` of a payload name and its SHA-256; the names of one set keep the rule for the names in one list of [payload names](#common-rules). A run plan entry takes its payload from a set by its name |
 | `[devices]` | yes | The [devices of the bench and their connections](#devices) |
 | `[local]` | no | This machine's [settings of each device](#local-settings) |
 
@@ -577,3 +582,187 @@ A configuration is checked with the board description that its `board`
 names: the `id` of the description equals `board`, and the identity record
 passes the [checks of an identity record](#identity-records) against the
 description.
+
+## Run plans
+
+A run plan says what a run boots and what each cold boot must show: the
+payload of each entry, with the SHA-256 of every file; how many times it is
+booted and when a cold boot ends; the lines that must and must not appear;
+the bytes sent to the board and the lines that must answer them; the
+firmware versions, values and segments of the transcript; and the writes
+that the entry enables. Whoever writes a plan keeps it with the record it is
+for. A plan holds no value of a bench, such as an address, a path prefix or a
+relay channel, not even in a comment. The library reads and checks plans and
+reads cold boots as their entries say; no command runs a plan yet.
+
+[`tools/examples/run-plan.toml`](../../tools/examples/run-plan.toml) is an
+example for the Raspberry Pi 5 with two entries. Their payloads are the small
+stand-in files under `tools/examples/payload/`, from which no board boots,
+and the digests of the plan are theirs. Its second entry, with the digests
+shortened here:
+
+```toml
+[[entries]]
+name = "echo"
+payload_dir = "echo"
+payload = [
+  { name = "config.txt", sha256 = "950cbaa5..." },
+  { name = "bcm2712-rpi-5-b.dtb", sha256 = "ac448652..." },
+  { name = "overlays/bcm2712d0.dtbo", sha256 = "f7fbb469..." },
+  { name = "kernel.img", sha256 = "854a0536..." },
+]
+cold_boots = 1
+boot_timeout_ms = 60000
+end = { marker = "ready" }
+markers = [{ name = "ready", line = '^READY$' }]
+expect = [{ marker = "ready", count = 1 }]
+forbid = [{ line = '^PANIC' }]
+before_first_send = ["board.network_boot", "ready"]
+steps = [{ after = "ready", send = "?\r", expect = '^STATS seq=1', timeout_ms = 1000 }]
+values = [{ field = "build", line = '^BUILD id=(?P<value>[0-9a-f]{40})$' }]
+segments = [{ name = "banner", from = "board.os_start", to = "ready", sha256 = "498b39e6..." }]
+```
+
+| Key | Required | Content |
+| --- | --- | --- |
+| `format`, `format_version` | yes | `"kyto-bench run plan"`, `1` |
+| `board` | yes | The `id` of the board description |
+| `reference` | no | A [reference](#references) for the plan |
+| `[[entries]]` | yes | 1 to 100 entries, run in order, each with a name that no other entry has |
+
+Each entry has these keys:
+
+| Key | Required | Content |
+| --- | --- | --- |
+| `name` | yes | A name |
+| `reference` | no | A [reference](#references) for the entry |
+| `payload_dir` | yes | The directory that holds the source files of the payload, below the payload root that a run is given: a relative path in the form of a payload name |
+| `payload` or `payload_pin` | one of the two | `payload`, the payload files, at least one `{ name, sha256 }` of a payload name and its SHA-256, whose names keep the rule for the names in one list; or `payload_pin`, the name of a pinned set of the [instance configuration](#instance-configurations), whose files are the payload |
+| `cold_boots` | yes | 1 to 100 |
+| `boot_timeout_ms` | yes | The longest cold boot, counted from the power-on command, 1 ms to one hour |
+| `end` | yes | When a cold boot [ends](#steps-and-the-end-of-a-cold-boot): `{ marker = "<marker>" }` or `"timeout"` |
+| `max_capture_bytes` | no | The most bytes a cold boot captures, 1 to 16777216; 4194304 when not given |
+| `[entries.firmware.<name>]` | no | The expected values of groups of the board's firmware version line `name`, as `<group> = "<value>"`, each value a line of text |
+| `markers` | no | The entry's [markers](#markers-of-an-entry), each `{ name, line }` |
+| `expect` | no | How often a marker appears: `{ marker, count }`, or `{ marker, min, max }` with `min`, `max` or both, `min` not above `max` |
+| `order` | no | Each `{ markers = [...] }`, at least two distinct markers whose first occurrences appear in this order |
+| `forbid` | no | Each `{ line, from, to }`: a line pattern that no line may match strictly between the first occurrences of the optional markers `from` and `to`; an end left out is the start or the end of the capture |
+| `before_first_send` | no | Markers whose lines end before the first byte sent; only in an entry with steps |
+| `steps` or `sends = false` | one of the two | `steps`, the [steps](#steps-and-the-end-of-a-cold-boot), each `{ after, send, expect, timeout_ms }`; or `sends = false`, for an entry that sends nothing |
+| `values` | no | Named values, each `{ field, line }`: `field`, a name that no other value of the entry has, and `line`, a line pattern with the group `value` |
+| `segments` | no | Each `{ name, from, to, sha256 }`: a name that no other segment of the entry has, two markers and the SHA-256 of the bytes between their lines |
+| `[entries.writes]` | no | `firmware`, `eeprom` and `storage`, each `false` unless written `true`: the [classes of writes](#write-triggers-and-refused-properties) that the entry enables |
+
+Every list of an entry has at most 100 items. `line` and `expect` are
+[line patterns](#line-patterns); they need no example.
+
+### References
+
+The `reference` of a plan or an entry is text supplied by whoever wrote the
+plan, such as the record the plan is for. The tool does not interpret it and
+keeps it as written. It is at most 1024 bytes and has no C0 control character
+(U+0000 to U+001F) and no DEL (U+007F).
+
+### Markers of an entry
+
+An entry's markers have distinct names. An entry refers to one of its own
+markers by its name and to a marker of the board description as
+`board.<name>`, such as `board.network_boot`. Every marker that `end`,
+`expect`, `order`, `forbid`, `before_first_send`, `steps` and `segments`
+name exists. One line can be a line of several markers.
+
+### Steps and the end of a cold boot
+
+A step sends `send`, a TOML string of 1 to 4096 bytes, as its UTF-8 bytes,
+and expects a line that matches `expect` within `timeout_ms`, 1 ms to one
+hour, of the send. Steps run in order:
+
+- the first step is armed by the first line of its `after` marker, and each
+  later step by the first line of its `after` marker that is read after the
+  response of the step before it, which can be that response itself;
+- an armed step is sent once the chunk that holds its trigger line has been
+  read;
+- its response is the first line that starts after the last byte received
+  before the send and matches `expect`; it must be complete within
+  `timeout_ms` of the send.
+
+`end = { marker = "<marker>" }` ends a cold boot once the marker has appeared
+and every step has its response. `end = "timeout"` captures until the boot
+timeout.
+
+### Checks of a run plan
+
+A plan is checked on its own when it is read. It is then checked with the
+board description that its `board` names and with the pinned sets of the
+instance configuration:
+
+- `board` is the `id` of the description;
+- every `board.<name>` marker is a marker of the description;
+- every `[entries.firmware.<name>]` names a firmware version line of the
+  description, and gives values only of groups that its line has;
+- every `payload_pin` names a pinned set of the instance configuration.
+
+### Payload checks
+
+These checks of an entry's payload come before the board is powered, and a
+payload that fails one refuses the run, under the name of its rule:
+
+- `payload.source_digest`: the SHA-256 of every source file equals that of
+  the payload;
+- `payload.staged_digest`: the SHA-256 of every file of the staged copy, read
+  back from where the board will read it, equals that of the payload;
+- `write.not_enabled`: no payload file is a
+  [write trigger](#write-triggers-and-refused-properties) of a class that the
+  entry does not enable;
+- `write.refused_property`: no payload file sets a refused property, whatever
+  the entry enables;
+- `payload.variant_missing`: the payload has every file of the
+  [variant](#variants) whose value the identity record gives for the
+  variant's field, ignoring ASCII case, and every file of every variant of a
+  field whose value is unknown; names are compared ignoring ASCII case.
+
+Once the board is served the entry's payload, `payload.served_digest`
+compares the SHA-256 of every file of the copy that the board is served, read
+through the served generation, with that of the payload, one check for each
+file; a file that differs is a fault of the bench.
+
+### How a cold boot is read
+
+The library reads the transcript of a cold boot in [lines](#lines), with the
+line patterns of the board description and of the entry. It reads a
+transcript the same way while it is received and when a record of it is read
+back, with each send placed after the bytes received before it; the
+unterminated last line of a capture is read when the capture ends. A line is
+named by its offset. From the lines, in order, it takes:
+
+- **Boot modes.** A line of the `[boot_mode]` form gives the mode that the
+  firmware tries. A network span runs from a boot mode line of the network
+  mode to the next boot mode line or the end of the capture.
+- **Markers.** Every line of a marker is an occurrence of it, with the time
+  of the line.
+- **TFTP transfers**, inside network spans only. A line of a server form
+  names a server, which is compared with the server address of the instance
+  configuration. A line of the `read` form is a file read in full; its path
+  gives its payload name after the path prefix, as
+  [firmware lines](#firmware-lines) describe, and a path outside the prefix
+  or one that gives no payload name names no payload file. Failed reads are
+  not reads.
+- **Firmware versions.** Every line of a firmware version gives the values of
+  its named groups.
+- **Identity values.** Every line that a `firmware_log`,
+  `firmware_log_presence` or `firmware_version` way of reading matches gives
+  a value of its field or part. When several lines give values of one field
+  or part, they agree only when they give the same value; every distinct
+  value is kept, so a disagreement shows.
+- **Boot files.** The `tftp_reads` ways of reading give the boot files: each
+  file of their `files` that the board read in full, compared ignoring ASCII
+  case, once, in the order of its first read, with the SHA-256 that the
+  entry's payload gives for the file of that name, ignoring ASCII case, or
+  none when the payload has no such file.
+- **Named values.** Every line of a `values` pattern gives the group `value`;
+  several lines agree as identity values do.
+- **Segments.** The SHA-256 of the bytes after the LF of the first line of
+  `from` up to the first byte of the first line of `to` that starts after
+  it, CR and LF bytes included; none when either line is missing.
+- **Steps.** The line that armed each step, the send and the response, as
+  [steps](#steps-and-the-end-of-a-cold-boot) describe.

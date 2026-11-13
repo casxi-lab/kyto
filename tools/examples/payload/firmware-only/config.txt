@@ -1,0 +1,2 @@
+# A stand-in for the example run plan; no board boots from it.
+uart_2ndstage=1

@@ -2,12 +2,12 @@
 
 use std::fmt;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 
 /// A SHA-256 digest, written as 64 lowercase hexadecimal digits. Digests are
 /// compared in this form.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String")]
 pub struct Sha256(String);
 

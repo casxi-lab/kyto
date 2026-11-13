@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// The name of a payload file inside a generation: a relative path of one or
 /// more segments separated by `/`. A segment is made of ASCII letters,
@@ -15,7 +15,7 @@ use serde::Deserialize;
 /// a directory of the same name, so the names of one payload must differ
 /// ignoring ASCII case and none may name a directory of another
 /// ([`check_distinct`]).
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String")]
 pub struct PayloadName(String);
 

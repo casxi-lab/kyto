@@ -1,0 +1,57 @@
+# An example run plan for the Raspberry Pi 5, with two entries. The payload
+# files under payload/ are small stand-ins from which no board boots; the
+# digests below are theirs. A plan holds no value of a bench, not even in a
+# comment: receipts record its text verbatim.
+format = "kyto-bench run plan"
+format_version = 1
+board = "raspberry-pi-5"
+reference = "example"
+
+# Three cold boots that boot from the network, show the expected firmware
+# versions and start the payload, which is sent nothing.
+[[entries]]
+name = "firmware-only"
+payload_dir = "firmware-only"
+payload = [
+  { name = "config.txt", sha256 = "950cbaa591e9064fff306370a33222dcb8887049caf5ec76bce9ac81d3f29136" },
+  { name = "bcm2712-rpi-5-b.dtb", sha256 = "ac44865282f3ffe541775e0fcbfa2f36375e0f97f953f3e37a039583c01d0b0e" },
+  { name = "overlays/bcm2712d0.dtbo", sha256 = "f7fbb4699eb8d708e3f0b98c8e5a2c57679dd6a44ea355c8af0c6804706d9902" },
+  { name = "kernel.img", sha256 = "7a4b18efd2c0283b922acb12a3a7faf0d3ff8ba0c803a7d0c7669c09e21e920b" },
+]
+cold_boots = 3
+boot_timeout_ms = 60000
+end = { marker = "started" }
+sends = false
+markers = [{ name = "started", line = '^example kernel started$' }]
+expect = [{ marker = "board.network_boot", count = 1 }, { marker = "board.sd_boot", count = 0 }]
+order = [{ markers = ["board.bootloader", "board.network_boot", "board.os_start", "started"] }]
+
+[entries.firmware.bootloader]
+hash = "1accd665"
+date = "2026/09/25"
+
+[entries.firmware.bl31]
+version = "v2.6(release):v2.6-241-g36761b276"
+
+# One cold boot of another kernel that answers a request once it is ready.
+# The segment covers the lines between the start of the operating system and
+# READY; the named value is the payload's build id.
+[[entries]]
+name = "echo"
+payload_dir = "echo"
+payload = [
+  { name = "config.txt", sha256 = "950cbaa591e9064fff306370a33222dcb8887049caf5ec76bce9ac81d3f29136" },
+  { name = "bcm2712-rpi-5-b.dtb", sha256 = "ac44865282f3ffe541775e0fcbfa2f36375e0f97f953f3e37a039583c01d0b0e" },
+  { name = "overlays/bcm2712d0.dtbo", sha256 = "f7fbb4699eb8d708e3f0b98c8e5a2c57679dd6a44ea355c8af0c6804706d9902" },
+  { name = "kernel.img", sha256 = "854a05365ca392c93250b69848a50e17eb7f4f847f581f1e6d56c6a620b4306e" },
+]
+cold_boots = 1
+boot_timeout_ms = 60000
+end = { marker = "ready" }
+markers = [{ name = "ready", line = '^READY$' }]
+expect = [{ marker = "ready", count = 1 }]
+forbid = [{ line = '^PANIC' }]
+before_first_send = ["board.network_boot", "ready"]
+steps = [{ after = "ready", send = "?\r", expect = '^STATS seq=1', timeout_ms = 1000 }]
+values = [{ field = "build", line = '^BUILD id=(?P<value>[0-9a-f]{40})$' }]
+segments = [{ name = "banner", from = "board.os_start", to = "ready", sha256 = "498b39e65032d7680b7f9bd1ea46e620643f844930b2e22baea1dc3eec655188" }]

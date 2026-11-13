@@ -14,12 +14,15 @@ use std::fmt;
 use std::ops::Range;
 
 use regex::bytes::{Regex, RegexBuilder};
+use serde::Deserialize;
 
 /// The largest compiled size of a pattern, in bytes.
 pub const SIZE_LIMIT: usize = 1 << 20;
 
-/// A compiled line pattern with its source text.
-#[derive(Clone, Debug)]
+/// A compiled line pattern with its source text, read from a document as a
+/// string.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(try_from = "String")]
 pub struct LinePattern {
     source: String,
     regex: Regex,
@@ -141,6 +144,14 @@ impl LinePattern {
                 example: example.to_string(),
             })
         }
+    }
+}
+
+impl TryFrom<String> for LinePattern {
+    type Error = PatternError;
+
+    fn try_from(source: String) -> Result<Self, PatternError> {
+        Self::new(&source)
     }
 }
 

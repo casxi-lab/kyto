@@ -19,7 +19,8 @@ use crate::run;
 pub const PASS: u8 = 0;
 /// The exit status of a run that failed.
 pub const FAIL: u8 = 1;
-/// The exit status of a usage or input error; no receipt was written.
+/// The exit status of a usage or input error, when no receipt was written,
+/// and of a run whose receipt or public version could not be written.
 pub const INPUT_ERROR: u8 = 2;
 /// The exit status of a run that a fault of the bench ended.
 pub const BENCH_FAULT: u8 = 3;
@@ -32,8 +33,8 @@ pub const REFUSED: u8 = 4;
 pub const PUBLIC_REFUSED: u8 = 5;
 
 const EXIT_STATUS: &str = "Exit status: 0 PASS, 1 FAIL, 2 usage or input error (no receipt), \
-3 BENCH FAULT, 4 refused before any power command (receipt written), \
-5 public version refused (receipt written).";
+or an output file that cannot be written (the error gives the result), 3 BENCH FAULT, \
+4 refused before any power command (receipt written), 5 public version refused (receipt written).";
 
 /// The command line.
 pub fn command() -> Command {
@@ -106,13 +107,14 @@ fn run_plan(args: &ArgMatches, env: &dyn Env) -> Result<u8, String> {
     )?;
     output::create(out)?;
     let receipt = run::run(env, &inputs).inspect_err(|_| output::remove_empty(out))?;
-    let leaks = output::write(out, &receipt, &inputs.instance.deidentify_values())?;
     let (status, result) = match (&receipt.refusal, receipt.verdict) {
         (Some(refusal), _) => (REFUSED, format!("refused by {}", refusal.rule)),
         (None, Some(Verdict::Pass)) => (PASS, "PASS".into()),
         (None, Some(Verdict::Fail)) => (FAIL, "FAIL".into()),
         _ => (BENCH_FAULT, "BENCH FAULT".into()),
     };
+    let written = output::write(out, &receipt, &inputs.instance.deidentify_values());
+    let leaks = written.map_err(|message| format!("the run gave {result}, but {message}"))?;
     println!("{result}: {}", out.join(RECEIPT).display());
     for leak in &leaks {
         let (rule, field) = (&leak.rule, &leak.field);

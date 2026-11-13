@@ -51,8 +51,8 @@ pub enum WriteRefused {
 }
 
 impl WriteGate {
-    /// The gate of an entry that enables `enables`.
-    #[cfg(test)]
+    /// The gate of an entry that enables `enables`; a run makes one for
+    /// each entry when it stages the entry's payload.
     pub(crate) fn new(enables: &WriteEnables) -> Self {
         Self { enables: *enables }
     }

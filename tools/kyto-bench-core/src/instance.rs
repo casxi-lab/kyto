@@ -276,13 +276,21 @@ impl Instance {
             let (instance, board) = (self.board.clone(), board.id.clone());
             return Err(InstanceError::Board { instance, board });
         }
-        let text = board.text().to_ascii_lowercase();
-        for InstanceValue { rule, value } in self.deidentify_values() {
-            let at = rule.trim_start_matches("instance.");
-            check! { at => !text.contains(&value.to_ascii_lowercase()), IN_BOARD; }
-        }
+        self.check_text(board.text(), IN_BOARD)?;
         let identity = &self.parameters.identity;
         identity.check(board).map_err(InstanceError::Identity)
+    }
+
+    /// Checks that no value to hide occurs in `text`, which a receipt
+    /// records verbatim, ignoring ASCII case; the error at the value's key
+    /// gives `reason`.
+    pub fn check_text(&self, text: &str, reason: &str) -> Result<(), InstanceError> {
+        let text = text.to_ascii_lowercase();
+        for InstanceValue { rule, value } in self.deidentify_values() {
+            let at = rule.trim_start_matches("instance.");
+            check! { at => !text.contains(&value.to_ascii_lowercase()), reason; }
+        }
+        Ok(())
     }
 }
 
@@ -386,11 +394,13 @@ impl RawInstance {
     }
 }
 
-/// The salts that kyto publishes, in its documentation and its tests, which
-/// only a configuration of simulated devices may use.
-const PUBLISHED_SALTS: [&str; 2] = [
+/// The salts that kyto publishes, in its documentation, its tests and its
+/// example configuration, which only a configuration of simulated devices
+/// may use.
+const PUBLISHED_SALTS: [&str; 3] = [
     "9c1f5e0a7b3d48e2a6c0f4b8d2e71a35",
     "6b2d9f41c07e8a35d4e19b7c2f60a853",
+    "d5bedecc5ee387d76097a2fa96272358",
 ];
 
 const SEARCHABLE: &str = "the value is 4 to 255 printable ASCII characters without spaces";
@@ -1025,9 +1035,12 @@ B = { z = "", y = "q\"b\\c\n\t\u0001é/" }
         }
     }
 
-    /// Every salt that kyto writes, in its documentation and its tests, is
-    /// one that only simulated devices may use, and none is in what a run
-    /// reads or in the console output that the tests build, where a public
+    /// The example instance configuration, for simulated devices.
+    const EXAMPLE_INSTANCE: &str = include_str!("../../examples/instance.toml");
+
+    /// Every salt that kyto writes, in its documentation, its tests and its
+    /// example configuration, is one that only simulated devices may use,
+    /// and none is in what a run reads or in console output, where a public
     /// version would have to hide it.
     #[test]
     fn every_salt_that_kyto_writes_is_published_and_found_in_no_example() {
@@ -1040,7 +1053,7 @@ B = { z = "", y = "q\"b\\c\n\t\u0001é/" }
             include_str!("payload.rs"),
         ];
         let mut written = BTreeSet::new();
-        for text in tests.iter().chain([&FORMATS_PAGE]) {
+        for text in tests.iter().chain([&FORMATS_PAGE, &EXAMPLE_INSTANCE]) {
             for prefix in ["salt = \"", "salt = \\\""] {
                 for (at, _) in text.match_indices(prefix) {
                     let start = at + prefix.len();
@@ -1067,6 +1080,11 @@ B = { z = "", y = "q\"b\\c\n\t\u0001é/" }
         ];
         // The documented instance values, the salts among them.
         let documented = [example(), Instance::parse(documented_example()).unwrap()];
+        let example_instance = Instance::parse(EXAMPLE_INSTANCE).unwrap();
+        example_instance
+            .check_board(&Board::parse(RASPBERRY_PI_5).unwrap())
+            .unwrap();
+        let documented = [&documented[..], &[example_instance]].concat();
         let values: Vec<String> = documented
             .iter()
             .flat_map(Instance::deidentify_values)
@@ -1077,11 +1095,31 @@ B = { z = "", y = "q\"b\\c\n\t\u0001é/" }
                 assert!(!text.contains(value.as_str()), "{value}");
             }
         }
-        // The console output that the tests build holds the documented TFTP
-        // server on purpose, but no salt.
+        // The console output that the tests build and the example captures
+        // hold the documented TFTP server on purpose, but no salt, and the
+        // captures no other instance value.
         for text in tests[1..].iter().map(|text| text.to_ascii_lowercase()) {
             for salt in PUBLISHED_SALTS {
                 assert!(!text.contains(salt), "{salt}");
+            }
+        }
+        let captures = [
+            &include_bytes!("../../examples/captures/firmware-only.bin")[..],
+            include_bytes!("../../examples/captures/echo.bin"),
+        ];
+        let address = "instance.tftp.server_address";
+        let hidden = documented.iter().flat_map(Instance::deidentify_values);
+        let hidden: Vec<String> = hidden
+            .filter(|value| value.rule != address)
+            .map(|value| value.value.to_ascii_lowercase())
+            .chain(PUBLISHED_SALTS.map(String::from))
+            .collect();
+        for capture in captures.map(<[u8]>::to_ascii_lowercase) {
+            for value in &hidden {
+                let found = capture
+                    .windows(value.len())
+                    .any(|bytes| bytes == value.as_bytes());
+                assert!(!found, "{value}");
             }
         }
     }

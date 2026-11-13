@@ -6,11 +6,13 @@ This page describes the documents of the kyto bench tool in
 [identity records](#identity-records),
 [instance configurations](#instance-configurations) and
 [run plans](#run-plans); those it writes, [receipts](#receipts), the records
-of runs, and their [public versions](#public-versions); and the
-[rules common to them](#common-rules). The library of the tool,
+of runs, and their [public versions](#public-versions); the
+[rules common to them](#common-rules); and how the verdicts of a receipt are
+[derived again from it](#re-deriving-verdicts). The library of the tool,
 `kyto-bench-core`, reads and checks the first four, checks payloads, reads
-what a cold boot shows, renders receipts and reads them back strictly, and
-makes and checks public versions. The tests of the tool read the
+what a cold boot shows, judges cold boots, entries and runs, renders
+receipts and reads them back strictly, re-derives their verdicts, and makes
+and checks public versions. The tests of the tool read the
 Raspberry Pi 5 description, the identity record template, the example run
 plan and example documents, and run from the repository root with:
 
@@ -18,10 +20,9 @@ plan and example documents, and run from the repository root with:
 cargo test --locked --manifest-path tools/Cargo.toml
 ```
 
-The rules that decide the checks of a cold boot and the verdicts, the flow of
-a run, the re-derivation of verdicts from a receipt and the command line are
-not defined yet. The `kyto-bench` command has no subcommand, so no command
-reads a document, runs a plan or writes a receipt yet.
+The flow of a run and the command line are not defined yet. The
+`kyto-bench` command has no subcommand, so no command reads a document, runs
+a plan or writes a receipt yet.
 
 ## Common rules
 
@@ -1148,18 +1149,92 @@ this, shown with less indentation:
 ### Checks
 
 `checks` list the rules evaluated on each subject, passing ones included, in
-the order in which they are evaluated, each as
+the order that this section gives, each as
 `{ rule, subject, result, detail }`. `result` is `"pass"`, `"fail"` or
 `"fault"`, and `detail`, which says what was found, is present exactly when
-the result is not `"pass"`.
+the result is not `"pass"`. A detail names lines by their offsets and copies
+no value of the console output or of the bench. A fault is a fault of the
+bench; a failure is one of the board or its payload.
 
-The checks of an entry are those of `payload.served_digest`: one for each
-file of its payload, in the order of the payload, with the payload name as
-`subject`. The result is `"fault"` when the copy that the board is served has
-another SHA-256 than the payload gives, or was not read, as in
-`the served copy of config.txt was not read`. The rules of the checks of a
-cold boot, their subjects and their order come with the rules that decide
-verdicts, which are not defined yet.
+The checks of an entry are, in this order:
+
+- for the first entry, when `start.events` is not empty,
+  `power.off_unconfirmed` on the subject `start`: a fault unless readings
+  [confirm](#the-supply) the power off that `start.events` end with;
+- `device.error` for each `device_error` event of the entry, and of
+  `start.events` for the first entry: a fault on the subject of the device's
+  role, with the device's detail;
+- once a `switch` event shows that the board is served the entry's
+  generation, `payload.served_digest` for each file of its payload, in the
+  order of the payload, with the payload name as `subject`: a fault when the
+  copy that the board is served has another SHA-256 than the payload gives,
+  or was not read, as in `the served copy of config.txt was not read`.
+
+The checks of a cold boot are, in this order, each rule once unless the
+table says otherwise:
+
+| Rule | Subject | Result | It does not pass when |
+| --- | --- | --- | --- |
+| `console.not_ready` | `console` | fault | the cold boot has no `console_ready` event |
+| `power.on_unconfirmed` | `on` | fault | the cold boot has no power on, or readings do not [confirm](#the-supply) it |
+| `power.off_interval` | `on` | fault | only for a cold boot with a power on: the supply was not confirmed off before the cold boot, or an event of a step that follows `wait_off_interval` in the board's `cold_boot.order`, the console ready or the power on, came less than `off_interval_ms` after that confirmation |
+| `power.off_unconfirmed` | `off` | fault | the last power command of the cold boot is not a power off that readings confirm |
+| `power.order` | `events` | fault | an event is [out of order](#the-supply) |
+| `device.error` | the role of the device | fault | one check for each `device_error` event, which it reports |
+| `boot.network` | `board.` and the board's `network_marker` | fail | no boot mode line is of the board's network mode |
+| `boot.fallback` | the same | fail | the last boot mode line is of another mode |
+| `boot.end` | the marker of `end`, or `timeout` | fail | with an end marker, its first line did not appear by the boot timeout, `boot_timeout_ms` after the power on; with `end = "timeout"`, the cold boot ended before the boot timeout |
+| `console.byte_limit` | `console` | fail | the cold boot ended at the capture limit, its `end` reason `byte_limit` or `chunk_limit` |
+| `marker.count` | the marker | fail | for each `expect`, in order: the marker appeared another number of times |
+| `marker.order` | the markers of the `order`, separated by spaces | fail | for each `order`: one of the markers did not appear, or the first line of one does not start after the first line of the one before |
+| `marker.forbidden` | the index of the item in `forbid`, from `0` | fail | for each `forbid`: a line strictly between the first lines of `from` and `to` matches `line`; an end left out, or a `to` that did not appear, is the start or the end of the capture, and a `from` that did not appear leaves no line between |
+| `marker.before_first_send` | the marker | fail | for each of `before_first_send`: a byte was sent and the first line of the marker, its line ending included, did not end before the first byte sent |
+| `step.response` | the index of the step, from `0` | fail | for each step: it was not armed or not sent, or no response was complete within its `timeout_ms` of its send |
+| `step.declared_none` | `sends` | fail | instead of `step.response`, for an entry with `sends = false`: a byte was sent |
+| `firmware.version` | the name of the firmware version line | fail | for each `[entries.firmware.<name>]`, in the order of the names: no line of it appeared, or a line of it does not give one of the expected values |
+| `segment.digest` | the name of the segment | fail | for each segment: its two lines did not both appear, or the bytes between them have another SHA-256 |
+| `tftp.server` | `servers` | fail | a line names another TFTP server than the instance's |
+| `tftp.prefix` | `reads` | fail | the path of a file read in full is outside the path prefix |
+| `tftp.unplanned_file` | `reads` | fail | a file read in full inside the path prefix is not a file of the entry's payload, compared ignoring ASCII case |
+| `identity.disagree` | `identity` | fail | the lines of an identity field or part give different values |
+
+### The supply
+
+The readings that follow a power command, up to the next power command,
+confirm it when `consecutive` of them in a row are of the `quantity` of the
+confirmation parameters, each at or above `on_at_least_micro` for a power on
+or at or below `off_at_most_micro` for a power off, and all taken within
+`on_timeout_ms` or `off_timeout_ms` of the command. A reading of another
+quantity, or on the other side of the threshold, starts the count again.
+The supply was last confirmed off at the time of the reading that confirms
+the last power command of the events before, when that command is a power
+off; for the first cold boot of a run, those are `start.events`, and for any
+other, the events of the cold boot before it, in the same entry or the one
+before.
+
+The events of a cold boot are in order when neither their times nor the
+bytes received before them ever decrease, and when they keep these phases,
+in this order: the console ready; the power on and the readings after it;
+the sends; the end; the power off and the readings after it; the console
+closed. A device error can come in any phase.
+
+### Verdicts
+
+- A cold boot is `"BENCH FAULT"` when one of its checks is a fault, else
+  `"FAIL"` when one failed, else `"PASS"`.
+- An entry with no event, no check and no cold boot is `"NOT RUN"`. Any
+  other entry is `"BENCH FAULT"` when one of its checks is a fault or one of
+  its cold boots is `"BENCH FAULT"`, else `"FAIL"` when one of its cold boots
+  is `"FAIL"`, else `"PASS"` when it ran every cold boot of its plan entry;
+  an entry that stopped short of them without a failure or a fault is
+  `"BENCH FAULT"`.
+- A run is `"BENCH FAULT"` when one of its entries is `"BENCH FAULT"` or
+  `"NOT RUN"`, which only a fault leaves; else `"FAIL"` when one is
+  `"FAIL"`; else `"PASS"`. A refused run has no verdict.
+
+A cold boot that does not pass is the last of its entry: an entry fails at
+its first failed cold boot, and the next entry follows. A fault ends the
+run, and every entry after the one that holds it is `"NOT RUN"`.
 
 ### Refused runs
 
@@ -1216,9 +1291,10 @@ The library reads a receipt strictly:
    - each check has `detail` exactly when it did not pass.
 
 Reading a receipt does not check the rule names of checks and refusals
-against the lists above, the order and times of events, or whether the
-observations, checks and verdicts follow from the record: re-deriving
-verdicts from a receipt is not defined yet.
+against the lists above, so that the rules can be refined without a new
+version of the format, nor the order and times of events, nor whether the
+observations, checks and verdicts follow from the record:
+[re-deriving verdicts](#re-deriving-verdicts) does.
 
 ## Public versions
 
@@ -1460,3 +1536,77 @@ The digests of payload files, in the run plan, the pinned sets and the
 records of entries and boot files, are shown in full and have no secret
 either. They reveal nothing as long as payload files hold no value of the
 bench, as [run plans](#run-plans) require.
+
+## Re-deriving verdicts
+
+A receipt holds every input of the checks and verdicts of its run: the run
+plan and the board description as read, the instance parameters, the
+digests of every payload file, every event and the console output of every
+cold boot. The library function `kyto_bench_core::rejudge::rejudge` takes a
+receipt that has been [read](#reading-a-receipt) and makes its judgement
+again from these alone, without a payload, an instance configuration, a
+device or a clock:
+
+1. It reads the recorded run plan and board description again.
+2. It makes [`evidence`](#evidence) again from `tool` and `bench.simulated`.
+3. It makes the [payload checks](#payload-checks) again, in their order,
+   from the recorded digests: the source digests from `source_sha256`, the
+   write triggers from the payload names and the entry's `writes`, the
+   variants from the recorded identity record, and the staged digests from
+   `staged_sha256`. Whether a file sets a refused property shows only in
+   its bytes, which a receipt does not hold, so a refusal under
+   `write.refused_property` is taken as the receipt records it, at its
+   place in the order: a check that comes before it and fails gives its own
+   refusal instead. The first check that fails gives the refusal, and a
+   refused run has no verdict.
+4. For a run that was not refused, for each entry in order, it makes the
+   [checks of the entry](#checks); for each of its cold boots,
+   [what the cold boot shows](#how-a-cold-boot-is-read), from its console
+   output and the `send` events among its events, its checks, with the time
+   at which [the supply](#the-supply) was last confirmed off before it, and
+   its verdict; then the [verdicts](#verdicts) of the entry and of the run.
+
+It fails, naming the place in the receipt, when an index does not describe
+its bytes, when a cold boot follows one of its entry that did not pass, and
+when an entry that is not `"NOT RUN"` follows one that is `"BENCH FAULT"`.
+Otherwise it gives the receipt with its evidence, refusal, observations,
+checks and verdicts made again and everything else as recorded. A receipt
+that the tool wrote is given back unchanged; one that is not was not made
+by the rules of this version from what it records.
+
+For example, take the cold boot of the receipt in
+[entries and cold boots](#entries-and-cold-boots), with its plan entry: the
+marker `ready`, `end = { marker = "ready" }`, `boot_timeout_ms = 60000`, the
+step `{ after = "ready", send = "?\r", expect = '^STATS seq=1', timeout_ms = 1000 }`
+and the payload `config.txt`, `bcm2712-rpi-5-b.dtb` and
+`overlays/bcm2712d0.dtbo`, the files that the D0 stepping of the board of
+the [example configuration](#instance-configurations) needs. The run powered
+the board off at 0 s and read 0 µV at 0.1 s, and the board is served the
+generation that holds the payload, whose copies all have the digests of the
+plan. Re-deriving gives:
+
+- no refusal: every source and staged digest is that of the plan, no file is
+  a write trigger, and the payload has the files of the variant;
+- the checks of the entry: `power.off_unconfirmed` on `start` passes, since
+  0 µV is at most 500000 µV and one reading in a row confirms the off within
+  3000 ms, and `payload.served_digest` passes for each of the three files;
+- the observations of the cold boot as its record shows them, and these
+  checks, each passing: `console.not_ready`, since the console was ready at
+  5.1 s; `power.on_unconfirmed`, since 5100000 µV at 5.2 s confirms the power
+  on at 5.1 s; `power.off_interval`, since the console was ready and the
+  supply switched on 5000 ms after the off was confirmed at 0.1 s;
+  `power.off_unconfirmed`, since 0 µV at 7.8 s confirms the power off at
+  7.7 s; `power.order`, since the console ready, the power on, the reading,
+  the send, the end, the power off, the reading and the console closed come
+  in this order, at times and after byte counts that never decrease;
+  `boot.network` and `boot.fallback` on `board.network_boot`, since line 0
+  is the only boot mode line and is of the network mode; `boot.end` on
+  `ready`, whose line 41 came at 7.6 s, within 60000 ms of the power on;
+  `console.byte_limit`, since the cold boot ended at its end condition;
+  `step.response` on `0`, since line 41 armed the step, event 3 sent it at
+  7.6 s and the response, line 48, was complete at 7.7 s, within 1000 ms;
+  and `tftp.server`, `tftp.prefix`, `tftp.unplanned_file` and
+  `identity.disagree`, since no line names a server, reads a file or gives
+  an identity value;
+- the verdicts: the cold boot is `"PASS"`, the entry, which ran its one cold
+  boot, `"PASS"`, and the run `"PASS"`.

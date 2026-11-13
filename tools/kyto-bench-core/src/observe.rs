@@ -1125,8 +1125,9 @@ mod tests {
         );
     }
 
-    /// The board's behaviour is data: the code that reads transcripts and
-    /// checks payloads names nothing of the Raspberry Pi 5.
+    /// The board's behaviour is data: the code that reads transcripts,
+    /// checks payloads, judges cold boots and re-derives receipts names
+    /// nothing of the Raspberry Pi 5.
     #[test]
     fn observation_and_payload_code_name_no_board() {
         let literals = [
@@ -1141,6 +1142,9 @@ mod tests {
         for (file, text) in [
             ("observe.rs", include_str!("observe.rs")),
             ("payload.rs", include_str!("payload.rs")),
+            ("power.rs", include_str!("power.rs")),
+            ("verdict.rs", include_str!("verdict.rs")),
+            ("rejudge.rs", include_str!("rejudge.rs")),
         ] {
             let code = &text[..text.find("#[cfg(test)]").unwrap_or(text.len())];
             for literal in literals {

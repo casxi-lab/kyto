@@ -174,11 +174,91 @@ boot is not powered.
   failure, fault, refusal or error that follows. A `positive` test shows
   that a case that keeps the requirement passes.
 - The tests run on the host, on records built in code, on simulated devices
-  directly or through the command line, or with the built binary on the
-  example. They do not sleep or read the system clock; every time in them is
-  written in the test or is a time of the simulated bench clock.
+  directly or through the command line, with the built binary on the
+  example, or on the cases that the fuzz tests make. They do not sleep or
+  read the system clock; every time in them is written in the test, made
+  from the seed of a fuzz test, or a time of the simulated bench clock.
 - Console output that a test reads holds documentation values only: no
   address, MAC address or serial number of a real board or bench.
+  `the_corpus_and_recordings_hold_documentation_values_only`, in
+  `tools/kyto-bench/tests/fuzz.rs`, reads every file, at any depth, below
+  the corpus of the fuzz tests and the recordings in
+  `tools/kyto-bench/tests/data/` and the example console output in
+  `tools/examples/captures/`. It fails on any file but a `.gitattributes`
+  file and the seeds of the fuzz tests, which are the `.bin` files directly
+  in `transcripts/` of the corpus, in the recordings and in the example
+  console output and the `.toml` files directly in `plans/` of the corpus,
+  and fails unless every value that a sensitive line of the Raspberry Pi 5
+  description or of `tools/kyto-bench/tests/data/synthetic-board.toml`
+  holds, every dotted quad, every six pairs of hexadecimal digits joined by
+  colons or hyphens, the shape of a MAC address, and every run of exactly
+  eight hexadecimal digits that `serial ` comes before or `/` after, the
+  shape of a Raspberry Pi 5 serial number on its boot mode line and in the
+  default path prefix of its TFTP reads, is a documentation value: an IPv4
+  address of 192.0.2.0/24 or 198.51.100.0/24, 0.0.0.0, a network mask that
+  starts with 255, a MAC address from 00:00:5e:00:53:00 to
+  00:00:5e:00:53:ff, a serial number chosen for the examples or the
+  recordings, the SD card identifier, card-specific data or partition UUID
+  chosen for the recordings, or `#` alone.
+- `tools/kyto-bench/tests/fuzz.rs` fuzz tests the parsing of untrusted
+  input. A SplitMix64 generator written in that file makes each case from
+  the constant `SEED`, the name of its target and its index, so every run
+  makes the same cases, and a case that fails is named on standard error by
+  the seed and its index. The cases start from the example console output
+  and run plan in `tools/examples/`, the example lines of the board
+  description, the recordings, and the corpus in
+  `tools/kyto-bench/tests/data/corpus/`: in `transcripts/`, edge cases of
+  console output such as no bytes, a line of 4096 bytes without a line end,
+  10000 LF bytes, lines ended by CR alone and bytes that are not UTF-8, and
+  in `plans/`, a run plan with only the keys that an entry needs and one
+  with every kind of rule. The `test` step of `cargo xtask check` runs three
+  targets on the toolchain of `rust-toolchain.toml`, each with its number of
+  cases written as a constant:
+  - `fuzz_transcripts`, 1000 cases (`TRANSCRIPT_CASES`): changed console
+    output of at most 4 KiB, read in chunks of any size by a run that sends
+    each armed step after a chunk. The observations that `verdict::judge`
+    gives from the record are those that the run's matcher gave, and other
+    chunks that keep every send where it came give the same but for the
+    times of markers; their markers and steps are those that the test finds
+    from the lines and the sends without a matcher, by the rules of
+    [steps](formats.md#steps-and-the-end-of-a-cold-boot); the lines put
+    back together are the bytes, and none keeps the CR before its LF; every
+    segment is the SHA-256 of the raw bytes between its lines; what a cold
+    boot shows is bounded by its lines; the checks of a cold boot are of its
+    rules, in their order, the same in every reading, also for events in any
+    order; and an index of any offsets and times describes the bytes exactly
+    when it keeps the rules of an index;
+  - `fuzz_run_plans`, 4000 cases (`PLAN_CASES`): changed run plans are read
+    or refused with a `PlanError`, never with a panic; a plan that is read
+    keeps its text byte for byte and the limits of a plan, and checking it
+    against the board description does not panic;
+  - `fuzz_receipts`, 100 cases (`RECEIPT_CASES`): runs of the example run
+    plan on simulated devices whose board writes changed example console
+    output. Each receipt is read back as written, re-derives to itself and
+    holds the bytes that the console gave, bytes that are not UTF-8, CR and
+    LF included; a receipt with typed fields changed is read as it is or
+    refused at a JSON pointer, and re-deriving one that is read gives a
+    receipt or an error at a JSON pointer; when only judgements that
+    re-deriving makes again were changed, re-deriving gives back the receipt
+    that the run wrote.
+
+  Each target also fails when too few of its cases reach what it checks,
+  such as sends, segments, a CR and its LF in two chunks, lone CR bytes,
+  bytes that are not UTF-8, an index read and one refused under each rule
+  of an index, and forged judgements that re-deriving undoes, or, for the
+  run plans, when too few or too many of the changed plans are read. `fuzz_deeper`, which `#[ignore]` keeps out
+  of the check, runs a hundred times as many cases of each target, for a
+  deeper search:
+
+  ```sh
+  cargo test --release --locked --manifest-path tools/Cargo.toml --test fuzz -- --ignored
+  ```
+
+  `the_documents_give_the_numbers_of_cases`, in the same file, fails when
+  this page does not give the number of cases of each target with its
+  constant, or when this page or [CONTRIBUTING](../../CONTRIBUTING.md) does
+  not give the factor of the deeper search that `fuzz_deeper` runs.
+
 - `tools/kyto-bench/tests/contract.rs` reads the
   [requirements page](requirements.md), this page, the
   [formats page](formats.md), every source of `kyto-bench-core` and
@@ -229,7 +309,7 @@ it.
 | [VERD-R03](requirements.md#verd-r03) | `verdicts_take_the_worst_result` | `tools/kyto-bench-core/src/verdict.rs` | negative |
 | [VERD-R03](requirements.md#verd-r03) | `a_receipt_has_either_a_refusal_or_a_verdict` | `tools/kyto-bench-core/src/receipt.rs` | negative |
 | [VERD-R04](requirements.md#verd-r04) | `rejudging_a_written_receipt_gives_the_recorded_verdicts` | `tools/kyto-bench/tests/run.rs` | negative |
-| [VERD-R04](requirements.md#verd-r04) | `a_fault_that_leaves_the_supply_unconfirmed_switches_it_off_again` | `tools/kyto-bench/tests/run.rs` | negative |
+| [VERD-R04](requirements.md#verd-r04) | `a_fault_that_leaves_the_supply_unconfirmed_switches_it_off_again` | `tools/kyto-bench/tests/run.rs` | positive |
 | [VERD-R04](requirements.md#verd-r04) | `nothing_runs_after_a_bench_fault_and_no_cold_boot_after_a_failure` | `tools/kyto-bench-core/src/rejudge.rs` | negative |
 | [VERD-R04](requirements.md#verd-r04) | `a_failed_cold_boot_ends_its_entry_and_the_next_entry_runs` | `tools/kyto-bench/tests/run.rs` | positive |
 | [VERD-R04](requirements.md#verd-r04) | `a_bench_fault_ends_the_run_and_the_rest_is_not_run` | `tools/kyto-bench/tests/run.rs` | positive |
@@ -250,20 +330,29 @@ it.
 | [VERD-R08](requirements.md#verd-r08) | `markers_before_the_first_send_end_before_its_first_byte` | `tools/kyto-bench-core/src/verdict.rs` | negative |
 | [VERD-R08](requirements.md#verd-r08) | `the_checks_of_the_example_runs_are_fixed` | `tools/kyto-bench/tests/run.rs` | negative |
 | [VERD-R09](requirements.md#verd-r09) | `a_step_needs_its_trigger_its_send_and_a_response_in_time` | `tools/kyto-bench-core/src/verdict.rs` | negative |
+| [VERD-R09](requirements.md#verd-r09) | `a_line_that_started_before_the_send_does_not_answer_it` | `tools/kyto-bench-core/src/verdict.rs` | negative |
 | [VERD-R09](requirements.md#verd-r09) | `an_entry_that_declares_no_sends_fails_when_one_is_sent` | `tools/kyto-bench-core/src/verdict.rs` | negative |
 | [VERD-R09](requirements.md#verd-r09) | `a_response_without_its_line_feed_is_no_response` | `tools/kyto-bench/tests/run.rs` | negative |
+| [VERD-R09](requirements.md#verd-r09) | `fuzz_transcripts` | `tools/kyto-bench/tests/fuzz.rs` | positive |
 | [VERD-R10](requirements.md#verd-r10) | `receipt_round_trips` | `tools/kyto-bench-core/src/receipt.rs` | positive |
 | [VERD-R10](requirements.md#verd-r10) | `a_receipt_with_non_canonical_base64_is_rejected` | `tools/kyto-bench-core/src/receipt.rs` | negative |
 | [VERD-R10](requirements.md#verd-r10) | `bytes_are_kept_as_received` | `tools/kyto-bench-core/src/lines.rs` | positive |
 | [VERD-R10](requirements.md#verd-r10) | `the_example_plan_observes_its_transcripts` | `tools/kyto-bench-core/src/observe.rs` | positive |
 | [VERD-R10](requirements.md#verd-r10) | `a_two_entry_plan_runs_to_pass_on_simulated_devices` | `tools/kyto-bench/tests/run.rs` | positive |
 | [VERD-R10](requirements.md#verd-r10) | `firmware_versions_and_segments_are_those_of_the_entry` | `tools/kyto-bench-core/src/verdict.rs` | negative |
+| [VERD-R10](requirements.md#verd-r10) | `a_receipt_keeps_bytes_that_are_not_utf8` | `tools/kyto-bench-core/src/receipt.rs` | negative |
+| [VERD-R10](requirements.md#verd-r10) | `a_receipt_keeps_cr_and_lf_as_read` | `tools/kyto-bench-core/src/receipt.rs` | negative |
+| [VERD-R10](requirements.md#verd-r10) | `a_segment_digest_over_normalised_line_ends_fails` | `tools/kyto-bench-core/src/verdict.rs` | negative |
+| [VERD-R10](requirements.md#verd-r10) | `fuzz_transcripts` | `tools/kyto-bench/tests/fuzz.rs` | positive |
+| [VERD-R10](requirements.md#verd-r10) | `fuzz_receipts` | `tools/kyto-bench/tests/fuzz.rs` | positive |
 | [VERD-R11](requirements.md#verd-r11) | `a_capture_that_reached_its_limit_fails` | `tools/kyto-bench-core/src/verdict.rs` | negative |
 | [VERD-R11](requirements.md#verd-r11) | `tftp_transfers_are_of_the_bench_and_the_payload` | `tools/kyto-bench-core/src/verdict.rs` | negative |
 | [VERD-R11](requirements.md#verd-r11) | `identity_lines_that_disagree_fail` | `tools/kyto-bench-core/src/verdict.rs` | negative |
 | [VERD-R12](requirements.md#verd-r12) | `the_worked_example_rederives_to_pass` | `tools/kyto-bench-core/src/rejudge.rs` | positive |
 | [VERD-R12](requirements.md#verd-r12) | `rejudging_a_written_receipt_gives_the_recorded_verdicts` | `tools/kyto-bench/tests/run.rs` | positive |
 | [VERD-R12](requirements.md#verd-r12) | `a_judgement_that_the_record_does_not_give_is_found` | `tools/kyto-bench-core/src/rejudge.rs` | negative |
+| [VERD-R12](requirements.md#verd-r12) | `fuzz_transcripts` | `tools/kyto-bench/tests/fuzz.rs` | positive |
+| [VERD-R12](requirements.md#verd-r12) | `fuzz_receipts` | `tools/kyto-bench/tests/fuzz.rs` | negative |
 | [PROV-R01](requirements.md#prov-r01) | `source_and_staged_digests_must_equal_the_plan` | `tools/kyto-bench-core/src/payload.rs` | negative |
 | [PROV-R01](requirements.md#prov-r01) | `a_source_file_of_another_digest_refuses_the_run_before_the_bench_opens` | `tools/kyto-bench/tests/run.rs` | negative |
 | [PROV-R01](requirements.md#prov-r01) | `a_refusal_is_rederived_from_the_recorded_digests_in_order` | `tools/kyto-bench-core/src/rejudge.rs` | negative |
@@ -330,8 +419,6 @@ it.
 
 | Obligation | Why open | What closes it |
 | --- | --- | --- |
-| Fuzz tests of the parsing of console transcripts, run plans and receipts | No fuzz test exists | Fuzz tests in the `tools` workspace with a fixed seed and a number of cases written as a constant, run by the `test` step of `cargo xtask check` |
-| `VERD-R10` on bytes read back | No test gives a receipt with a lone CR or LF and reads it back, or a segment digested over line ends that were changed | Negative cases of a receipt that keeps bytes that are not UTF-8 and lone CR and LF bytes as read, and of a segment whose digest was taken over changed line ends |
 | `PROV-R08` across builds | No test builds the tool, changes its working tree and builds it again. That every build asks Git again rests on Cargo running the build script on every build while a path that it watches does not exist | A test that builds the tool in a Git checkout, then changes a tracked file, adds an untracked file, edits a tracked file marked assume-unchanged or skip-worktree, or adds a file that only a local exclude hides, builds it again after each change and reads `tool.clean` as `false` |
 | `POWER-R04` on standard error | No test reads what a run says on standard error after it sends the power off again | A test that reads the standard error of a run whose fault leaves the supply unconfirmed, and of one whose power off is then confirmed |
 | `POWER-R05` and `POWER-R06` for an error of the tool | No test reads the message on standard error or runs the binary to the exit status 101, the status of a Rust panic | A test that runs the built binary to an error of the tool and reads its message on standard error and its exit status 101 |

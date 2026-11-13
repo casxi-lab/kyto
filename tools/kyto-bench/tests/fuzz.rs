@@ -1788,6 +1788,33 @@ fn fuzz_receipts() {
     receipts(RECEIPT_CASES);
 }
 
+/// The contract gives the number of cases of each target with its
+/// constant, and the contract and CONTRIBUTING give the factor of the
+/// deeper search.
+#[test]
+fn the_documents_give_the_numbers_of_cases() {
+    let words = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let contract = words(include_str!("../../../docs/bench/contract.md"));
+    let contributing = words(include_str!("../../../CONTRIBUTING.md"));
+    let targets = [
+        ("fuzz_transcripts", TRANSCRIPT_CASES, "TRANSCRIPT_CASES"),
+        ("fuzz_run_plans", PLAN_CASES, "PLAN_CASES"),
+        ("fuzz_receipts", RECEIPT_CASES, "RECEIPT_CASES"),
+    ];
+    for (target, cases, constant) in targets {
+        let given = format!("`{target}`, {cases} cases (`{constant}`)");
+        assert!(
+            contract.contains(&given),
+            "the contract does not say {given}"
+        );
+    }
+    // The documents say it in words.
+    assert_eq!(DEEPER, 100);
+    for text in [&contract, &contributing] {
+        assert!(text.contains("a hundred times as many cases"));
+    }
+}
+
 /// A hundred times as many cases of each target, for a deeper search than
 /// the check makes; best run with `--release`.
 #[test]

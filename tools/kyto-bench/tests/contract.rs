@@ -24,7 +24,7 @@ macro_rules! sources {
 /// Every source of the library and of the command, and the test files that
 /// the contract may name. The modules that any source of the crates
 /// declares are checked against this list, so a new module joins it.
-const SOURCES: [(&str, &str); 42] = sources![
+const SOURCES: [(&str, &str); 43] = sources![
     "tools/kyto-bench-core/src/board.rs",
     "tools/kyto-bench-core/src/bootloader.rs",
     "tools/kyto-bench-core/src/digest.rs",
@@ -64,6 +64,7 @@ const SOURCES: [(&str, &str); 42] = sources![
     "tools/kyto-bench/src/sim/relay.rs",
     "tools/kyto-bench/src/sim/tftp.rs",
     "tools/kyto-bench/src/sim/world.rs",
+    "tools/kyto-bench/tests/fuzz.rs",
     "tools/kyto-bench/tests/manifest.rs",
     "tools/kyto-bench/tests/release.rs",
     "tools/kyto-bench/tests/run.rs",
@@ -73,7 +74,7 @@ const SOURCES: [(&str, &str); 42] = sources![
 /// tests and of rule names. A change that adds or removes a requirement, a
 /// row or a rule changes these in the same change.
 const REQUIREMENT_COUNTS: [(&str, usize); 3] = [("POWER", 6), ("PROV", 8), ("VERD", 12)];
-const REQUIREMENT_TEST_ROWS: usize = 101;
+const REQUIREMENT_TEST_ROWS: usize = 110;
 const RULE_ROWS: usize = 32;
 
 /// The constructors that name a rule as their first argument, called in

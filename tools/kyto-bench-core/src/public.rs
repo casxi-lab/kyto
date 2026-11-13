@@ -302,6 +302,10 @@ pub fn verify(public: &PublicReceipt, secrets: &[Secret]) -> Result<(), Vec<Leak
     }
     let text = public.receipt.pointer(BOARD_TEXT).and_then(Value::as_str);
     let boards = boards_of(text.unwrap_or_default()).unwrap_or_default();
+    let mut ends = BTreeMap::new();
+    for r in &public.replacements {
+        ends.insert((&r.field[..], r.offset), r.offset.saturating_add(r.length));
+    }
     let finder = Finder::new(secrets);
     walk(&mut public.receipt.clone(), "", &mut |at, text| {
         let stream = decoded(at, text);
@@ -316,7 +320,7 @@ pub fn verify(public: &PublicReceipt, secrets: &[Secret]) -> Result<(), Vec<Leak
         rules.extend(open.then(|| UNTERMINATED_RULE.into()));
         let relay = key(at) == "relay" && !is_placeholders(text.as_bytes());
         rules.extend(relay.then(|| RELAY_RULE.into()));
-        rules.extend(covers_hidden(public, at).then(|| SEGMENT_RULE.into()));
+        rules.extend(covers_hidden(public, &ends, at).then(|| SEGMENT_RULE.into()));
         leaks.extend(rules.iter().map(|rule| Leak::new(rule, at)));
     });
     let leaks: Vec<Leak> = leaks.into_iter().collect();
@@ -366,7 +370,7 @@ fn unterminated(at: &str, bytes: &[u8]) -> Option<Range<usize>> {
 /// Whether the field at `at` is the digest of a segment of a cold boot whose
 /// console output, from the first byte of the line of `from` up to the
 /// first byte of the line of `to`, holds a replaced byte.
-fn covers_hidden(public: &PublicReceipt, at: &str) -> bool {
+fn covers_hidden(public: &PublicReceipt, ends: &BTreeMap<(&str, usize), usize>, at: &str) -> bool {
     let segment = at.strip_suffix("/sha256").unwrap_or_default();
     let Some((cold_boot, _)) = segment.split_once("/observations/segments/") else {
         return false;
@@ -376,10 +380,10 @@ fn covers_hidden(public: &PublicReceipt, at: &str) -> bool {
         line.and_then(Value::as_u64).unwrap_or(0) as usize
     });
     let serial = format!("{cold_boot}/serial/bytes_base64");
-    let replaced = |r: &Replacement| {
-        r.field == serial && r.offset < to && r.offset.saturating_add(r.length) > from
-    };
-    public.replacements.iter().any(replaced)
+    // Replacements of a field are apart and in order: the last that starts
+    // before `to` ends last.
+    let last = ends.range((&serial[..], 0)..(&serial[..], to)).next_back();
+    last.is_some_and(|(_, end)| *end > from)
 }
 
 /// Every value to hide found in one pass over bytes, ignoring ASCII case, by
@@ -1131,6 +1135,37 @@ mod tests {
             let board = |leak: &Leak| leak.field == at && leak.rule.starts_with("board.");
             assert!(!leaks.is_empty() && leaks.iter().all(board), "{leaks:?}");
         }
+    }
+
+    #[test]
+    fn segments_are_checked_against_the_replacements_of_their_cold_boot() {
+        let mut bytes = b"start\r\n".to_vec();
+        for _ in 0..500 {
+            bytes.extend_from_slice(b"server 192.0.2.10\r\n");
+        }
+        let middle = bytes.len();
+        bytes.extend_from_slice(b"middle\r\nclean\r\n");
+        let end = bytes.len();
+        bytes.extend_from_slice(b"end\r\n");
+        let segment = |from_line: usize, to_line: usize| crate::observe::SegmentSeen {
+            name: format!("s{from_line}"),
+            from_line: from_line as u64,
+            to_line: to_line as u64,
+            sha256: Sha256::of(&bytes[from_line..to_line]),
+        };
+        let mut receipt = with_serial(&bytes);
+        let segments = [segment(0, 7), segment(middle, end), segment(7, middle)];
+        let seen = &mut receipt.entries[0].cold_boots[0].observations;
+        seen.segments = segments[..2].to_vec();
+        let public = public(&receipt).unwrap();
+        assert_eq!(public.replacements.len(), 500);
+        let seen = &mut receipt.entries[0].cold_boots[0].observations;
+        seen.segments = segments.to_vec();
+        let field = "/entries/0/cold_boots/0/observations/segments/2/sha256";
+        assert_eq!(
+            super::public_version(&receipt, &values()),
+            Err(vec![leak(SEGMENT_RULE, field)])
+        );
     }
 
     #[test]

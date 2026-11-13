@@ -1200,6 +1200,40 @@ mod tests {
     }
 
     #[test]
+    fn a_disk_signature_is_hidden_with_any_partition_number() {
+        // The kernel command line of an MBR disk gives its signature, which
+        // later lines print with the number of another partition, in a path
+        // and in the escaped name of a systemd unit.
+        let lines = b"console=serial0,115200 root=PARTUUID=5ca1ab1e-02 rootwait\r\n\
+            Found /dev/disk/by-partuuid/5ca1ab1e-01\r\n\
+            Found dev-disk-by\\x2dpartuuid-5ca1ab1e\\x2d01.device\r\n";
+        let receipt = with_serial(lines);
+        let found = secrets(&receipt, &values()).unwrap();
+        assert!(found.contains(&Secret::new("board.root-partuuid", b"5ca1ab1e")));
+        let serial = serial_of(&public(&receipt).unwrap());
+        assert!(
+            !serial
+                .windows(8)
+                .any(|w| w.eq_ignore_ascii_case(b"5ca1ab1e"))
+        );
+        // The partition numbers identify nothing and stay.
+        for number in [&b"-02 "[..], b"-01\r", b"\\x2d01."] {
+            assert!(serial.windows(number.len()).any(|w| w == number));
+        }
+        // The partition UUID of a GPT disk is hidden whole.
+        let uuid = "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0";
+        let line = format!("root=PARTUUID={uuid} rootwait\r\n");
+        let public = public(&with_serial(line.as_bytes())).unwrap();
+        let at = "/entries/0/cold_boots/0/serial/bytes_base64";
+        let record = replacement(at, 14, uuid.len(), &["board.root-partuuid"]);
+        assert!(
+            public.replacements.contains(&record),
+            "{:?}",
+            public.replacements
+        );
+    }
+
+    #[test]
     fn nested_values_keep_each_rule_once() {
         let values: Vec<Secret> = (4..300)
             .map(|length| Secret::new("board.board-serial", &vec![b'0'; length]))

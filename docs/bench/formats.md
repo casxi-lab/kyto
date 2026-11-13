@@ -446,10 +446,11 @@ each value. In short:
   network link; the client, gateway and server addresses in the `NET` line;
   the address and MAC address in `ARP` lines; the MAC address and the server
   in `TFTP_GET` lines; the SD card's identifier in the `CID:` line and its
-  card-specific data in the `CSD:` line; and the partition UUID of the root
-  file system, with the partition number of an MBR disk, in the
-  `root=PARTUUID=` argument of a kernel command line, such as the one that
-  the firmware shows after it reads `cmdline.txt` from an SD card. These
+  card-specific data in the `CSD:` line; and, in the `root=PARTUUID=`
+  argument of a kernel command line, such as the one that the firmware shows
+  after it reads `cmdline.txt` from an SD card, the disk signature of an MBR
+  disk, without the partition number, so that it is found with the number of
+  any other partition too, or the whole partition UUID of a GPT disk. These
   forms cover static addressing, and each starts at the word that names its
   line or argument, such as `BOOTMODE:` or `root=PARTUUID=`. `0.0.0.0` is
   never a value to hide.
@@ -1454,7 +1455,7 @@ its public version, with the receipt digest shortened here, starts like this:
 {
   "format": "kyto-bench public receipt",
   "format_version": 1,
-  "receipt_sha256": "5e481066...",
+  "receipt_sha256": "a67d6e1a...",
   "placeholder": "#",
   "withheld": [
     {

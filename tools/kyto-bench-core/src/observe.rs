@@ -211,7 +211,7 @@ impl<'a> Matcher<'a> {
     /// while it has not appeared.
     pub fn deadline(&self) -> Option<u64> {
         let (at_ns, _) = self.waiting?;
-        let step = &self.entry.steps[self.seen.steps.len() - 1];
+        let step = &self.entry.steps()[self.seen.steps.len() - 1];
         Some(at_ns.saturating_add(step.timeout_ms.saturating_mul(1_000_000)))
     }
 
@@ -220,7 +220,7 @@ impl<'a> Matcher<'a> {
     pub fn ended(&self) -> bool {
         let steps = &self.seen.steps;
         self.end_seen
-            && steps.len() == self.entry.steps.len()
+            && steps.len() == self.entry.steps().len()
             && steps.iter().all(|step| step.response_line.is_some())
     }
 
@@ -362,7 +362,7 @@ impl<'a> Matcher<'a> {
     /// Takes a line as the response of the step that waits for one, then as
     /// the trigger of the next step.
     fn step(&mut self, line: &Line) {
-        let steps = &self.entry.steps;
+        let steps = self.entry.steps();
         if let (Some((_, received)), Some(seen)) = (self.waiting, self.seen.steps.last_mut())
             && line.offset >= received
             && steps[seen.step].expect.is_match(&line.content)

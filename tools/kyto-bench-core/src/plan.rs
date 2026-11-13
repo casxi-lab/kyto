@@ -59,10 +59,9 @@ pub struct Entry {
     pub reference: Option<String>,
     /// The directory of the payload's source files, below the payload root.
     pub payload_dir: PayloadName,
-    /// The payload files with their digests; empty when `payload_pin` names
-    /// a pinned set of the instance instead.
-    #[serde(default)]
-    pub payload: Vec<PinnedFile>,
+    /// The payload files with their digests, or `None` when `payload_pin`
+    /// names a pinned set of the instance instead; see [`Entry::files`].
+    pub payload: Option<Vec<PinnedFile>>,
     pub payload_pin: Option<String>,
     pub cold_boots: u32,
     pub boot_timeout_ms: u64,
@@ -83,8 +82,8 @@ pub struct Entry {
     pub forbid: Vec<Forbid>,
     #[serde(default)]
     pub before_first_send: Vec<String>,
-    #[serde(default)]
-    pub steps: Vec<Step>,
+    /// `None` when the entry has no steps; see [`Entry::steps`].
+    pub steps: Option<Vec<Step>>,
     /// `false` when the entry has no steps.
     pub sends: Option<bool>,
     #[serde(default)]
@@ -310,12 +309,17 @@ impl Entry {
     /// that `payload_pin` names among `pins`.
     pub fn files<'a>(&'a self, pins: &'a [Pin]) -> Option<&'a [PinnedFile]> {
         match &self.payload_pin {
-            None => Some(&self.payload),
+            None => self.payload.as_deref(),
             Some(name) => pins
                 .iter()
                 .find(|pin| &pin.name == name)
                 .map(|pin| &pin.files[..]),
         }
+    }
+
+    /// The steps of the entry, in order.
+    pub fn steps(&self) -> &[Step] {
+        self.steps.as_deref().unwrap_or_default()
     }
 
     /// Every marker the entry refers to, with the key that refers to it.
@@ -334,7 +338,7 @@ impl Entry {
         refs.extend(bounds.map(|marker| ("forbid", marker)));
         let sends = self.before_first_send.iter();
         refs.extend(sends.map(|marker| ("before_first_send", marker)));
-        refs.extend(self.steps.iter().map(|step| ("steps", &step.after)));
+        refs.extend(self.steps().iter().map(|step| ("steps", &step.after)));
         let ends = self
             .segments
             .iter()
@@ -350,21 +354,21 @@ impl Entry {
         let mut expected = self.firmware.values().flat_map(BTreeMap::values);
         check! {
             at("reference") => self.reference.as_deref().is_none_or(is_reference), REFERENCE;
-            at("payload") => self.payload.is_empty() == self.payload_pin.is_some(),
+            at("payload") => matches!((self.payload.as_deref(), &self.payload_pin), (Some([_, ..]), None) | (None, Some(_))),
                 "an entry has either payload files or payload_pin";
             at("payload_pin") => self.payload_pin.as_deref().is_none_or(is_name), NOT_A_NAME;
             at("cold_boots") => (1..=100).contains(&self.cold_boots), "1 to 100 cold boots";
             at("boot_timeout_ms") => ms(self.boot_timeout_ms), TIMEOUT;
             at("max_capture_bytes") => (1..=MAX_CAPTURE_BYTES).contains(&self.max_capture_bytes),
                 "the capture limit is 1 byte to 16 MiB";
-            at("steps") => matches!((self.steps.is_empty(), self.sends), (true, Some(false)) | (false, None)),
+            at("steps") => matches!((self.steps.as_deref(), self.sends), (Some([_, ..]), None) | (None, Some(false))),
                 "an entry has either steps or sends = false";
-            at("before_first_send") => !self.steps.is_empty() || self.before_first_send.is_empty(),
+            at("before_first_send") => self.steps.is_some() || self.before_first_send.is_empty(),
                 "an entry without steps sends nothing";
             at("firmware") => expected.all(|value| is_line_text(value)),
                 "an expected value is a line of text";
         }
-        names::check_distinct(self.payload.iter().map(|file| &file.name))
+        names::check_distinct(self.payload.iter().flatten().map(|file| &file.name))
             .map_err(|error| invalid(at("payload"), error.to_string()))?;
         let mut markers = BTreeSet::new();
         for marker in &self.markers {
@@ -397,7 +401,7 @@ impl Entry {
                     "an order lists at least two distinct markers";
             }
         }
-        for step in &self.steps {
+        for step in self.steps() {
             check! {
                 at("steps") => (1..=MAX_SEND).contains(&step.send.len()), "a step sends 1 to 4096 bytes";
                 at("steps") => ms(step.timeout_ms), TIMEOUT;
@@ -544,8 +548,8 @@ mod tests {
         };
         assert_eq!((firmware_only.cold_boots, echo.cold_boots), (3, 1));
         assert_eq!(firmware_only.sends, Some(false));
-        assert!(firmware_only.steps.is_empty() && echo.sends.is_none());
-        assert_eq!(echo.steps[0].send, "?\r");
+        assert!(firmware_only.steps().is_empty() && echo.sends.is_none());
+        assert_eq!(echo.steps()[0].send, "?\r");
         assert_eq!(echo.max_capture_bytes, DEFAULT_CAPTURE_BYTES);
         assert_eq!(echo.writes, WriteEnables::default());
         assert_eq!(firmware_only.firmware["bootloader"]["date"], "2026/09/25");
@@ -600,7 +604,8 @@ mod tests {
             }
         }
         assert_eq!(checked, files.len());
-        assert_ne!(firmware_only.payload[3].sha256, echo.payload[3].sha256);
+        let kernel = |entry: &Entry| entry.files(&[]).unwrap()[3].sha256.clone();
+        assert_ne!(kernel(firmware_only), kernel(echo));
     }
 
     #[test]
@@ -764,6 +769,17 @@ mod tests {
         assert_eq!(invalid_at(&both, &pins), "entries.firmware-only.payload");
         let neither = text.replace("payload_pin = \"self-test\"\n", "");
         assert_eq!(invalid_at(&neither, &pins), "entries.firmware-only.payload");
+        // An empty list of payload files is written, not left out.
+        let empty = text.replace("payload_pin = \"self-test\"\n", "payload = []\n");
+        assert_eq!(invalid_at(&empty, &pins), "entries.firmware-only.payload");
+        let empty_and_pin = text.replace(
+            "payload_pin = \"self-test\"\n",
+            "payload = []\npayload_pin = \"self-test\"\n",
+        );
+        assert_eq!(
+            invalid_at(&empty_and_pin, &pins),
+            "entries.firmware-only.payload"
+        );
     }
 
     #[test]
@@ -826,6 +842,12 @@ mod tests {
             &[],
         );
         assert_eq!(at, "entries.firmware-only.before_first_send");
+        // An empty list of steps is written, not left out, even beside
+        // sends = false.
+        let at = invalid_at(&edited("sends = false", "steps = []\nsends = false"), &[]);
+        assert_eq!(at, "entries.firmware-only.steps");
+        let at = invalid_at(&edited("sends = false\n", "steps = []\n"), &[]);
+        assert_eq!(at, "entries.firmware-only.steps");
     }
 
     #[test]

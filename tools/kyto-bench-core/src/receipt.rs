@@ -749,7 +749,7 @@ steps = [{ after = "ready", send = "?\r", expect = '^STATS seq=1', timeout_ms = 
             board: &board,
             entry,
             tftp: &parameters.tftp,
-            payload: &entry.payload,
+            payload: entry.files(&[]).unwrap(),
             transcript: SERIAL,
             index: &INDEX,
             sends: &sends,

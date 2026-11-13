@@ -646,6 +646,31 @@ firmware.bootloader = {{ hash = "1accd665", date = "2026/09/25" }}
             fallback.result("boot.fallback", "board.network_boot"),
             Outcome::Fail
         );
+        // A boot mode line of the SD card alone fails both rules.
+        let sd = case(&lines_with(|lines| {
+            lines[3] = "  4.94 Boot mode: SD (01) order f";
+        }));
+        assert_eq!(
+            sd.result("boot.network", "board.network_boot"),
+            Outcome::Fail
+        );
+        assert_eq!(
+            sd.result("boot.fallback", "board.network_boot"),
+            Outcome::Fail
+        );
+        // A boot order that tries the SD card first and then boots from the
+        // network does not fall back.
+        let sd_first = case(&lines_with(|lines| {
+            lines.insert(3, "  4.20 Boot mode: SD (01) order f2")
+        }));
+        assert_eq!(
+            sd_first.result("boot.network", "board.network_boot"),
+            Outcome::Pass
+        );
+        assert_eq!(
+            sd_first.result("boot.fallback", "board.network_boot"),
+            Outcome::Pass
+        );
     }
 
     #[test]
@@ -741,6 +766,10 @@ firmware.bootloader = {{ hash = "1accd665", date = "2026/09/25" }}
             lines.remove(6);
         }));
         assert_eq!(missing.result("marker.order", order), Outcome::Fail);
+        // The order is that of the first line of each marker: a later line
+        // of the bootloader leaves it as it was.
+        let again = case(&lines_with(|lines| lines.push(LINES[1])));
+        assert_eq!(again.result("marker.order", order), Outcome::Pass);
     }
 
     #[test]
@@ -768,20 +797,65 @@ firmware.bootloader = {{ hash = "1accd665", date = "2026/09/25" }}
 
     #[test]
     fn markers_before_the_first_send_end_before_its_first_byte() {
-        let mut case = case(&LINES);
+        let is_send = |kind: &EventKind| matches!(kind, EventKind::Send { .. });
+        let mut sent = case(&LINES);
         assert_eq!(
-            case.result("marker.before_first_send", "ready"),
+            sent.result("marker.before_first_send", "ready"),
             Outcome::Pass
         );
-        case.at(|kind| matches!(kind, EventKind::Send { .. }))
-            .received -= 1;
+        sent.at(is_send).received -= 1;
         assert_eq!(
-            case.result("marker.before_first_send", "ready"),
+            sent.result("marker.before_first_send", "ready"),
             Outcome::Fail
         );
         assert_eq!(
-            case.result("marker.before_first_send", "board.network_boot"),
+            sent.result("marker.before_first_send", "board.network_boot"),
             Outcome::Pass
+        );
+        // A marker that never appeared did not come before the send.
+        let missing = case(&lines_with(|lines| {
+            lines.remove(3);
+        }));
+        assert_eq!(
+            missing.result("marker.before_first_send", "board.network_boot"),
+            Outcome::Fail
+        );
+        // The line of a marker that is the last line ends with the
+        // transcript, after the first byte of a send before that end.
+        let mut last = case(&LINES[..9]);
+        last.at(is_send).received -= 1;
+        assert_eq!(
+            last.result("marker.before_first_send", "ready"),
+            Outcome::Fail
+        );
+        // Only the first send counts: a second step, sent once a second
+        // READY line has appeared, does not make the line of `ready` come
+        // before the first.
+        let lines = lines_with(|lines| lines.extend(["READY", "STATS seq=2"]));
+        let mut two = case(&lines);
+        two.plan = plan(|text| {
+            let steps = "timeout_ms = 1000 }]";
+            assert!(text.contains(steps), "{steps}");
+            let second = "{ after = \"ready\", send = \"!\\r\", expect = '^STATS seq=2', timeout_ms = 1000 }";
+            text.replace(steps, &format!("timeout_ms = 1000 }}, {second}]"))
+        });
+        let received: usize = lines[..11].iter().map(|line| line.len() + 2).sum();
+        let bytes_base64 = Base64(b"!\r".to_vec());
+        let send = EventKind::Send {
+            step: 1,
+            bytes_base64,
+        };
+        let end = two
+            .events
+            .iter()
+            .position(|e| matches!(e.event, EventKind::End { .. }));
+        let send = event(ON + 11 * STEP, received as u64, send);
+        two.events.insert(end.unwrap(), send);
+        assert_eq!(two.result("step.response", "1"), Outcome::Pass);
+        two.at(is_send).received -= 1;
+        assert_eq!(
+            two.result("marker.before_first_send", "ready"),
+            Outcome::Fail
         );
     }
 
@@ -893,15 +967,18 @@ firmware.bootloader = {{ hash = "1accd665", date = "2026/09/25" }}
         let shown = with_bl31(BL31);
         assert_eq!(results(&shown, &same), [pass.clone(), pass.clone()]);
         // The plan alone gives the expected values: another hash or date of
-        // the bootloader, or another BL31 version, fails that line.
+        // the bootloader, or another BL31 version, fails that line, and so
+        // does a BL31 version that the line only starts with.
         let edits = [
             ("hash = \"1accd665\"", "hash = \"0accd665\""),
             ("date = \"2026/09/25\"", "date = \"2026/09/24\""),
             ("-241-g36761b276\" }", "-242-g36761b276\" }"),
+            ("-241-g36761b276\" }", "-241\" }"),
         ];
         let failed = [
             [other(&shown, 1), pass.clone()],
             [other(&shown, 1), pass.clone()],
+            [pass.clone(), other(&shown, 6)],
             [pass.clone(), other(&shown, 6)],
         ];
         for ((from, to), failed) in edits.into_iter().zip(failed) {

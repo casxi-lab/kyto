@@ -1,0 +1,14 @@
+# A run plan with one entry and only the keys that every entry needs: one
+# payload file, one cold boot that ends at its boot timeout, and no step.
+format = "kyto-bench run plan"
+format_version = 1
+board = "raspberry-pi-5"
+
+[[entries]]
+name = "minimal"
+payload_dir = "firmware-only"
+payload = [{ name = "config.txt", sha256 = "950cbaa591e9064fff306370a33222dcb8887049caf5ec76bce9ac81d3f29136" }]
+cold_boots = 1
+boot_timeout_ms = 60000
+end = "timeout"
+sends = false

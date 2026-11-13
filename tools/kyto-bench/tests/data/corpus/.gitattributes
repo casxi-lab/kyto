@@ -1,0 +1,4 @@
+# Console transcripts exactly as the fuzz tests read them, CR LF line
+# endings and bytes that are not UTF-8 included: Git keeps and compares
+# these files as bytes, never as text.
+*.bin binary

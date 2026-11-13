@@ -22,8 +22,8 @@ macro_rules! sources {
 }
 
 /// Every source of the library and of the command, and the test files that
-/// the contract may name. The modules that the crates declare are checked
-/// against this list, so a new module joins it.
+/// the contract may name. The modules that any source of the crates
+/// declares are checked against this list, so a new module joins it.
 const SOURCES: [(&str, &str); 42] = sources![
     "tools/kyto-bench-core/src/board.rs",
     "tools/kyto-bench-core/src/bootloader.rs",
@@ -67,19 +67,6 @@ const SOURCES: [(&str, &str); 42] = sources![
     "tools/kyto-bench/tests/manifest.rs",
     "tools/kyto-bench/tests/release.rs",
     "tools/kyto-bench/tests/run.rs",
-];
-
-/// The files that declare modules, with the directory of those modules.
-const MODULE_LISTS: [(&str, &str); 3] = [
-    (
-        "tools/kyto-bench-core/src/lib.rs",
-        "tools/kyto-bench-core/src/",
-    ),
-    ("tools/kyto-bench/src/lib.rs", "tools/kyto-bench/src/"),
-    (
-        "tools/kyto-bench/src/sim/mod.rs",
-        "tools/kyto-bench/src/sim/",
-    ),
 ];
 
 /// The number of requirements of each prefix, of rows of the requirement
@@ -154,6 +141,33 @@ fn code(source: &str) -> String {
         .filter(|line| !line.trim_start().starts_with("//"))
         .collect();
     code.join("\n")
+}
+
+/// The modules that `code` declares with `mod NAME;`, whatever their
+/// visibility, each with the two files that may hold it: `NAME.rs` and
+/// `NAME/mod.rs` in the directory of the modules of `file`, the directory of
+/// `file` itself for `lib.rs`, `main.rs` and `mod.rs`, and the directory
+/// named after `file` for any other.
+fn declared_modules<'a>(file: &str, code: &'a str) -> Vec<(&'a str, [String; 2])> {
+    let (directory, name) = file.rsplit_once('/').unwrap_or((".", file));
+    let directory = match name {
+        "lib.rs" | "main.rs" | "mod.rs" => format!("{directory}/"),
+        _ => format!("{directory}/{}/", name.trim_end_matches(".rs")),
+    };
+    let declared = code.lines().filter_map(|line| {
+        let line = line.trim();
+        let line = match line.strip_prefix("pub(") {
+            Some(scope) => scope.split_once(')')?.1.trim_start(),
+            None => line.strip_prefix("pub ").unwrap_or(line),
+        };
+        let module = line.strip_prefix("mod ")?.strip_suffix(';')?.trim();
+        let files = [
+            format!("{directory}{module}.rs"),
+            format!("{directory}{module}/mod.rs"),
+        ];
+        Some((module, files))
+    });
+    declared.collect()
 }
 
 /// Whether `text` is a requirement id, two to five capital letters, `-R`
@@ -446,20 +460,14 @@ fn problems(
     let mut problems = Vec::new();
     let source = |file: &str| sources.iter().find(|(path, _)| *path == file).map(|s| s.1);
 
-    // Every module that the crates declare is a source of this test.
-    for (list, directory) in MODULE_LISTS {
-        for line in code(source(list).unwrap_or("")).lines() {
-            let line = line.trim().trim_start_matches("pub ");
-            let Some(module) = line.strip_prefix("mod ").and_then(|m| m.strip_suffix(';')) else {
-                continue;
-            };
-            let files = [
-                format!("{directory}{module}.rs"),
-                format!("{directory}{module}/mod.rs"),
-            ];
+    // Every module that a source of the crates declares, in any of them and
+    // whatever its visibility, is a source of this test.
+    for (file, text) in sources.iter().filter(|(file, _)| file.contains("/src/")) {
+        let code = code(text);
+        for (module, files) in declared_modules(file, &code) {
             if !files.iter().any(|file| source(file).is_some()) {
                 problems.push(format!(
-                    "{list}: the module {module} is not a source of this test"
+                    "{file}: the module {module} is not a source of this test"
                 ));
             }
         }
@@ -724,6 +732,19 @@ fn assert_finds(problems: &[String], found: &str) {
     assert!(any, "{found:?} is not among {problems:#?}");
 }
 
+/// The problems of the pages and the sources when `edit` gives the text of
+/// the source `file`, and the sources `added` join them.
+fn edited(file: &str, edit: impl Fn(&str) -> String, added: &[(&str, &str)]) -> Vec<String> {
+    let text = SOURCES.iter().find(|(path, _)| *path == file).unwrap().1;
+    let edited = edit(text);
+    let pick = |&(path, text): &(&'static str, &'static str)| {
+        (path, if path == file { edited.as_str() } else { text })
+    };
+    let mut sources: Vec<(&str, &str)> = SOURCES.iter().map(pick).collect();
+    sources.extend_from_slice(added);
+    problems(REQUIREMENTS, CONTRACT, FORMATS, &sources)
+}
+
 #[test]
 fn the_contract_lists_every_requirement_and_rule() {
     let none: Vec<String> = Vec::new();
@@ -740,16 +761,17 @@ fn the_contract_lists_every_requirement_and_rule() {
         let edited = CONTRACT.replacen(from, to, 1);
         problems(REQUIREMENTS, &edited, FORMATS, &SOURCES)
     };
+    // A source with its text `from` changed to `to`, and one with an item
+    // put before its text: the checks read every item of the code wherever
+    // it stands.
     let source = |file: &str, from: &str, to: &str| {
-        let text = SOURCES.iter().find(|(path, _)| *path == file).unwrap().1;
-        assert!(text.contains(from), "{from}");
-        let edited = text.replacen(from, to, 1);
-        let pick = |&(path, text): &(&'static str, &'static str)| {
-            (path, if path == file { edited.as_str() } else { text })
+        let edit = |text: &str| {
+            assert!(text.contains(from), "{from}");
+            text.replacen(from, to, 1)
         };
-        let sources: Vec<(&str, &str)> = SOURCES.iter().map(pick).collect();
-        problems(REQUIREMENTS, CONTRACT, FORMATS, &sources)
+        edited(file, edit, &[])
     };
+    let prepend = |file: &str, item: &str| edited(file, |text| format!("{item}{text}"), &[]);
     // A heading that is not an id, ids with a gap or out of order, and a
     // prefix with a requirement more or less, its last one removed with its
     // rows.
@@ -887,8 +909,7 @@ fn the_contract_lists_every_requirement_and_rule() {
     // A rule that the code names under another name or with another result,
     // in a module that names no other, through a helper that the test does
     // not know or with braces; a rule that is not a literal; a helper that
-    // is gone; a rule of evidence that is gone or not read; and a module
-    // that is not a source.
+    // is gone; and a rule of evidence that is gone or not read.
     let verdict = "tools/kyto-bench-core/src/verdict.rs";
     let found = source(verdict, "\"identity.disagree\"", "\"identity.split\"");
     assert_finds(&found, "the rule names lack identity.split");
@@ -897,29 +918,27 @@ fn the_contract_lists_every_requirement_and_rule() {
     let found = source(payload, "Outcome::Fault,\n", "Outcome::Fail,\n");
     assert_finds(&found, "the code gives payload.served_digest");
     let rejudge = "tools/kyto-bench-core/src/rejudge.rs";
-    let start = "pub fn rejudge(receipt: &Receipt) -> Result<Receipt, ReceiptError> {\n";
-    let extra =
-        "    let _ = crate::receipt::Check::new(\"rejudge.extra\", \"x\", Outcome::Fault, None);\n";
-    let found = source(rejudge, start, &format!("{start}{extra}"));
-    assert_finds(&found, "the rule names lack rejudge.extra");
-    let at = "    /// The position among the lines";
-    let flag = "    fn flag(&mut self, rule: &str) {\n        \
-        self.checks.push(Check::new(rule, \"x\", Outcome::Fail, None));\n    }\n\n";
-    let found = source(verdict, at, &format!("{flag}{at}"));
-    assert_finds(&found, "verdict.rs passes a rule on 2 times, not 1");
+    let extra = "fn extra() -> Check {\n    Check::new(\"rejudge.extra\", \"x\", Outcome::Fault, None)\n}\n\n";
+    assert_finds(
+        &prepend(rejudge, extra),
+        "the rule names lack rejudge.extra",
+    );
     let flag =
-        "    fn flag(&mut self, rule: &str) {\n        self.fail(rule, \"x\", None);\n    }\n\n";
-    let found = source(verdict, at, &format!("{flag}{at}"));
+        "fn flag(rule: &str) -> Check {\n    Check::new(rule, \"x\", Outcome::Fail, None)\n}\n\n";
+    let found = prepend(verdict, flag);
+    assert_finds(&found, "verdict.rs passes a rule on 2 times, not 1");
+    let flag = "fn flag(judging: &mut Judging, rule: &str) {\n    \
+        judging.fail(rule, \"x\", None);\n}\n\n";
+    let found = prepend(verdict, flag);
     assert_finds(&found, "verdict.rs passes a rule on 2 times, not 1");
     let assemble = "tools/kyto-bench/src/assemble.rs";
-    let at = "pub fn finish(";
     let forged =
         "fn forged() -> Reason {\n    Reason { detail: String::new(), rule: \"x\".into() }\n}\n\n";
-    let found = source(assemble, at, &format!("{forged}{at}"));
+    let found = prepend(assemble, forged);
     assert_finds(&found, "assemble.rs: a Reason is built with braces");
     let forged =
         "fn forged(rule: String) -> Reason {\n    Reason { rule, detail: String::new() }\n}\n\n";
-    let found = source(assemble, at, &format!("{forged}{at}"));
+    let found = prepend(assemble, forged);
     assert_finds(&found, "assemble.rs passes a rule on 1 times, not 0");
     let power = "tools/kyto-bench-core/src/power.rs";
     let found = source(power, "fault(\"power.order\"", "fault(order_rule");
@@ -938,9 +957,32 @@ fn the_contract_lists_every_requirement_and_rule() {
         &found,
         "evidence::eligibility does not name evidence.simulated",
     );
+    // A module declared in a crate root or in any other source, whatever its
+    // visibility, and one whose file is a source of the test.
     let core = "tools/kyto-bench-core/src/lib.rs";
-    let found = source(core, "pub mod write;", "pub mod write;\npub mod extra;");
-    assert_finds(&found, "the module extra is not a source of this test");
+    for module in [
+        "pub mod extra;\n",
+        "pub(crate) mod extra;\n",
+        "mod extra;\n",
+    ] {
+        assert_finds(
+            &prepend(core, module),
+            "kyto-bench-core/src/lib.rs: the module extra is not a source",
+        );
+    }
+    let sim = "tools/kyto-bench/src/sim/mod.rs";
+    let found = prepend(sim, "pub(in crate::sim) mod extra;\n");
+    assert_finds(&found, "sim/mod.rs: the module extra is not a source");
+    let found = prepend(verdict, "mod helpers;\n");
+    assert_finds(&found, "verdict.rs: the module helpers is not a source");
+    let found = prepend(power, "pub(super) mod helpers;\n");
+    assert_finds(&found, "power.rs: the module helpers is not a source");
+    let helpers = [("tools/kyto-bench-core/src/verdict/helpers.rs", "")];
+    let found = edited(verdict, |text| format!("mod helpers;\n{text}"), &helpers);
+    assert_eq!(found, none);
+    let helpers = [("tools/kyto-bench/src/sim/helpers/mod.rs", "")];
+    let found = edited(sim, |text| format!("mod helpers;\n{text}"), &helpers);
+    assert_eq!(found, none);
     // An entry point or a caller that is not defined or is of another
     // crate, and a requirement there that is not one.
     let found = contract("| `run::check_sources`;", "| `run::check_source`;");

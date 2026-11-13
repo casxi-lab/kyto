@@ -181,7 +181,8 @@ boot is not powered.
   [requirements page](requirements.md), this page, the
   [formats page](formats.md), every source of `kyto-bench-core` and
   `kyto-bench` and the files of their tests, and checks that:
-  - every module that the crates declare is among those sources;
+  - every module that a source of either crate declares with `mod`,
+    whatever its visibility, is among those sources;
   - every level-three heading of the requirements page is a requirement id,
     two to five capital letters, `-R` and two digits, the ids of each prefix
     run from `R01` in order without a gap, and each prefix has the number of

@@ -393,35 +393,36 @@ properties = [
 
 # Lines that hold the board's serial number, MAC addresses, IP addresses and
 # the SD card identifier. The bytes of each named group are replaced in a
-# public receipt. These forms cover static addressing.
+# public receipt. These forms cover static addressing. They are not
+# anchored, so a stray byte beside a line keeps no line from its form.
 [[sensitive]]
 name = "board-serial"
-line = '^ *[0-9]+\.[0-9]+ BOOTMODE: .* serial (?P<serial>[0-9a-f]+) boardrev '
+line = 'BOOTMODE: .*? serial (?P<serial>[0-9a-f]+)'
 example = '  4.37 BOOTMODE: 0x06 partition 0 build-ts BUILD_TIMESTAMP=1790351949 serial fedc9876 boardrev d04171 stc 4378801'
 
 [[sensitive]]
 name = "network-link"
-line = '^ *[0-9]+\.[0-9]+ NETWORK: (?P<mac>[0-9a-f]{2}(?::[0-9a-f]{2}){5}) wait for link TFTP: (?P<server>[0-9.]+)$'
+line = 'NETWORK: (?P<mac>[0-9a-f]{2}(?::[0-9a-f]{2}){5}) wait for link TFTP: (?P<server>[0-9.]+)'
 example = '  5.51 NETWORK: 00:00:5e:00:53:a1 wait for link TFTP: 192.0.2.50'
 
 [[sensitive]]
 name = "network-addresses"
-line = '^ *[0-9]+\.[0-9]+ NET (?P<client>[0-9.]+) [0-9.]+ gw (?P<gateway>[0-9.]+) tftp (?P<server>[0-9.]+)$'
+line = 'NET (?P<client>[0-9.]+) [0-9.]+ gw (?P<gateway>[0-9.]+) tftp (?P<server>[0-9.]+)'
 example = '  7.97 NET 192.0.2.60 255.255.255.0 gw 192.0.2.70 tftp 192.0.2.50'
 
 [[sensitive]]
 name = "arp"
-line = '^ *[0-9]+\.[0-9]+ ARP (?P<address>[0-9.]+) (?P<mac>[0-9a-f]{2}(?::[0-9a-f]{2}){5})$'
+line = 'ARP (?P<address>[0-9.]+) (?P<mac>[0-9a-f]{2}(?::[0-9a-f]{2}){5})'
 example = ' 16.18 ARP 192.0.2.50 00:00:5e:00:53:a2'
 
 [[sensitive]]
 name = "tftp-request"
-line = '^ *[0-9]+\.[0-9]+ TFTP_GET: (?P<mac>[0-9a-f]{2}(?::[0-9a-f]{2}){5}) (?P<server>[0-9.]+) '
+line = 'TFTP_GET: (?P<mac>[0-9a-f]{2}(?::[0-9a-f]{2}){5}) (?P<server>[0-9.]+)'
 example = ' 16.75 TFTP_GET: 00:00:5e:00:53:a2 192.0.2.50 bench/config.txt'
 
 [[sensitive]]
 name = "sd-card-id"
-line = '^CID: (?P<cid>[0-9a-f]{32})$'
+line = 'CID: (?P<cid>[0-9a-f]{32})'
 example = 'CID: 00112233445566778899aabbccddeeff'
 
 # 0.0.0.0 stands for no address, such as a gateway the network does not have.

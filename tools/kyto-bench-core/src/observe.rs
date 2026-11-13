@@ -287,7 +287,7 @@ impl<'a> Matcher<'a> {
             self.marker_ends.push(after);
         }
         for version in &board.firmware_versions {
-            if let Some(groups) = version.form.pattern.named_groups(text) {
+            if let Some(groups) = version.form.pattern.matches(text).into_iter().next() {
                 let groups = groups.into_iter();
                 let groups = groups.map(|(group, span)| (group.into(), lossy(&text[span])));
                 let (name, groups) = (version.name.clone(), groups.collect());
@@ -466,31 +466,26 @@ pub fn boot_files(board: &Board, reads: &[ReadSeen], payload: &[PinnedFile]) -> 
 }
 
 /// The spans of `stream` that the named groups of the sensitive lines of
-/// `board` hold, each with its rule `board.<name>` and its bytes; empty
-/// spans and values that the board never hides are left out. Each piece of
-/// the stream between LF and CR bytes is matched without the bytes before
-/// its first printable byte and after its last graphic one, so that neither
-/// a lost LF nor a stray byte keeps a line from its form.
-pub fn sensitive_values(board: &Board, stream: &[u8]) -> Vec<(Range<usize>, String, Vec<u8>)> {
+/// each of `boards` hold, each with its rule `board.<name>` and its bytes;
+/// empty spans and values that the board never hides are left out. Every
+/// match of a form in each piece of the stream between LF and CR bytes
+/// counts, wherever it starts.
+pub fn sensitive_values(boards: &[Board], stream: &[u8]) -> Vec<(Range<usize>, String, Vec<u8>)> {
     let (mut found, mut start) = (Vec::new(), 0);
     for piece in stream.split(|byte| matches!(byte, b'\n' | b'\r')) {
-        let skip = piece
-            .iter()
-            .take_while(|byte| !(b' '..=b'~').contains(*byte));
-        let skip = skip.count();
-        let end = piece.iter().rposition(u8::is_ascii_graphic);
-        let (line, at) = (&piece[skip..end.map_or(skip, |end| end + 1)], start + skip);
-        start += piece.len() + 1;
-        for sensitive in &board.sensitive {
-            let groups = sensitive.form.pattern.named_groups(line);
-            for (_, span) in groups.into_iter().flatten() {
-                let value = &line[span.clone()];
-                if !value.is_empty() && !board.never.iter().any(|never| never.as_bytes() == value) {
-                    let rule = format!("board.{}", sensitive.name);
-                    found.push((at + span.start..at + span.end, rule, value.to_vec()));
+        for board in boards {
+            let never = |value: &[u8]| board.never.iter().any(|never| never.as_bytes() == value);
+            for sensitive in &board.sensitive {
+                for (_, span) in sensitive.form.pattern.matches(piece).into_iter().flatten() {
+                    let value = &piece[span.clone()];
+                    if !value.is_empty() && !never(value) {
+                        let rule = format!("board.{}", sensitive.name);
+                        found.push((start + span.start..start + span.end, rule, value.to_vec()));
+                    }
                 }
             }
         }
+        start += piece.len() + 1;
     }
     found
 }

@@ -307,6 +307,12 @@ values that a record of a run published from a bench must not show.
 values, even where a sensitive line holds them, such as `0.0.0.0` for an
 address that is not set.
 
+The `line` of a sensitive line is not anchored: it starts with no `^` and
+ends with no `$`. A [public version](#values-to-hide-in-a-receipt) searches
+for every match of it anywhere in the streams that a receipt records, so a
+stray byte before or after a line, or two lines run together, keep no line
+from its form.
+
 ### The Raspberry Pi 5
 
 The description of the Raspberry Pi 5 is
@@ -373,7 +379,8 @@ each value. In short:
   network link; the client, gateway and server addresses in the `NET` line;
   the address and MAC address in `ARP` lines; the MAC address and the server
   in `TFTP_GET` lines; and the SD card identifier in the `CID:` line. These
-  forms cover static addressing. `0.0.0.0` is never a value to hide.
+  forms cover static addressing, and each starts at the word that names its
+  line, such as `BOOTMODE:`. `0.0.0.0` is never a value to hide.
 - **Example values.** The examples hold no value of a real board: the serial
   number `fedc9876` is made up, the MAC addresses `00:00:5e:00:53:a1` and
   `00:00:5e:00:53:a2` and the IPv4 addresses of `192.0.2.0/24` are reserved
@@ -1200,7 +1207,8 @@ A public version holds a receipt with every value that identifies the board,
 the network or the bench replaced by `#`, byte for byte, and lists what was
 replaced, so that the record of a run can be published from a bench. The
 library makes it from the receipt, with the sensitive lines of the board
-description that the receipt records, and the
+description that the receipt records and of the description of the same `id`
+built into the tool, and the
 [values to hide](#values-to-hide) of the instance configuration, and gives it
 only when the [leak check](#the-leak-check) finds none of those values in it.
 It is written in the form of a receipt and
@@ -1223,7 +1231,7 @@ its public version, with the receipt digest shortened here, starts like this:
 {
   "format": "kyto-bench public receipt",
   "format_version": 1,
-  "receipt_sha256": "601cc708...",
+  "receipt_sha256": "a78c47f0...",
   "placeholder": "#",
   "withheld": [
     {
@@ -1299,14 +1307,16 @@ A public version must not show these values, each found under its rule:
 
 - every hit: each recorded stream, the console output of a cold boot or the
   bytes of a `send` event, is decoded and cut into pieces at every LF and
-  every CR; each piece, without the bytes before its first printable ASCII
-  byte and after its last ASCII byte that is neither a space nor a control
-  character, is matched with the [sensitive lines](#sensitive-lines) of the
-  board description that the receipt records; and the bytes of each named
-  group of the first match of each form are a hit of the rule
-  `board.<name>`, unless they are empty or one of the `never` values of
-  `[deidentify]`. A CR left where an LF was lost, or a stray byte at either
-  end of a line, thus keeps no line from its form;
+  every CR; each piece is searched for every match of each
+  [sensitive line](#sensitive-lines) of the board description that the
+  receipt records, and of the description of the same `id` built into the
+  tool when it differs, wherever the match starts, each match after the end
+  of the one before; and the bytes of each named group of each match are a
+  hit of the rule `board.<name>`, unless they are empty or one of the
+  `never` values of the description whose line matched. A CR left where an
+  LF was lost, a stray byte before or after a line, and two lines run
+  together thus keep no line from its form, and a recorded description that
+  lacks a form of the built-in one hides no less;
 - the TFTP server address and path prefix of
   `inputs.instance.parameters.tftp`;
 - the `relay` of each `power` event, under the rule
@@ -1364,8 +1374,9 @@ Before the library gives a public version, it checks that:
 - no value to hide of at least 4 bytes, the nonce included, occurs, ignoring
   ASCII case, in any string of its receipt or in the decoded bytes of its
   streams, the recorded texts and the digests included;
-- the sensitive lines of the board description that it records, matched
-  again in its streams, hold nothing but `#`;
+- the sensitive lines of the board description that it records, and of the
+  description of the same `id` built into the tool, matched again in its
+  streams, hold nothing but `#`;
 - every `relay`, and the unterminated last line of the console output of
   each cold boot, hold nothing but `#`;
 - no segment of `observations.segments` covers a replaced byte of its cold

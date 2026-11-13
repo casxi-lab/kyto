@@ -1,8 +1,6 @@
-//! Public versions of receipts: the receipt with every value that
-//! identifies the board, the network or the bench replaced by `#` of equal
-//! length, and a list of what was replaced and why (`docs/bench/formats.md`,
-//! public versions). [`public_version`] makes one and checks it with
-//! [`verify`], which finds any value that remains.
+//! Public versions of receipts (`docs/bench/formats.md`, public versions):
+//! [`public_version`] replaces every value to hide by `#` of equal length,
+//! lists what it replaced, and checks the result with [`verify`].
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::ops::Range;
@@ -12,7 +10,7 @@ use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::board::Board;
+use crate::board::{Board, EMBEDDED};
 use crate::digest::Sha256;
 use crate::document::check;
 use crate::instance::{InstanceValue, MIN_SEARCHED_LEN};
@@ -38,8 +36,7 @@ pub const UNTERMINATED_RULE: &str = "console.unterminated_line";
 /// The rule of a segment whose digest covers replaced bytes.
 pub const SEGMENT_RULE: &str = "segment.covers_hidden";
 
-/// The rule of a receipt with more values to hide, or more bytes of them,
-/// than a public version searches for.
+/// The rule of a receipt with more values to hide than a public version searches for.
 pub const LIMIT_RULE: &str = "public.values_limit";
 
 /// The rule of a public version that [`PublicReceipt::check`] refuses, or
@@ -86,8 +83,7 @@ impl Secret {
     }
 }
 
-/// A field that a public version always withholds, by its JSON pointer in
-/// the receipt.
+/// A field that a public version always withholds, by its JSON pointer.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Withheld {
@@ -204,20 +200,21 @@ impl PublicReceipt {
 /// [`MAX_VALUE_BYTES`], the error is a leak of [`LIMIT_RULE`] at the whole
 /// receipt.
 pub fn secrets(receipt: &Receipt, instance: &[InstanceValue]) -> Result<Vec<Secret>, Vec<Leak>> {
-    let board = recorded_board(receipt)?;
+    let boards = boards_of(&receipt.inputs.board_description.text)?;
     let mut found = BTreeSet::new();
     let mut add = |rule: &str, value: &[u8]| {
         if value.len() >= MIN_SEARCHED_LEN && found.len() <= MAX_VALUES {
             found.insert(Secret::new(rule, value));
         }
     };
-    walk(&mut json(receipt), "", &mut |at, text| {
+    let mut value = serde_json::to_value(receipt).expect("a receipt is JSON");
+    walk(&mut value, "", &mut |at, text| {
         let tftp = WITHHELD[1..].iter().filter(|(field, _)| *field == at);
         let relay = (key(at) == "relay").then_some(RELAY_RULE);
         for rule in tftp.map(|(_, rule)| *rule).chain(relay) {
             add(rule, text.as_bytes());
         }
-        for (_, rule, value) in sensitive_values(&board, &decoded(at, text).unwrap_or_default()) {
+        for (_, rule, value) in sensitive_values(&boards, &decoded(at, text).unwrap_or_default()) {
             add(&rule, &value);
         }
     });
@@ -233,16 +230,16 @@ pub fn secrets(receipt: &Receipt, instance: &[InstanceValue]) -> Result<Vec<Secr
 }
 
 /// Makes the public version of `receipt`, whose instance values are
-/// `instance`, with the sensitive lines of its recorded board description,
-/// as `docs/bench/formats.md` describes, and checks it with [`verify`]; the
-/// leaks are the error.
+/// `instance`, as `docs/bench/formats.md` describes, and checks it with
+/// [`verify`]; the leaks are the error.
 pub fn public_version(
     receipt: &Receipt,
     instance: &[InstanceValue],
 ) -> Result<PublicReceipt, Vec<Leak>> {
-    let (board, secrets) = (recorded_board(receipt)?, secrets(receipt, instance)?);
+    let boards = boards_of(&receipt.inputs.board_description.text)?;
+    let secrets = secrets(receipt, instance)?;
     let finder = Finder::new(&secrets[..secrets.len() - 1]);
-    let mut value = json(receipt);
+    let mut value = serde_json::to_value(receipt).expect("a receipt is JSON");
     let withheld = withheld(&value);
     for w in &withheld {
         *value.pointer_mut(&w.field).expect("a withheld field") = placeholders(w.length).into();
@@ -256,7 +253,7 @@ pub fn public_version(
         let mut bytes = stream.clone().unwrap_or_else(|| text.as_bytes().to_vec());
         let mut spans = finder.find(&bytes);
         spans.extend((key(at) == "relay").then(|| (0..bytes.len(), rule(RELAY_RULE))));
-        let hits = sensitive_values(&board, stream.as_deref().unwrap_or_default());
+        let hits = sensitive_values(&boards, stream.as_deref().unwrap_or_default());
         spans.extend(hits.into_iter().map(|(span, name, _)| (span, rule(&name))));
         let open = unterminated(at, &bytes);
         spans.extend(open.map(|span| (span, rule(UNTERMINATED_RULE))));
@@ -303,15 +300,15 @@ pub fn verify(public: &PublicReceipt, secrets: &[Secret]) -> Result<(), Vec<Leak
         leaks.insert(Leak::new(FORM_RULE, &at));
     }
     let text = public.receipt.pointer(BOARD_TEXT).and_then(Value::as_str);
-    let board = text.and_then(|text| Board::parse(text).ok());
+    let boards = boards_of(text.unwrap_or_default()).unwrap_or_default();
     let finder = Finder::new(secrets);
     walk(&mut public.receipt.clone(), "", &mut |at, text| {
         let stream = decoded(at, text);
         let bytes = stream.as_deref().unwrap_or(text.as_bytes());
         let found = finder.find(bytes).into_iter().flat_map(|(_, rules)| rules);
         let mut rules: BTreeSet<String> = found.collect();
-        if let (Some(_), Some(board)) = (&stream, &board) {
-            let held = sensitive_values(board, bytes).into_iter();
+        if stream.is_some() {
+            let held = sensitive_values(&boards, bytes).into_iter();
             rules.extend(held.filter(|hit| !is_placeholders(&hit.2)).map(|hit| hit.1));
         }
         let open = unterminated(at, bytes).is_some_and(|span| !is_placeholders(&bytes[span]));
@@ -325,11 +322,15 @@ pub fn verify(public: &PublicReceipt, secrets: &[Secret]) -> Result<(), Vec<Leak
     leaks.is_empty().then_some(()).ok_or(leaks)
 }
 
-/// The recorded board description of `receipt`; one that cannot be read is
-/// a leak of [`FORM_RULE`] at its field.
-fn recorded_board(receipt: &Receipt) -> Result<Board, Vec<Leak>> {
-    let text = &receipt.inputs.board_description.text;
-    Board::parse(text).map_err(|_| vec![Leak::new(FORM_RULE, BOARD_TEXT)])
+/// The board description recorded as `text` and the built-in one of its
+/// id, when they differ, whose sensitive lines are both used; one recorded
+/// that cannot be read is a leak of [`FORM_RULE`] at its field.
+fn boards_of(text: &str) -> Result<Vec<Board>, Vec<Leak>> {
+    let recorded = Board::parse(text).map_err(|_| vec![Leak::new(FORM_RULE, BOARD_TEXT)])?;
+    let built_in = EMBEDDED.iter().filter(|built_in| **built_in != text);
+    let built_in = built_in.filter_map(|text| Board::parse(text).ok());
+    let same: Vec<Board> = built_in.filter(|board| board.id == recorded.id).collect();
+    Ok([recorded].into_iter().chain(same).collect())
 }
 
 /// The fields of [`WITHHELD`] that `value` holds as strings that are not
@@ -351,10 +352,6 @@ fn withheld(value: &Value) -> Vec<Withheld> {
 /// text, a digest nor a field always withheld.
 fn rewritten(at: &str) -> bool {
     !(TEXTS.contains(&at) || is_digest(at) || WITHHELD.iter().any(|(field, _)| *field == at))
-}
-
-fn json(receipt: &Receipt) -> Value {
-    serde_json::to_value(receipt).expect("a receipt is JSON")
 }
 
 /// The unterminated last line of the bytes of the field at `at` when it is
@@ -592,6 +589,11 @@ mod tests {
             public.receipt_sha256,
             Sha256::of(receipt.render().as_bytes())
         );
+        // The formats page shows this public version, its digest shortened.
+        let page = include_str!("../../../docs/bench/formats.md");
+        let digest = public.receipt_sha256.to_string();
+        let shown = format!("\n  \"receipt_sha256\": \"{}...\",\n", &digest[..8]);
+        assert!(page.contains(&shown), "{digest}");
         let text = public.render();
         assert!(text.starts_with("{\n  \"format\": \"kyto-bench public receipt\",\n  \"format_version\": 1,\n  \"receipt_sha256\": "));
         assert!(text.contains("\n  \"placeholder\": \"#\",\n"), "{text}");
@@ -886,30 +888,34 @@ mod tests {
     #[test]
     fn a_capture_cut_short_hides_its_last_line() {
         let at = "/entries/0/cold_boots/0/serial/bytes_base64";
-        let cut: [&[u8]; 2] = [
-            b"READY\r\n  4.37 BOOTMODE: 0x06 partition 0 serial 1234abcd boardr",
-            b"READY\r\n  5.51 NETWORK: 00:00:5e:00:53:01 wait for link ",
+        let cut: [(&[u8], &[&str]); 3] = [
+            // The form of the serial number's line matches before the cut.
+            (
+                b"READY\r\n  4.37 BOOTMODE: 0x06 partition 0 serial 1234abcd boardr",
+                &["board.board-serial"],
+            ),
+            (b"READY\r\n  4.37 BOOTMODE: 0x06 partition 0 seri", &[]),
+            (
+                b"READY\r\n  5.51 NETWORK: 00:00:5e:00:53:01 wait for link ",
+                &[],
+            ),
         ];
-        for bytes in cut {
+        for (bytes, forms) in cut {
             let public = public(&with_serial(bytes)).unwrap();
             let rest = bytes.len() - 7;
-            assert_eq!(
-                public.replacements,
-                [replacement(at, 7, rest, &[UNTERMINATED_RULE])]
-            );
+            let rules = [forms, &[UNTERMINATED_RULE]].concat();
+            assert_eq!(public.replacements, [replacement(at, 7, rest, &rules)]);
             assert_eq!(
                 serial_of(&public),
                 [&b"READY\r\n"[..], &vec![b'#'; rest]].concat()
             );
-            // The line put back is a leak, though no form matches it.
+            // The line put back is a leak, whether a form matches it or not.
             let mut leaked = public.clone();
             *leaked.receipt.pointer_mut(at).unwrap() = STANDARD.encode(bytes).into();
             leaked.replacements.clear();
             let secrets = secrets(&with_serial(bytes), &values()).unwrap();
-            assert_eq!(
-                verify(&leaked, &secrets),
-                Err(vec![leak(UNTERMINATED_RULE, at)])
-            );
+            let found = rules.iter().map(|rule| leak(rule, at)).collect();
+            assert_eq!(verify(&leaked, &secrets), Err(found));
         }
     }
 
@@ -1074,6 +1080,42 @@ mod tests {
     }
 
     #[test]
+    fn a_printable_stray_byte_or_lines_run_together_keep_no_value_in_place() {
+        let bootmode = |serial: &str| {
+            format!(
+                "  4.37 BOOTMODE: 0x06 partition 0 build-ts BUILD_TIMESTAMP=1 serial {serial} boardrev d04171 stc 1"
+            )
+        };
+        let network = |mac: &str| format!("  5.51 NETWORK: {mac} wait for link TFTP: 192.0.2.10");
+        let (mac, other) = ("00:00:5e:00:53:01", "00:00:5e:00:53:02");
+        let inputs = [
+            format!("~{}\r\n", bootmode("1234abcd")),
+            format!("{}x\r\n", network(mac)),
+            format!("  4.30 PM_RSTS: 0x00001000U{}\r\n", bootmode("1234abcd")),
+            format!("{}U{}\r\n", bootmode("1234abcd"), bootmode("5678ef01")),
+            format!("{}U{}\r\n", network(mac), network(other)),
+        ];
+        let at = "/entries/0/cold_boots/0/serial/bytes_base64";
+        for input in inputs {
+            let public = public(&with_serial(input.as_bytes())).unwrap();
+            let serial = serial_of(&public);
+            for value in ["1234abcd", "5678ef01", mac, other] {
+                let value = value.as_bytes();
+                let found = serial.windows(value.len()).any(|w| w == value);
+                assert!(!found, "{input:?}");
+            }
+            // Put back with no record of its replacements, the line is a leak
+            // even to a check given no value to search for.
+            let mut leaked = public.clone();
+            *leaked.receipt.pointer_mut(at).unwrap() = STANDARD.encode(&input).into();
+            leaked.replacements.retain(|r| r.field != at);
+            let leaks = verify(&leaked, &[]).unwrap_err();
+            let board = |leak: &Leak| leak.field == at && leak.rule.starts_with("board.");
+            assert!(!leaks.is_empty() && leaks.iter().all(board), "{leaks:?}");
+        }
+    }
+
+    #[test]
     fn values_are_found_ignoring_ascii_case() {
         let kernel = b"[    1.04] eth0: MAC address 00:00:5E:00:53:01\r\n";
         let bytes = [NETWORK, &kernel[..]].concat();
@@ -1135,6 +1177,21 @@ mod tests {
         receipt.inputs.board_description.text = text;
         let public = public(&receipt).unwrap();
         assert!(!serial_of(&public).windows(8).any(|w| w == b"1234abcd"));
+        // A recorded description without a form of the built-in one of its id
+        // hides no less, since the built-in forms are used too.
+        let block = "[[sensitive]]\nname = \"board-serial\"\n";
+        let start = RASPBERRY_PI_5.find(block).unwrap();
+        let end = start + RASPBERRY_PI_5[start..].find("\n\n").unwrap() + 2;
+        let stripped = format!("{}{}", &RASPBERRY_PI_5[..start], &RASPBERRY_PI_5[end..]);
+        assert_eq!(Board::parse(&stripped).unwrap().sensitive.len(), 5);
+        let mut stripped_receipt = with_serial(NETWORK);
+        let recorded = &mut stripped_receipt.inputs.board_description;
+        (recorded.sha256, recorded.text) = (Sha256::of(stripped.as_bytes()), stripped);
+        Receipt::parse(stripped_receipt.render().as_bytes()).unwrap();
+        let hidden = self::public(&stripped_receipt).unwrap();
+        let built_in = self::public(&with_serial(NETWORK)).unwrap();
+        assert_eq!(hidden.replacements, built_in.replacements);
+        assert!(!serial_of(&hidden).windows(8).any(|w| w == b"1234abcd"));
         // A recorded description that cannot be read gives no public version.
         receipt.inputs.board_description.text = "board".into();
         let field = "/inputs/board_description/text";
@@ -1317,16 +1374,20 @@ mod tests {
         };
         seen.segments.push(segment);
         let mut found = BTreeMap::new();
-        walk(&mut json(&receipt), "", &mut |at, _| {
-            let steps = at.split('/').map(|step| {
-                if step.parse::<usize>().is_ok() {
-                    "*"
-                } else {
-                    step
-                }
-            });
-            found.insert(steps.collect::<Vec<_>>().join("/"), kind(at));
-        });
+        walk(
+            &mut serde_json::to_value(&receipt).unwrap(),
+            "",
+            &mut |at, _| {
+                let steps = at.split('/').map(|step| {
+                    if step.parse::<usize>().is_ok() {
+                        "*"
+                    } else {
+                        step
+                    }
+                });
+                found.insert(steps.collect::<Vec<_>>().join("/"), kind(at));
+            },
+        );
         let events = |at: &str| {
             [
                 ("event", "plain"),

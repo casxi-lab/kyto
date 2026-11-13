@@ -484,6 +484,7 @@ impl Builder {
         for line in raw {
             let at = format!("{list}.{}", line.name);
             let form = line_form(&at, line.line, line.example, &[])?;
+            let source = form.pattern.as_str();
             check! {
                 &at => is_name(&line.name), NOT_A_NAME;
                 &at => !lines.iter().any(|known| known.name == line.name), "the name is used twice";
@@ -491,6 +492,8 @@ impl Builder {
                     "the pattern has at least one named group";
                 &at => list == "firmware_versions" || line.sources.is_none(),
                     "only firmware version lines cite sources";
+                &at => list != "sensitive" || !(source.starts_with('^') || source.ends_with('$')),
+                    "a sensitive line is not anchored with ^ or $";
             }
             let sources = line.sources.unwrap_or_default();
             self.cite(&at, &sources)?;
@@ -1564,6 +1567,36 @@ mod tests {
         assert_eq!(
             Board::parse(&many).unwrap_err(),
             invalid("sensitive", "a list or table has at most 100 items")
+        );
+    }
+
+    #[test]
+    fn a_sensitive_line_is_not_anchored() {
+        let line = "line = 'CID: (?P<cid>[0-9a-f]{32})'";
+        for anchored in [
+            "'^CID: (?P<cid>[0-9a-f]{32})'",
+            "'CID: (?P<cid>[0-9a-f]{32})$'",
+        ] {
+            let text = edited(line, &format!("line = {anchored}"));
+            assert_eq!(
+                Board::parse(&text).unwrap_err(),
+                invalid(
+                    "sensitive.sd-card-id",
+                    "a sensitive line is not anchored with ^ or $"
+                )
+            );
+        }
+        // Other lines may be anchored.
+        let board = pi5();
+        assert!(board.sensitive.iter().all(|line| {
+            let source = line.form.pattern.as_str();
+            !source.starts_with('^') && !source.ends_with('$')
+        }));
+        assert!(
+            board
+                .markers
+                .iter()
+                .any(|marker| marker.form.pattern.as_str().starts_with('^'))
         );
     }
 

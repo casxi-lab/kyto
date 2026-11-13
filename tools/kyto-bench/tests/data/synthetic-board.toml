@@ -106,5 +106,5 @@ payload = ["board-b.dtb"]
 
 [[sensitive]]
 name = "serial"
-line = '^syn serial (?P<serial>[0-9a-f]{8})$'
+line = 'syn serial (?P<serial>[0-9a-f]{8})'
 example = 'syn serial 00c0ffee'

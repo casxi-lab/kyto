@@ -48,7 +48,7 @@ run needs another one. The exit status gives the result:
 | 3 | The run is `"BENCH FAULT"` |
 | 4 | The run was [refused](#refused-runs) before any power command; the receipt says why |
 | 5 | The receipt was written, but not its public version: the [leak check](#the-leak-check) refused it, and the error names the rule and the field of each value found, or it cannot be written, and the error says why. The receipt gives the verdict or the refusal |
-| 101 | The run stopped on an error of the tool itself, a panic. It switched the supply off once more and says on standard error whether readings confirmed it; no receipt is left, and the output directory is removed |
+| 101 | The run stopped on an error of the tool itself, a panic. A panic while the entries ran switched the supply off once more and says on standard error whether readings confirmed it; one before them sent no power command. No receipt is left, and the output directory is removed |
 
 A message or result that cannot be written, as when nothing reads standard
 output or standard error any more, changes no exit status.
@@ -410,11 +410,16 @@ each value. In short:
   of the stepping D0 needs that file and `overlays/bcm2712d0.dtbo`, the
   overlay that the downstream device tree loads on D0 devices. No official
   sentence says that the firmware requests the first file on a C1 board, or
-  that it requests `bcm2712d0-rpi-5-b.dtb` on a D0 board. Both variants
-  assume the defaults of `upstream_kernel`, `os_prefix`, `overlay_prefix` and
-  `device_tree`: a payload whose `config.txt` sets one of them makes the
-  firmware request other files, which the variants do not list and the tool
-  does not detect.
+  that it requests `bcm2712d0-rpi-5-b.dtb` on a D0 board. Both variants list
+  files under the defaults of `upstream_kernel`, `os_prefix`,
+  `overlay_prefix` and `device_tree`, and `payload.variant_missing` compares
+  the payload with these names only: a payload whose `config.txt` sets one
+  of them is refused when it holds the files under the names that it sets
+  but not under the default names, and passes when it holds the default
+  names but not the files that the firmware then requests. The board is
+  served the payload's files alone, so the firmware's request for a file
+  that is not in the payload is a failed read, which no rule judges: such a
+  cold boot is judged by its markers, its end and its other checks only.
 - **Minimum bootloader.** The earliest releases with the manufacturing
   versions 1, 2 and 3 are those of 2026/05/11, 2026/09/23 and 2026/10/23. A
   board of PCB revision 4 needs a release of 2024/03/01 or later, as its
@@ -1019,6 +1024,17 @@ receipt, each once and in this order, with `detail` saying what was found:
 `eligible` is `true` exactly when `reasons` is empty: only a receipt of a run
 whose every device is real, made by a tool of a known commit without
 changes, is eligible as evidence.
+
+`tool.commit` and `tool.clean` describe the tree as it was when the tool was
+built. Every build of the tool asks Git for them again, so a change made
+after an earlier build, an untracked file included, makes the next build's
+`clean` `false`. `clean` is `true` only when `git status` shows no change and
+no untracked file, no tracked file is marked assume-unchanged or
+skip-worktree, and no untracked file is hidden by anything but the
+`.gitignore` files of the tree, such as `.git/info/exclude` or the excludes
+file of the Git configuration. A build from a source tree that is not a Git
+checkout of its own records both as `null`; neither comes from the
+environment of the build.
 
 ### Inputs of judgement
 

@@ -89,7 +89,10 @@
   ledgers, supplier quotes, prices and lead times in the project's
   coordination records outside this repository. Documents here state the
   technical content: the rule, the condition that lifts a limit, or the part
-  or module that will hold a planned item.
+  or module that will hold a planned item. Requirement ids of the bench
+  tool, such as `VERD-R01`, `PROV-R01` and `POWER-R01`, are labels defined
+  in `docs/bench/requirements.md`, not plan numbers, and documents, comments
+  and tests may use them.
 - kyto uses two licenses, chosen by path. Every file under `tools/`,
   `xtask/`, `.githooks/`, `.github/` and `.cargo/`, and `rust-toolchain.toml`,
   is released under the MIT License; the bench tool is under `tools/`. Every

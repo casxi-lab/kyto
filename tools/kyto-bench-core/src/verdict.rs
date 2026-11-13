@@ -5,7 +5,7 @@
 
 use crate::board::Board;
 use crate::instance::{Parameters, PinnedFile};
-use crate::lines::{self, IndexError};
+use crate::lines::{self, IndexError, Line};
 use crate::names::PayloadName;
 use crate::observe::{
     ColdBootInputs, FirmwareSeen, MarkerSeen, Observations, ReadSeen, Sent, observe,
@@ -75,141 +75,224 @@ pub fn judge(c: &ColdBoot<'_>) -> Result<(Observations, Vec<Check>), IndexError>
     let seen = observe(&inputs)?;
     let lines = lines::split(lines::chunks(transcript, index)?);
     let confirmation = &c.parameters.confirmation;
-    let mut checks = power::cold_boot_checks(board, confirmation, events, index, c.off_at);
-    let mut fail = |rule: &str, subject: &str, failure: Option<String>| {
-        checks.push(Check::new(rule, subject, Outcome::Fail, failure));
+    let checks = power::cold_boot_checks(board, confirmation, events, index, c.off_at);
+    let mut judging = Judging {
+        c,
+        seen: &seen,
+        lines: &lines,
+        sent: &sent,
+        checks,
     };
-    let first = |name: &str| seen.markers.iter().find(|marker| marker.name == name);
-    let line = |offset: u64| lines.iter().position(|line| line.offset == offset);
-    let line_at = |at: u64| Some(format!("the line at {at}"));
-    let (network, modes) = (&board.boot_mode.network, &seen.boot_modes);
-    let marker = format!("{BOARD_MARKER}{}", board.boot_mode.network_marker);
-    let none = !modes.iter().any(|seen| &seen.mode == network);
-    let failure = none.then(|| "no network boot mode line".into());
-    fail("boot.network", &marker, failure);
-    let other = modes.last().filter(|last| &last.mode != network);
-    let failure = other.and_then(|last| line_at(last.line));
-    fail("boot.fallback", &marker, failure);
-    let on = events
-        .iter()
-        .find(|e| power::command(e) == Some(Command::On));
-    let timeout = nanos(entry.boot_timeout_ms);
-    let deadline = on.map_or(0, |on| on.at_ns.saturating_add(timeout));
-    let end = events.iter().find_map(|event| match event.event {
-        EventKind::End { reason } => Some((event.at_ns, reason)),
-        _ => None,
-    });
-    // Only a complete line of the end marker ends a cold boot.
-    let complete = |m: &MarkerSeen| line(m.line).is_some_and(|at| lines[at].terminated);
-    let ends = |name: &str| {
-        let ends = |m: &MarkerSeen| m.name == name && m.at_ns <= deadline && complete(m);
-        Some(seen.markers.iter().any(ends))
-    };
-    let (subject, ended) = match &entry.end {
-        End::Marker(end) => (&end.marker[..], ends(&end.marker)),
-        End::Timeout(_) => ("timeout", end.map(|(at_ns, _)| at_ns >= deadline)),
-    };
-    let failure = (ended != Some(true)).then(|| "not by the boot timeout".into());
-    fail("boot.end", subject, failure);
-    let limits = [EndReason::ByteLimit, EndReason::ChunkLimit];
-    let limit = end.is_some_and(|(_, reason)| limits.contains(&reason));
-    let failure = limit.then(|| "the capture reached its limit".into());
-    fail("console.byte_limit", "console", failure);
-    for expect in &entry.expect {
-        let named = |seen: &&MarkerSeen| seen.name == expect.marker;
-        let (count, (min, max)) = (seen.markers.iter().filter(named).count(), expect.range());
-        let ok = count >= min as usize && max.is_none_or(|max| count <= max as usize);
-        let failure = (!ok).then(|| format!("{count} lines"));
-        fail("marker.count", &expect.marker, failure);
-    }
-    for order in &entry.order {
-        let found = order.markers.iter().map(|name| first(name).map(|m| m.line));
-        let found: Vec<_> = found.collect();
-        let ok = !found.contains(&None) && found.is_sorted_by(|a, b| a < b);
-        let failure = (!ok).then(|| "not in this order".into());
-        fail("marker.order", &order.markers.join(" "), failure);
-    }
-    for (number, forbid) in entry.forbid.iter().enumerate() {
-        let bound = |name: &Option<String>| name.as_ref().map(|name| first(name).map(|m| m.line));
-        let (from, to) = (bound(&forbid.from), bound(&forbid.to));
-        let after = |at: u64| from.flatten().is_none_or(|from| at > from);
-        let inside = |at: u64| after(at) && to.flatten().is_none_or(|to| at < to);
-        let mut window = lines.iter().filter(|_| from != Some(None));
-        let hit = window.find(|line| inside(line.offset) && forbid.line.is_match(&line.content));
-        let failure = hit.and_then(|line| line_at(line.offset));
-        fail("marker.forbidden", &number.to_string(), failure);
-    }
-    let first_send = sent.first().map(|send| send.received);
-    let length = transcript.len() as u64;
-    let end_of = |at: usize| lines.get(at + 1).map_or(length, |next| next.offset);
-    for name in &entry.before_first_send {
-        let end = first(name).and_then(|m| line(m.line)).map(end_of);
-        let ok = first_send.is_none_or(|send| end.is_some_and(|end| end <= send));
-        let failure = (!ok).then(|| "not ended before".into());
-        fail("marker.before_first_send", name, failure);
-    }
-    if entry.steps.is_none() {
-        let failure = sent.first().map(|send| format!("step {}", send.step));
-        fail("step.declared_none", "sends", failure);
-    }
-    for (number, step) in entry.steps().iter().enumerate() {
-        let seen = seen.steps.get(number);
-        let sent = seen.and_then(|seen| Some(events[seen.send_event?].at_ns));
-        let answered = seen.and_then(|seen| Some(lines[line(seen.response_line?)?].at_ns));
-        let failure = match (seen, sent, answered) {
-            (None, _, _) => Some(format!("{} did not arm it", step.after)),
-            (_, None, _) => Some("not sent".into()),
-            (_, Some(at), Some(by)) if by <= at.saturating_add(nanos(step.timeout_ms)) => None,
-            _ => Some("no response in time".into()),
-        };
-        fail("step.response", &number.to_string(), failure);
-    }
-    for (name, groups) in &entry.firmware {
-        let found: Vec<&FirmwareSeen> = seen.firmware.iter().filter(|l| &l.name == name).collect();
-        let holds = |line: &FirmwareSeen, (g, v): (&String, &String)| {
-            line.groups
-                .iter()
-                .any(|(group, value)| group == g && value == v)
-        };
-        let other = found
-            .iter()
-            .find(|line| !groups.iter().all(|pair| holds(line, pair)));
-        let failure = match other {
-            _ if found.is_empty() => Some("no line".into()),
-            other => other.and_then(|line| line_at(line.line)),
-        };
-        fail("firmware.version", name, failure);
-    }
-    for segment in &entry.segments {
-        let failure = match seen.segments.iter().find(|seen| seen.name == segment.name) {
-            None => Some("its lines did not both appear".into()),
-            Some(seen) => (seen.sha256 != segment.sha256).then(|| "another SHA-256".into()),
-        };
-        fail("segment.digest", &segment.name, failure);
-    }
-    let (servers, reads) = (&seen.tftp.servers, &seen.tftp.reads);
-    let other = servers.iter().find(|server| !server.instance);
-    fail(
-        "tftp.server",
-        "servers",
-        other.and_then(|s| line_at(s.line)),
-    );
-    let outside = reads.iter().find(|read| !read.inside_prefix);
-    fail(
-        "tftp.prefix",
-        "reads",
-        outside.and_then(|r| line_at(r.line)),
-    );
-    let planned = |name: &PayloadName| payload.iter().any(|f| f.name.eq_ignore_ascii_case(name));
-    let unplanned =
-        |read: &&ReadSeen| read.inside_prefix && !read.name.as_ref().is_some_and(planned);
-    let unplanned = reads.iter().find(unplanned);
-    let failure = unplanned.and_then(|r| line_at(r.line));
-    fail("tftp.unplanned_file", "reads", failure);
-    let split = seen.identity.iter().find(|field| field.values.len() > 1);
-    let failure = split.map(|field| field.field.clone());
-    fail("identity.disagree", "identity", failure);
+    judging.boot_mode();
+    judging.boot_end();
+    judging.capture_limit();
+    judging.markers();
+    judging.steps();
+    judging.firmware();
+    judging.segments();
+    judging.transfers();
+    judging.identity();
+    let checks = judging.checks;
     Ok((seen, checks))
+}
+
+/// A cold boot, what it showed, its lines and sends, and its checks so far.
+struct Judging<'a> {
+    c: &'a ColdBoot<'a>,
+    seen: &'a Observations,
+    lines: &'a [Line],
+    sent: &'a [Sent],
+    checks: Vec<Check>,
+}
+
+fn line_at(at: u64) -> Option<String> {
+    Some(format!("the line at {at}"))
+}
+
+impl Judging<'_> {
+    /// Adds the check of `rule` on `subject`, failed when there is a `failure`.
+    fn fail(&mut self, rule: &str, subject: &str, failure: Option<String>) {
+        self.checks
+            .push(Check::new(rule, subject, Outcome::Fail, failure));
+    }
+
+    /// The position among the lines of the line that starts at `offset`.
+    fn line(&self, offset: u64) -> Option<usize> {
+        self.lines.iter().position(|line| line.offset == offset)
+    }
+
+    /// When the capture of the cold boot ended, and why.
+    fn end(&self) -> Option<(u64, EndReason)> {
+        self.c.events.iter().find_map(|event| match event.event {
+            EventKind::End { reason } => Some((event.at_ns, reason)),
+            _ => None,
+        })
+    }
+
+    /// `boot.network` and `boot.fallback` (VERD-R05).
+    fn boot_mode(&mut self) {
+        let board = self.c.board;
+        let (network, modes) = (&board.boot_mode.network, &self.seen.boot_modes);
+        let marker = format!("{BOARD_MARKER}{}", board.boot_mode.network_marker);
+        let none = !modes.iter().any(|seen| &seen.mode == network);
+        let failure = none.then(|| "no network boot mode line".into());
+        self.fail("boot.network", &marker, failure);
+        let other = modes.last().filter(|last| &last.mode != network);
+        let failure = other.and_then(|last| line_at(last.line));
+        self.fail("boot.fallback", &marker, failure);
+    }
+
+    /// `boot.end` (VERD-R06).
+    fn boot_end(&mut self) {
+        let (entry, events, lines) = (self.c.entry, self.c.events, self.lines);
+        let on = events
+            .iter()
+            .find(|e| power::command(e) == Some(Command::On));
+        let timeout = nanos(entry.boot_timeout_ms);
+        let deadline = on.map_or(0, |on| on.at_ns.saturating_add(timeout));
+        // Only a complete line of the end marker ends a cold boot.
+        let complete = |m: &MarkerSeen| self.line(m.line).is_some_and(|at| lines[at].terminated);
+        let ends = |name: &str| {
+            let ends = |m: &MarkerSeen| m.name == name && m.at_ns <= deadline && complete(m);
+            Some(self.seen.markers.iter().any(ends))
+        };
+        let (subject, ended) = match &entry.end {
+            End::Marker(end) => (&end.marker[..], ends(&end.marker)),
+            End::Timeout(_) => ("timeout", self.end().map(|(at_ns, _)| at_ns >= deadline)),
+        };
+        let failure = (ended != Some(true)).then(|| "not by the boot timeout".into());
+        self.fail("boot.end", subject, failure);
+    }
+
+    /// `console.byte_limit` (VERD-R11).
+    fn capture_limit(&mut self) {
+        let limits = [EndReason::ByteLimit, EndReason::ChunkLimit];
+        let end = self.end();
+        let limit = end.is_some_and(|(_, reason)| limits.contains(&reason));
+        let failure = limit.then(|| "the capture reached its limit".into());
+        self.fail("console.byte_limit", "console", failure);
+    }
+
+    /// `marker.count`, `marker.order`, `marker.forbidden` and
+    /// `marker.before_first_send` (VERD-R08).
+    fn markers(&mut self) {
+        let (entry, seen, lines) = (self.c.entry, self.seen, self.lines);
+        let first = |name: &str| seen.markers.iter().find(|marker| marker.name == name);
+        for expect in &entry.expect {
+            let named = |seen: &&MarkerSeen| seen.name == expect.marker;
+            let (count, (min, max)) = (seen.markers.iter().filter(named).count(), expect.range());
+            let ok = count >= min as usize && max.is_none_or(|max| count <= max as usize);
+            let failure = (!ok).then(|| format!("{count} lines"));
+            self.fail("marker.count", &expect.marker, failure);
+        }
+        for order in &entry.order {
+            let found = order.markers.iter().map(|name| first(name).map(|m| m.line));
+            let found: Vec<_> = found.collect();
+            let ok = !found.contains(&None) && found.is_sorted_by(|a, b| a < b);
+            let failure = (!ok).then(|| "not in this order".into());
+            self.fail("marker.order", &order.markers.join(" "), failure);
+        }
+        for (number, forbid) in entry.forbid.iter().enumerate() {
+            let bound = |name: &Option<String>| name.as_ref().map(|n| first(n).map(|m| m.line));
+            let (from, to) = (bound(&forbid.from), bound(&forbid.to));
+            let after = |at: u64| from.flatten().is_none_or(|from| at > from);
+            let inside = |at: u64| after(at) && to.flatten().is_none_or(|to| at < to);
+            let mut window = lines.iter().filter(|_| from != Some(None));
+            let hit = window.find(|l| inside(l.offset) && forbid.line.is_match(&l.content));
+            let failure = hit.and_then(|line| line_at(line.offset));
+            self.fail("marker.forbidden", &number.to_string(), failure);
+        }
+        let first_send = self.sent.first().map(|send| send.received);
+        let length = self.c.transcript.len() as u64;
+        let end_of = |at: usize| lines.get(at + 1).map_or(length, |next| next.offset);
+        for name in &entry.before_first_send {
+            let end = first(name).and_then(|m| self.line(m.line)).map(end_of);
+            let ok = first_send.is_none_or(|send| end.is_some_and(|end| end <= send));
+            let failure = (!ok).then(|| "not ended before".into());
+            self.fail("marker.before_first_send", name, failure);
+        }
+    }
+
+    /// `step.declared_none`, or `step.response` for each step (VERD-R09).
+    fn steps(&mut self) {
+        let (entry, events, lines, sent) = (self.c.entry, self.c.events, self.lines, self.sent);
+        if entry.steps.is_none() {
+            let failure = sent.first().map(|send| format!("step {}", send.step));
+            self.fail("step.declared_none", "sends", failure);
+        }
+        for (number, step) in entry.steps().iter().enumerate() {
+            let seen = self.seen.steps.get(number);
+            let sent = seen.and_then(|seen| Some(events[seen.send_event?].at_ns));
+            let answered = seen.and_then(|seen| Some(lines[self.line(seen.response_line?)?].at_ns));
+            let failure = match (seen, sent, answered) {
+                (None, _, _) => Some(format!("{} did not arm it", step.after)),
+                (_, None, _) => Some("not sent".into()),
+                (_, Some(at), Some(by)) if by <= at.saturating_add(nanos(step.timeout_ms)) => None,
+                _ => Some("no response in time".into()),
+            };
+            self.fail("step.response", &number.to_string(), failure);
+        }
+    }
+
+    /// `firmware.version` (VERD-R07).
+    fn firmware(&mut self) {
+        let seen = self.seen;
+        for (name, groups) in &self.c.entry.firmware {
+            let found: Vec<_> = seen.firmware.iter().filter(|l| &l.name == name).collect();
+            let holds = |line: &FirmwareSeen, (g, v): (&String, &String)| {
+                line.groups
+                    .iter()
+                    .any(|(group, value)| group == g && value == v)
+            };
+            let other = found
+                .iter()
+                .find(|line| !groups.iter().all(|pair| holds(line, pair)));
+            let failure = match other {
+                _ if found.is_empty() => Some("no line".into()),
+                other => other.and_then(|line| line_at(line.line)),
+            };
+            self.fail("firmware.version", name, failure);
+        }
+    }
+
+    /// `segment.digest` (VERD-R10).
+    fn segments(&mut self) {
+        let seen = self.seen;
+        for segment in &self.c.entry.segments {
+            let failure = match seen.segments.iter().find(|seen| seen.name == segment.name) {
+                None => Some("its lines did not both appear".into()),
+                Some(seen) => (seen.sha256 != segment.sha256).then(|| "another SHA-256".into()),
+            };
+            self.fail("segment.digest", &segment.name, failure);
+        }
+    }
+
+    /// `tftp.server`, `tftp.prefix` and `tftp.unplanned_file` (VERD-R11).
+    fn transfers(&mut self) {
+        let (servers, reads) = (&self.seen.tftp.servers, &self.seen.tftp.reads);
+        let other = servers.iter().find(|server| !server.instance);
+        let failure = other.and_then(|s| line_at(s.line));
+        self.fail("tftp.server", "servers", failure);
+        let outside = reads.iter().find(|read| !read.inside_prefix);
+        let failure = outside.and_then(|r| line_at(r.line));
+        self.fail("tftp.prefix", "reads", failure);
+        let payload = self.c.payload;
+        let planned =
+            |name: &PayloadName| payload.iter().any(|f| f.name.eq_ignore_ascii_case(name));
+        let unplanned =
+            |read: &&ReadSeen| read.inside_prefix && !read.name.as_ref().is_some_and(planned);
+        let unplanned = reads.iter().find(unplanned);
+        let failure = unplanned.and_then(|r| line_at(r.line));
+        self.fail("tftp.unplanned_file", "reads", failure);
+    }
+
+    /// `identity.disagree` (VERD-R11).
+    fn identity(&mut self) {
+        let identity = &self.seen.identity;
+        let split = identity.iter().find(|field| field.values.len() > 1);
+        let failure = split.map(|field| field.field.clone());
+        self.fail("identity.disagree", "identity", failure);
+    }
 }
 
 /// The checks of an entry outside its cold boots, in this order: for the
@@ -764,6 +847,102 @@ firmware.bootloader = {{ hash = "1accd665", date = "2026/09/25" }}
         assert_eq!(split.result("identity.disagree", "identity"), Outcome::Fail);
         let same = case(&lines_with(|lines| lines.insert(3, LINES[2])));
         assert_eq!(same.result("identity.disagree", "identity"), Outcome::Pass);
+    }
+
+    #[test]
+    fn a_cold_boot_ends_in_time_only_after_a_power_on_and_with_an_end() {
+        // Without a power on, the end marker did not come by a boot timeout.
+        let mut unpowered = case(&LINES);
+        unpowered
+            .events
+            .retain(|e| power::command(e) != Some(Command::On));
+        assert_eq!(unpowered.result("boot.end", "ready"), Outcome::Fail);
+        // An entry that ends at the timeout needs the end of its capture.
+        let mut endless = case(&LINES);
+        endless.plan = plan(|text| {
+            let text = text.replace("end = { marker = \"ready\" }", "end = \"timeout\"");
+            text.replace("boot_timeout_ms = 60000", "boot_timeout_ms = 1000")
+        });
+        assert_eq!(endless.result("boot.end", "timeout"), Outcome::Pass);
+        endless
+            .events
+            .retain(|e| !matches!(e.event, EventKind::End { .. }));
+        assert_eq!(endless.result("boot.end", "timeout"), Outcome::Fail);
+    }
+
+    #[test]
+    fn an_order_needs_every_marker_each_on_a_later_line() {
+        let order = "board.bootloader board.network_boot board.os_start ready";
+        let no_first = case(&lines_with(|lines| {
+            lines.remove(1);
+        }));
+        assert_eq!(no_first.result("marker.order", order), Outcome::Fail);
+        // Two markers whose first lines are the same line.
+        let mut same = case(&LINES);
+        same.plan = plan(|text| {
+            let ready = "markers = [{ name = \"ready\", line = '^READY$' }";
+            let text = text.replace(
+                ready,
+                &format!("{ready}, {{ name = \"up\", line = '^READY' }}"),
+            );
+            let orders = "order = [{ markers = [";
+            text.replace(
+                orders,
+                &format!("{orders}\"ready\", \"up\"] }}, {{ markers = ["),
+            )
+        });
+        assert_eq!(same.result("marker.order", order), Outcome::Pass);
+        assert_eq!(same.result("marker.order", "ready up"), Outcome::Fail);
+    }
+
+    #[test]
+    fn the_lines_of_the_bounds_of_a_forbidden_pattern_are_outside_it() {
+        let forbid = "{ line = '^Example', from = \"ready\" }";
+        let mut bounded = case(&LINES);
+        for bound in ["from", "to"] {
+            let on_bound = format!("{{ line = '^READY$', {bound} = \"ready\" }}");
+            bounded.plan = plan(|text| {
+                assert!(text.contains(forbid), "{forbid}");
+                text.replace(forbid, &on_bound)
+            });
+            assert_eq!(
+                bounded.result("marker.forbidden", "1"),
+                Outcome::Pass,
+                "{bound}"
+            );
+        }
+    }
+
+    #[test]
+    fn markers_before_the_first_send_pass_when_nothing_is_sent() {
+        // Without `READY`, the step is never armed and nothing is sent.
+        let unsent = case(&lines_with(|lines| {
+            lines.remove(8);
+        }));
+        assert!(
+            !unsent
+                .events
+                .iter()
+                .any(|e| matches!(e.event, EventKind::Send { .. }))
+        );
+        assert_eq!(
+            unsent.result("marker.before_first_send", "ready"),
+            Outcome::Pass
+        );
+    }
+
+    #[test]
+    fn each_segment_is_compared_with_the_bytes_of_its_own_lines() {
+        let mut two = case(&LINES);
+        let mode = Sha256::of(format!("{}\r\n", LINES[2]).as_bytes());
+        two.plan = plan(|text| {
+            let segment = format!(
+                "{{ name = \"mode\", from = \"board.bootloader\", to = \"board.network_boot\", sha256 = \"{mode}\" }}"
+            );
+            text.replace("segments = [", &format!("segments = [{segment}, "))
+        });
+        assert_eq!(two.result("segment.digest", "mode"), Outcome::Pass);
+        assert_eq!(two.result("segment.digest", "banner"), Outcome::Pass);
     }
 
     fn check(result: Outcome) -> Check {

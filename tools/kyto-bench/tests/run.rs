@@ -659,6 +659,154 @@ fn rejudging_a_written_receipt_gives_the_recorded_verdicts() {
     assert_eq!(refused.receipt().verdict, None);
 }
 
+/// A check as its rule, subject and result.
+type Fixed<'a> = (&'a str, &'a str, Outcome);
+
+/// The checks of each entry of `receipt`, each list followed by those of
+/// each of the entry's cold boots.
+fn check_lists(receipt: &Receipt) -> Vec<Vec<Fixed<'_>>> {
+    fn list(checks: &[Check]) -> Vec<Fixed<'_>> {
+        let fixed = checks
+            .iter()
+            .map(|c| (c.rule.as_str(), c.subject.as_str(), c.result));
+        fixed.collect()
+    }
+    let lists = receipt.entries.iter().flat_map(|entry| {
+        let boots = entry.cold_boots.iter().map(|c| c.checks.as_slice());
+        std::iter::once(&entry.checks[..]).chain(boots).map(list)
+    });
+    lists.collect()
+}
+
+#[test]
+fn the_checks_of_the_example_runs_are_fixed() {
+    use Outcome::{Fail, Pass};
+    let passing = |checks: &[(&'static str, &'static str)]| -> Vec<Fixed<'static>> {
+        checks
+            .iter()
+            .map(|&(rule, subject)| (rule, subject, Pass))
+            .collect()
+    };
+    // The payload of either entry, in the order of the plan.
+    let served = [
+        ("payload.served_digest", "config.txt"),
+        ("payload.served_digest", "bcm2712-rpi-5-b.dtb"),
+        ("payload.served_digest", "overlays/bcm2712d0.dtbo"),
+        ("payload.served_digest", "kernel.img"),
+    ];
+    // The first entry is checked first for the power off at the start.
+    let first = [&[("power.off_unconfirmed", "start")][..], &served].concat();
+    let supply = [
+        ("console.not_ready", "console"),
+        ("power.on_unconfirmed", "on"),
+        ("power.off_interval", "on"),
+        ("power.off_unconfirmed", "off"),
+        ("power.order", "events"),
+        ("console.before_power_on", "console"),
+    ];
+    let reads = [
+        ("tftp.server", "servers"),
+        ("tftp.prefix", "reads"),
+        ("tftp.unplanned_file", "reads"),
+        ("identity.disagree", "identity"),
+    ];
+    // The firmware-only entry: its end marker, two counts, one order, no
+    // send, and its firmware versions in the order of their names.
+    let order = "board.bootloader board.network_boot board.os_start started";
+    let firmware_only = [
+        ("boot.network", "board.network_boot"),
+        ("boot.fallback", "board.network_boot"),
+        ("boot.end", "started"),
+        ("console.byte_limit", "console"),
+        ("marker.count", "board.network_boot"),
+        ("marker.count", "board.sd_boot"),
+        ("marker.order", order),
+        ("step.declared_none", "sends"),
+        ("firmware.version", "bl31"),
+        ("firmware.version", "bootloader"),
+    ];
+    // The echo entry: its end marker, one count, one forbidden line, two
+    // markers before the first send, one step and one segment.
+    let echo = [
+        ("boot.network", "board.network_boot"),
+        ("boot.fallback", "board.network_boot"),
+        ("boot.end", "ready"),
+        ("console.byte_limit", "console"),
+        ("marker.count", "ready"),
+        ("marker.forbidden", "0"),
+        ("marker.before_first_send", "board.network_boot"),
+        ("marker.before_first_send", "ready"),
+        ("step.response", "0"),
+        ("segment.digest", "banner"),
+    ];
+    let firmware_only = passing(&[&supply[..], &firmware_only, &reads].concat());
+    let echo = passing(&[&supply[..], &echo, &reads].concat());
+    let (first, served) = (passing(&first), passing(&served));
+    let ran = run_example("fixed-pass", &TestEnv::example());
+    assert_eq!(ran.status, cli::PASS);
+    let expected = [
+        &first,
+        &firmware_only,
+        &firmware_only,
+        &firmware_only,
+        &served,
+        &echo,
+    ];
+    let receipt = ran.receipt();
+    assert_eq!(check_lists(&receipt), expected.map(Vec::clone));
+    // The second cold boot of the first entry does not show its end marker,
+    // which is also the last marker of its order, and the echo entry forbids
+    // the line of its build id, which its cold boot shows.
+    let dir = scratch("fixed-fail");
+    let plan = plan_with(&dir, |plan| {
+        plan.replace(
+            "forbid = [{ line = '^PANIC' }]",
+            "forbid = [{ line = '^BUILD' }]",
+        )
+    });
+    let env = TestEnv::new(script(Some(2), STATS));
+    let ran = run(&dir, &plan, &examples().join("payload"), &env);
+    assert_eq!(ran.status, cli::FAIL);
+    let failing = |checks: &[Fixed<'static>], rules: &[&str]| -> Vec<Fixed<'static>> {
+        let fixed = |&(rule, subject, result): &Fixed<'static>| {
+            (
+                rule,
+                subject,
+                if rules.contains(&rule) { Fail } else { result },
+            )
+        };
+        checks.iter().map(fixed).collect()
+    };
+    let cut = failing(&firmware_only, &["boot.end", "marker.order"]);
+    let forbidden = failing(&echo, &["marker.forbidden"]);
+    let expected = [&first, &firmware_only, &cut, &served, &forbidden];
+    let receipt = ran.receipt();
+    assert_eq!(check_lists(&receipt), expected.map(Vec::clone));
+    // Each detail names what was not found or the line found, by its
+    // offset: the BUILD line starts at byte 827 of the echo output.
+    let details: Vec<(&str, Option<&str>)> = receipt
+        .entries
+        .iter()
+        .flat_map(|entry| entry.cold_boots.iter().flat_map(|c| &c.checks))
+        .filter(|check| check.result != Pass)
+        .map(|check| (check.rule.as_str(), check.detail.as_deref()))
+        .collect();
+    let failed = [
+        ("boot.end", Some("not by the boot timeout")),
+        ("marker.order", Some("not in this order")),
+        ("marker.forbidden", Some("the line at 827")),
+    ];
+    assert_eq!(details, failed);
+    let verdicts = receipt.entries.iter().map(|entry| {
+        let boots = entry.cold_boots.iter().map(|c| c.verdict);
+        (entry.verdict, boots.collect::<Vec<_>>())
+    });
+    let (pass, fail) = (Verdict::Pass, Verdict::Fail);
+    let verdicts: Vec<_> = verdicts.collect();
+    assert_eq!(verdicts, [(fail, vec![pass, fail]), (fail, vec![fail])]);
+    assert_eq!(receipt.verdict, Some(fail));
+}
+
 #[test]
 fn a_payload_that_writes_the_eeprom_is_refused_unless_the_plan_enables_it() {
     let dir = scratch("eeprom-refused");
@@ -721,6 +869,39 @@ fn a_refused_property_is_refused_even_when_writes_are_enabled() {
         refusal.subject.as_str(),
     );
     assert_eq!(found, ("write.refused_property", Some(1), "config.txt"));
+    // The bench was not opened: nothing was staged and no power command was
+    // sent.
+    assert!(env.script.borrow().is_some(), "the bench was opened");
+    assert!(!env.staged(1, "config.txt"));
+    assert!(env.world.power_commands().is_empty());
+}
+
+#[test]
+fn a_source_file_of_another_digest_refuses_the_run_before_the_bench_opens() {
+    let dir = scratch("source-digest");
+    let kernel = "7a4b18efd2c0283b922acb12a3a7faf0d3ff8ba0c803a7d0c7669c09e21e920b";
+    let other = Sha256::of(b"another kernel");
+    let plan = plan_with(&dir, |plan| plan.replacen(kernel, &other.to_string(), 1));
+    let env = TestEnv::example();
+    let ran = run(&dir, &plan, &examples().join("payload"), &env);
+    assert_eq!(ran.status, cli::REFUSED);
+    let receipt = ran.receipt();
+    let refusal = receipt.refusal.as_ref().unwrap();
+    let found = (
+        refusal.rule.as_str(),
+        refusal.entry,
+        refusal.subject.as_str(),
+        refusal.detail.as_str(),
+    );
+    let detail = format!("the source copy of kernel.img has the SHA-256 {kernel}, not {other}");
+    let expected = ("payload.source_digest", Some(0), "kernel.img", &detail[..]);
+    assert_eq!(found, expected);
+    assert_eq!(receipt.verdict, None);
+    assert!(receipt.start.events.is_empty());
+    // The bench was not opened: nothing was staged and no power command was
+    // sent.
+    assert!(env.script.borrow().is_some(), "the bench was opened");
+    assert!(!env.staged(1, "config.txt"));
     assert!(env.world.power_commands().is_empty());
 }
 

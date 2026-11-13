@@ -873,6 +873,35 @@ fn a_refused_property_is_refused_even_when_writes_are_enabled() {
 }
 
 #[test]
+fn a_source_file_of_another_digest_refuses_the_run_before_the_bench_opens() {
+    let dir = scratch("source-digest");
+    let kernel = "7a4b18efd2c0283b922acb12a3a7faf0d3ff8ba0c803a7d0c7669c09e21e920b";
+    let other = Sha256::of(b"another kernel");
+    let plan = plan_with(&dir, |plan| plan.replacen(kernel, &other.to_string(), 1));
+    let env = TestEnv::example();
+    let ran = run(&dir, &plan, &examples().join("payload"), &env);
+    assert_eq!(ran.status, cli::REFUSED);
+    let receipt = ran.receipt();
+    let refusal = receipt.refusal.as_ref().unwrap();
+    let found = (
+        refusal.rule.as_str(),
+        refusal.entry,
+        refusal.subject.as_str(),
+        refusal.detail.as_str(),
+    );
+    let detail = format!("the source copy of kernel.img has the SHA-256 {kernel}, not {other}");
+    let expected = ("payload.source_digest", Some(0), "kernel.img", &detail[..]);
+    assert_eq!(found, expected);
+    assert_eq!(receipt.verdict, None);
+    assert!(receipt.start.events.is_empty());
+    // The bench was not opened: nothing was staged and no power command was
+    // sent.
+    assert!(env.script.borrow().is_some(), "the bench was opened");
+    assert!(!env.staged(1, "config.txt"));
+    assert!(env.world.power_commands().is_empty());
+}
+
+#[test]
 fn staging_is_checked_before_any_power_command() {
     let env = TestEnv::example();
     env.world.knobs().tftp.corrupts_staged = true;

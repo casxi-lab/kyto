@@ -235,6 +235,7 @@ it.
 | [VERD-R12](requirements.md#verd-r12) | `rejudging_a_written_receipt_gives_the_recorded_verdicts` | `tools/kyto-bench/tests/run.rs` | positive |
 | [VERD-R12](requirements.md#verd-r12) | `a_judgement_that_the_record_does_not_give_is_found` | `tools/kyto-bench-core/src/rejudge.rs` | negative |
 | [PROV-R01](requirements.md#prov-r01) | `source_and_staged_digests_must_equal_the_plan` | `tools/kyto-bench-core/src/payload.rs` | negative |
+| [PROV-R01](requirements.md#prov-r01) | `a_source_file_of_another_digest_refuses_the_run_before_the_bench_opens` | `tools/kyto-bench/tests/run.rs` | negative |
 | [PROV-R01](requirements.md#prov-r01) | `a_refusal_is_rederived_from_the_recorded_digests_in_order` | `tools/kyto-bench-core/src/rejudge.rs` | negative |
 | [PROV-R02](requirements.md#prov-r02) | `source_and_staged_digests_must_equal_the_plan` | `tools/kyto-bench-core/src/payload.rs` | negative |
 | [PROV-R02](requirements.md#prov-r02) | `staging_is_checked_before_any_power_command` | `tools/kyto-bench/tests/run.rs` | negative |

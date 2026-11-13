@@ -203,8 +203,11 @@ staged and no power command is sent, and the refusal names the rule, the
 entry, the file and what was found.
 
 **Evidence.** A unit test of a source file of another digest and of one
-that was not read, with the details they give, and a test that re-deriving
-gives the same refusal from the recorded digests.
+that was not read, with the details they give; a run on simulated devices
+whose plan gives another digest for a payload file, refused under
+`payload.source_digest` with its entry, file and detail before the bench is
+opened, so that nothing is staged and no power command is sent; and a test
+that re-deriving gives the same refusal from the recorded digests.
 
 ### PROV-R02
 

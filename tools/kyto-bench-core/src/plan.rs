@@ -736,7 +736,7 @@ mod tests {
                 "payload_dir = \"echo\"",
                 "payload_dir = \"../echo\""
             ))
-            .contains(". or ..")
+            .contains("ends with .")
         );
     }
 

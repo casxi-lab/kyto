@@ -7,14 +7,15 @@ use serde::{Deserialize, Serialize};
 
 /// The name of a payload file inside a generation: a relative path of one or
 /// more segments separated by `/`. A segment is made of ASCII letters,
-/// digits, `.`, `_` and `-`, and is neither `.` nor `..`. Names are at most
-/// [`PayloadName::MAX_LEN`] bytes long.
+/// digits, `.`, `_` and `-`, and does not end with `.`, so it is neither `.`
+/// nor `..`. Names are at most [`PayloadName::MAX_LEN`] bytes long.
 ///
 /// TFTP directories on case-insensitive file systems serve two names that
 /// differ only in ASCII case as one file, and no directory holds a file and
 /// a directory of the same name, so the names of one payload must differ
 /// ignoring ASCII case and none may name a directory of another
-/// ([`check_distinct`]).
+/// ([`check_distinct`]). Such file systems also drop a trailing `.`, which
+/// would serve `pieeprom.upd.` as the write trigger `pieeprom.upd`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String")]
 pub struct PayloadName(String);
@@ -30,7 +31,7 @@ pub enum NameError {
     Absolute,
     /// Two `/` follow each other, or the text ends with `/`.
     EmptySegment,
-    /// A segment is `.` or `..`.
+    /// A segment ends with `.`, as `.` and `..` do.
     DotSegment,
     /// A byte that is not an ASCII letter or digit, `.`, `_`, `-` or `/`.
     Character { byte: u8 },
@@ -61,7 +62,7 @@ impl PayloadName {
             if segment.is_empty() {
                 return Err(NameError::EmptySegment);
             }
-            if segment == "." || segment == ".." {
+            if segment.ends_with('.') {
                 return Err(NameError::DotSegment);
             }
         }
@@ -115,7 +116,7 @@ impl fmt::Display for NameError {
             Self::TooLong { len } => write!(f, "a payload name is at most 255 bytes, not {len}"),
             Self::Absolute => write!(f, "a payload name does not start with /"),
             Self::EmptySegment => write!(f, "a payload name has no empty segment"),
-            Self::DotSegment => write!(f, "a payload name has no . or .. segment"),
+            Self::DotSegment => write!(f, "no segment of a payload name ends with ."),
             Self::Character { byte } => write!(f, "a payload name has no byte 0x{byte:02x}"),
         }
     }
@@ -320,7 +321,8 @@ mod tests {
             "overlays/bcm2712d0.dtbo",
             "a/b/c_d-e.F",
             ".hidden",
-            "...",
+            "..x",
+            "a.b..c",
         ] {
             assert_eq!(name(text).as_str(), text);
         }
@@ -339,6 +341,9 @@ mod tests {
             ("..", NameError::DotSegment),
             ("a/../b", NameError::DotSegment),
             ("a/./b", NameError::DotSegment),
+            ("pieeprom.upd.", NameError::DotSegment),
+            ("...", NameError::DotSegment),
+            ("overlays./a.dtbo", NameError::DotSegment),
             ("a b", NameError::Character { byte: b' ' }),
             ("a\\b", NameError::Character { byte: b'\\' }),
             ("a:b", NameError::Character { byte: b':' }),

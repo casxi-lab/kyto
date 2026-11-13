@@ -924,6 +924,27 @@ fn a_fault_that_leaves_the_supply_unconfirmed_switches_it_off_again() {
 }
 
 #[test]
+fn a_trigger_name_with_a_trailing_dot_is_refused() {
+    // A file system that drops a trailing dot would serve this file as
+    // `pieeprom.upd`, a write trigger, to a board whose plan enables no
+    // write; no payload name ends with a dot.
+    let dir = scratch("trailing-dot");
+    let (payloads, digest) = eeprom_payloads(&dir);
+    let from = payloads.join("firmware-only/PIEEPROM.UPD");
+    fs::rename(&from, from.with_file_name("pieeprom.upd.")).unwrap();
+    let plan = plan_with(&dir, |text| {
+        let file = format!("payload = [\n  {{ name = \"pieeprom.upd.\", sha256 = \"{digest}\" }},");
+        text.replacen("payload = [", &file, 1)
+    });
+    let env = TestEnv::example();
+    let ran = run(&dir, &plan, &payloads, &env);
+    assert_eq!(ran.status, cli::INPUT_ERROR);
+    assert!(!ran.out.exists(), "no receipt");
+    assert!(!env.staged(1, "config.txt"), "nothing staged");
+    assert!(env.world.power_commands().is_empty(), "no power command");
+}
+
+#[test]
 fn a_deadline_that_the_console_reports_early_ends_no_cold_boot() {
     // The firmware-only entry captures until its boot timeout, and the
     // console reports a deadline 100 ms after each read that gets nothing.

@@ -102,12 +102,15 @@ These forms of values recur in every format:
 - **Payload names** name a file of a boot payload relative to the directory
   that the board reads it from, such as `overlays/bcm2712d0.dtbo`: segments
   separated by `/`, each made of ASCII letters, digits, `.`, `_` and `-` and
-  neither `.` nor `..`, with no empty segment and no leading `/`, at most 255
-  bytes. A TFTP directory on a case-insensitive file system serves two names
-  that differ only in ASCII case as one file, and no directory holds a file
-  and a directory of the same name, so the names in one list differ ignoring
-  ASCII case, and none is, ignoring ASCII case, a directory of another, as
-  `overlays` is of `overlays/a.dtbo`. A file name is a payload name of one
+  not ending with `.`, so neither `.` nor `..`, with no empty segment and no
+  leading `/`, at most 255 bytes. A TFTP directory on a case-insensitive file
+  system serves two names that differ only in ASCII case as one file, and no
+  directory holds a file and a directory of the same name, so the names in
+  one list differ ignoring ASCII case, and none is, ignoring ASCII case, a
+  directory of another, as `overlays` is of `overlays/a.dtbo`. Such file
+  systems, FAT among them, also drop a trailing `.` from a name, so that
+  `pieeprom.upd.` would be served as the write trigger `pieeprom.upd`; that is
+  why no segment ends with `.`. A file name is a payload name of one
   segment.
 - **SHA-256 digests** are 64 lowercase hexadecimal digits.
 - **Release dates** are written `YYYY/MM/DD`, as the Raspberry Pi 5

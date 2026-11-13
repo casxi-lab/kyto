@@ -351,4 +351,15 @@ mod tests {
         assert!(check_variants(0, &board, &identity("C1"), &[overlay]).is_err());
         assert_eq!(check_variants(0, &board, &identity("B0"), &[]), Ok(()));
     }
+
+    #[test]
+    fn a_stepping_names_its_variant_in_any_ascii_case() {
+        let board = pi5();
+        let dtb = [name("bcm2712-rpi-5-b.dtb")];
+        let refused = check_variants(0, &board, &identity("d0"), &dtb).unwrap_err();
+        assert_eq!(
+            refused.detail,
+            "soc_stepping is d0, and the variant D0 needs overlays/bcm2712d0.dtbo"
+        );
+    }
 }

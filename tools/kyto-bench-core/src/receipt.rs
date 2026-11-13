@@ -1386,4 +1386,52 @@ steps = [{ after = "ready", send = "?\r", expect = '^STATS seq=1', timeout_ms = 
             Err(ReceiptError::Syntax(_))
         ));
     }
+
+    #[test]
+    fn the_serial_length_is_not_less_than_the_bytes() {
+        let mut receipt = example();
+        receipt.entries[0].cold_boots[0].serial.length -= 1;
+        assert_eq!(
+            invalid_at(&receipt),
+            "/entries/0/cold_boots/0/serial/length"
+        );
+    }
+
+    #[test]
+    fn a_receipt_with_no_reason_is_eligible() {
+        let mut receipt = example();
+        receipt.bench.simulated = false;
+        receipt.evidence.reasons.clear();
+        assert!(!receipt.evidence.eligible);
+        assert_eq!(invalid_at(&receipt), "/evidence/eligible");
+    }
+
+    #[test]
+    fn a_refused_run_records_no_event_of_an_entry() {
+        let mut receipt = refused();
+        receipt.entries[0].events = example().entries[0].events.clone();
+        assert_eq!(invalid_at(&receipt), "/entries/0/verdict");
+    }
+
+    #[test]
+    fn a_receipt_records_every_entry_of_the_plan() {
+        let mut receipt = example();
+        receipt.entries.clear();
+        assert_eq!(invalid_at(&receipt), "/entries");
+    }
+
+    #[test]
+    fn an_entry_records_the_pin_of_the_plan_by_name() {
+        let pinned = PLAN.replace(
+            "payload = [{ name = \"config.txt\", sha256 = \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\" }]",
+            "payload_pin = \"empty-config\"",
+        );
+        let mut receipt = example();
+        receipt.inputs.run_plan = Text {
+            sha256: Sha256::of(pinned.as_bytes()),
+            text: pinned,
+        };
+        receipt.entries[0].payload.pin = Some("other-config".into());
+        assert_eq!(invalid_at(&receipt), "/entries/0/payload/pin");
+    }
 }

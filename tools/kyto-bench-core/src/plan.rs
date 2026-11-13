@@ -995,4 +995,72 @@ mod tests {
         let message = "the run plan is for raspberry-pi-5, not synthetic-board";
         assert_eq!(error.to_string(), message);
     }
+
+    #[test]
+    fn a_reference_has_no_control_character_below_space() {
+        let text = edited("reference = \"example\"", "reference = \"a\\u001fb\"");
+        assert_eq!(invalid_at(&text, &[]), "reference");
+    }
+
+    #[test]
+    fn a_plan_has_at_least_one_entry() {
+        let text = "format = \"kyto-bench run plan\"\nformat_version = 1\nboard = \"raspberry-pi-5\"\nentries = []\n";
+        assert_eq!(invalid_at(text, &[]), "entries");
+    }
+
+    #[test]
+    fn a_payload_pin_is_a_name_on_its_own() {
+        let start = EXAMPLE
+            .find("payload = [\n  { name = \"config.txt\"")
+            .unwrap();
+        let end = start + EXAMPLE[start..].find("]\ncold_boots = 3").unwrap() + 2;
+        let text = format!(
+            "{}payload_pin = \"Self-Test\"\n{}",
+            &EXAMPLE[..start],
+            &EXAMPLE[end..]
+        );
+        match RunPlan::parse(&text) {
+            Err(PlanError::Invalid { at, .. }) => {
+                assert_eq!(at, "entries.firmware-only.payload_pin");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_capture_limit_is_at_least_one_byte() {
+        let limit = |bytes: u64| {
+            edited(
+                "cold_boots = 1",
+                &format!("cold_boots = 1\nmax_capture_bytes = {bytes}"),
+            )
+        };
+        assert_eq!(invalid_at(&limit(0), &[]), "entries.echo.max_capture_bytes");
+        for bytes in [1, MAX_CAPTURE_BYTES] {
+            let plan = RunPlan::parse(&limit(bytes)).unwrap();
+            assert_eq!(plan.entries[1].max_capture_bytes, bytes);
+        }
+    }
+
+    #[test]
+    fn a_firmware_version_line_the_board_lacks_is_refused_without_groups() {
+        let text = edited(
+            "[entries.firmware.bl31]",
+            "[entries.firmware.bl32]\n\n[entries.firmware.bl31]",
+        );
+        assert!(RunPlan::parse(&text).unwrap().entries[0].firmware["bl32"].is_empty());
+        assert_eq!(invalid_at(&text, &[]), "entries.firmware-only.firmware");
+    }
+
+    #[test]
+    fn a_plan_of_exactly_1000_line_patterns_is_within_the_bound() {
+        let entry = |n: usize| {
+            let markers = vec!["{ name = \"m\", line = '(' }"; 100].join(", ");
+            format!("[[entries]]\nname = \"e{n}\"\nmarkers = [{markers}]\n")
+        };
+        let head =
+            "format = \"kyto-bench run plan\"\nformat_version = 1\nboard = \"raspberry-pi-5\"\n";
+        let text = format!("{head}{}", (0..10).map(entry).collect::<String>());
+        assert!(syntax(&text).contains("cannot be used"));
+    }
 }

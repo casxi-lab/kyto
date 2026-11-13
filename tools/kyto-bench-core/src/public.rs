@@ -1437,4 +1437,84 @@ mod tests {
         }
         assert_eq!(found, expected);
     }
+
+    #[test]
+    fn values_of_exactly_the_byte_limit_are_searched_for() {
+        let line = |length: usize| {
+            let serial = "a".repeat(length);
+            format!("  4.37 BOOTMODE: 0x06 serial {serial} boardrev d04171 stc 1\r\n")
+        };
+        // The bytes of the values to hide but the nonce, which is last.
+        let bytes = |length: usize| {
+            let found = secrets(&with_serial(line(length).as_bytes()), &values()).unwrap();
+            let values = &found[..found.len() - 1];
+            values
+                .iter()
+                .map(|secret| secret.value.len())
+                .sum::<usize>()
+        };
+        let length = MAX_VALUE_BYTES - (bytes(4) - 4);
+        assert_eq!(bytes(length), MAX_VALUE_BYTES);
+        let found = public(&with_serial(line(length).as_bytes())).unwrap();
+        assert!(!serial_of(&found).windows(4).any(|w| w == b"aaaa"));
+        assert_eq!(
+            public(&with_serial(line(length + 1).as_bytes())),
+            Err(vec![leak(LIMIT_RULE, "")])
+        );
+    }
+
+    #[test]
+    fn a_public_version_always_withholds_a_nonce() {
+        let mut public = public(&example()).unwrap();
+        public.receipt["nonce"] = "".into();
+        public.withheld.remove(0);
+        match PublicReceipt::parse(public.render().as_bytes()) {
+            Err(ReceiptError::Invalid { at, .. }) => assert_eq!(at, "/withheld"),
+            other => panic!("{other:?}"),
+        }
+        let leaks = verify(&public, &[]).unwrap_err();
+        assert!(leaks.contains(&leak(FORM_RULE, "/withheld")), "{leaks:?}");
+    }
+
+    #[test]
+    fn adjacent_values_are_replaced_apart() {
+        let receipt = with_serial(b"xabcdwxyzx\r\n");
+        let instance = [
+            instance_value("instance.local.console.a", "abcd"),
+            instance_value("instance.local.console.b", "wxyz"),
+        ];
+        let public = public_version(&receipt, &instance).unwrap();
+        let at = "/entries/0/cold_boots/0/serial/bytes_base64";
+        let found: Vec<&Replacement> = public
+            .replacements
+            .iter()
+            .filter(|r| r.field == at)
+            .collect();
+        assert_eq!(
+            found,
+            [
+                &replacement(at, 1, 4, &["instance.local.console.a"]),
+                &replacement(at, 5, 4, &["instance.local.console.b"]),
+            ]
+        );
+        assert_eq!(serial_of(&public), b"x########x\r\n");
+        let text = public.render();
+        assert_eq!(PublicReceipt::parse(text.as_bytes()), Ok(public));
+    }
+
+    #[test]
+    fn a_replacement_lists_each_rule_once() {
+        let mut public = public(&with_serial(NETWORK)).unwrap();
+        let rule = public.replacements[2].rules[0].clone();
+        public.replacements[2].rules = vec![rule.clone(), rule];
+        match PublicReceipt::parse(public.render().as_bytes()) {
+            Err(ReceiptError::Invalid { at, .. }) => assert_eq!(at, "/replacements/2"),
+            other => panic!("{other:?}"),
+        }
+        let leaks = verify(&public, &[]).unwrap_err();
+        assert!(
+            leaks.contains(&leak(FORM_RULE, "/replacements/2")),
+            "{leaks:?}"
+        );
+    }
 }

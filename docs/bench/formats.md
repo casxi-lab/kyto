@@ -636,9 +636,13 @@ is, and a [public version](#public-versions) never rewrites it. The leak
 check refuses the public version of a receipt whose plan holds a value to
 hide of at least 4 bytes, such as an address or a path prefix; a relay
 number shorter than that is not searched for, so nothing finds one in a
-plan, and it is for whoever writes the plan to keep it out. The library
-reads and checks plans and reads cold boots as their entries say; no command
-runs a plan yet.
+plan, and it is for whoever writes the plan to keep it out. Payload files
+hold no value of a bench either: a public version shows the SHA-256 of every
+payload file, and that of a file made from a template with a value of the
+bench, such as a server address on a kernel command line, would let the
+value be found by trying candidates against it. Nothing checks the contents
+of payload files for such values. The library reads and checks plans and
+reads cold boots as their entries say; no command runs a plan yet.
 
 A plan is UTF-8 text; bytes that are not UTF-8 are not read as a plan. The
 library keeps the text that it reads a plan from without changing a byte:
@@ -765,15 +769,12 @@ instance configuration:
 
 ### Payload checks
 
-These checks of an entry's payload come before the board is powered, and a
-payload that fails one refuses the run, under the name of its rule. They are
-made in this order: for each entry in the order of the plan,
-`payload.source_digest`, `write.not_enabled`, `write.refused_property` and
-`payload.variant_missing`; then, once those pass for every entry, the payload
-of each entry is staged in the order of the plan and checked with
-`payload.staged_digest`. The first check that fails refuses the run, so a
-run is refused under one rule only, and the refusal names the first file
-found that fails it:
+These checks of an entry's payload come before the board is powered. A
+payload that fails one refuses the run, as [refused runs](#refused-runs)
+describe, under the name of the rule and with the entry and the first file
+found that fails it. The library makes each check on its own; the order in
+which a run makes them belongs to the flow of a run, which is not defined
+yet:
 
 - `payload.source_digest`: the SHA-256 of every source file equals that of
   the payload;
@@ -1443,3 +1444,8 @@ in `inputs.instance.sha256` is protected in the same way by the
 such secret: it covers bytes that the public version shows, but for those it
 replaced, which could be found by trying their values one by one against
 it. That is why the leak check refuses a segment over a replaced byte.
+
+The digests of payload files, in the run plan, the pinned sets and the
+records of entries and boot files, are shown in full and have no secret
+either. They reveal nothing as long as payload files hold no value of the
+bench, as [run plans](#run-plans) require.

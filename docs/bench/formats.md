@@ -44,7 +44,7 @@ run needs another one. The exit status gives the result:
 | --- | --- |
 | 0 | The run is `"PASS"` |
 | 1 | The run is `"FAIL"` |
-| 2 | A usage or input error: the command line is not valid, a file cannot be read, a document does not pass its checks, the bench cannot be opened or the output directory cannot be created, and no receipt is written; or a file of the output directory cannot be written |
+| 2 | A usage or input error: the command line is not valid, the run plan or the instance configuration cannot be read, a document does not pass its checks, the bench cannot be opened or the output directory cannot be created, and no receipt is written; or the receipt or its public version cannot be written, and the error gives the result of the run |
 | 3 | The run is `"BENCH FAULT"` |
 | 4 | The run was [refused](#refused-runs) before any power command; the receipt says why |
 | 5 | The receipt was written, but the [leak check](#the-leak-check) refused its public version; the receipt gives the verdict or the refusal, and the error names the rule and the field of each value found |
@@ -69,12 +69,14 @@ is checked against exactly the version it declares. Until a bench keeps the
 first record of a run made with a version of a format, that version may
 still change; from then on, any change to the format gives it a new version.
 
-A run reads each file once, into memory, and uses those bytes for
-everything. The SHA-256 that a receipt records for the run plan, the
-instance configuration and each source file of a payload is that of the
-bytes read, and the same bytes are parsed as the document, or checked and
-staged as the payload file, so a digest and what the run used cannot
-differ, even when the file changes during the run. Nothing is normalized in
+A run reads the run plan and the instance configuration once, into memory,
+and each source file of a payload once for each entry whose payload lists
+it, and uses those bytes for everything. The SHA-256 that a receipt records
+for the run plan, the instance configuration and each source file of an
+entry's payload is that of the bytes read, and the same bytes are parsed as
+the document, or checked and staged as the entry's payload file, so a
+digest and what the run used cannot differ, even when the file changes
+during the run. Nothing is normalized in
 between: line endings, a byte order mark and a final newline count as they
 are written. A run plan or an instance configuration that is not UTF-8 is an
 input error. The board description is not read from a file: a run uses the
@@ -319,10 +321,12 @@ or secure-boot provisioning.
 `[[write_triggers]]` each give `class`, `files`, at least one file name, and
 `source`. A payload file is a trigger of the class when its file name, the
 last segment of its payload name, is one of `files` ignoring ASCII case. A
-delivery device of the tool checks every payload file against the write
-triggers before it writes anything: a trigger is staged only with a permit of
-its class, and only the write gate of a run plan entry that enables the class
-gives one; only the tool itself builds a write gate. Every class is off
+delivery device of the tool writes only payload files that the write gate of
+a run plan entry has checked against the write triggers and the refused
+properties of the board description: a trigger is staged only with a permit
+of its class, which only the gate of an entry that enables the class gives,
+and a file that sets a refused property is never staged; only the tool
+itself builds a write gate. Every class is off
 unless a [run plan](#run-plans) entry enables it in `[entries.writes]`, and
 a run refuses a payload with a trigger of a class that its entry does not
 enable before anything is staged or powered, under the rule
@@ -817,12 +821,17 @@ hour, of the send. Steps run in order:
 - an armed step is sent once the chunk that holds its trigger line has been
   read;
 - its response is the first line that starts after the last byte received
-  before the send and matches `expect`; it must be complete within
-  `timeout_ms` of the send.
+  before the send and matches `expect`; it must be complete, ended by its
+  LF, within `timeout_ms` of the send.
+
+Only complete lines arm and answer steps: the unterminated last line of a
+capture does neither.
 
 `end = { marker = "<marker>" }` ends a cold boot once the marker has appeared
 and every step has its response. `end = "timeout"` captures until the boot
-timeout.
+timeout. A run ends a cold boot at the boot timeout, or when the
+`timeout_ms` of the step that waits for its response has passed, once its
+bench clock reaches that time, whatever the console reports.
 
 ### Checks of a run plan
 
@@ -888,7 +897,8 @@ The library reads the transcript of a cold boot in [lines](#lines), with the
 line patterns of the board description and of the entry. It reads a
 transcript the same way while it is received and when a record of it is read
 back, with each send placed after the bytes received before it; the
-unterminated last line of a capture is read when the capture ends. A line is
+unterminated last line of a capture is read when the capture ends, but not
+for [steps](#steps-and-the-end-of-a-cold-boot). A line is
 named by its offset. From the lines, in order, it takes:
 
 - **Boot modes.** A line of the `[boot_mode]` form gives the mode that the
@@ -1236,9 +1246,10 @@ The checks of an entry are, in this order:
 - for the first entry, when `start.events` is not empty,
   `power.off_unconfirmed` on the subject `start`: a fault unless readings
   [confirm](#the-supply) the power off that `start.events` end with;
-- `device.error` for each `device_error` event of the entry, and of
-  `start.events` for the first entry: a fault on the subject of the device's
-  role, with the device's detail;
+- `device.error` for each `device_error` event, first of `start.events` for
+  the first entry, then of the entry's own events, each in the order of the
+  events: a fault on the subject of the device's role, with the device's
+  detail;
 - once a `switch` event shows that the board is served the entry's
   generation, `payload.served_digest` for each file of its payload, in the
   order of the payload, with the payload name as `subject`: a fault when the

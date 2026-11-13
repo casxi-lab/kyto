@@ -281,9 +281,8 @@ impl Instance {
         identity.check(board).map_err(InstanceError::Identity)
     }
 
-    /// Checks that no value to hide occurs in `text`, which a receipt
-    /// records verbatim, ignoring ASCII case; the error at the value's key
-    /// gives `reason`.
+    /// Checks that no value to hide occurs in `text`, ignoring ASCII case;
+    /// the error at the value's key gives `reason`.
     pub fn check_text(&self, text: &str, reason: &str) -> Result<(), InstanceError> {
         let text = text.to_ascii_lowercase();
         for InstanceValue { rule, value } in self.deidentify_values() {
@@ -394,9 +393,8 @@ impl RawInstance {
     }
 }
 
-/// The salts that kyto publishes, in its documentation, its tests and its
-/// example configuration, which only a configuration of simulated devices
-/// may use.
+/// The salts that kyto publishes, in its documentation, tests and example
+/// configuration, which only simulated devices may use.
 const PUBLISHED_SALTS: [&str; 3] = [
     "9c1f5e0a7b3d48e2a6c0f4b8d2e71a35",
     "6b2d9f41c07e8a35d4e19b7c2f60a853",

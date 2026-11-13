@@ -15,7 +15,7 @@ use std::rc::Rc;
 
 use serde::Deserialize;
 
-use kyto_bench_core::board::EMBEDDED;
+use kyto_bench_core::board::{Board, EMBEDDED};
 use kyto_bench_core::instance::{Instance, Role};
 
 use crate::device::{Clock, Console, Delivery, MeterConfirm, PowerConfirm, PowerSwitch};
@@ -40,9 +40,10 @@ pub struct Bench {
 /// What a run takes from its surroundings.
 pub trait Env {
     /// The bench that the kinds of the instance's `[devices]` and its
-    /// `[local]` settings describe; `base` is the directory of the instance
+    /// `[local]` settings describe, for `board`, whose description gives the
+    /// line settings of its console; `base` is the directory of the instance
     /// configuration. The error says why there is none.
-    fn open_bench(&self, instance: &Instance, base: &Path) -> Result<Bench, String>;
+    fn open_bench(&self, board: &Board, instance: &Instance, base: &Path) -> Result<Bench, String>;
 
     /// The revision of the tool.
     fn tool(&self) -> ToolRevision {
@@ -73,7 +74,7 @@ struct ReplaySettings {
 }
 
 impl Env for HostEnv {
-    fn open_bench(&self, instance: &Instance, base: &Path) -> Result<Bench, String> {
+    fn open_bench(&self, _: &Board, instance: &Instance, base: &Path) -> Result<Bench, String> {
         let mut recordings = Vec::new();
         for role in Role::ALL {
             let (kind, local) = (&instance.devices().device(role).kind, instance.local(role));
@@ -171,8 +172,9 @@ mod tests {
     fn the_host_bench_replays_the_files_of_its_console_settings() {
         let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples");
         let replay = "[local.console]\nreplay = [\"captures/echo.bin\"]\n";
+        let board = Board::parse(kyto_bench_core::board::RASPBERRY_PI_5).unwrap();
         let mut bench = HostEnv
-            .open_bench(&instance(SIMULATED, replay), &base)
+            .open_bench(&board, &instance(SIMULATED, replay), &base)
             .unwrap();
         assert!(is_simulated(&instance(SIMULATED, "")));
         assert_eq!(bench.relay, None);
@@ -199,7 +201,7 @@ mod tests {
             ),
         ];
         for (instance, error) in refused {
-            let opened = HostEnv.open_bench(&instance, &base);
+            let opened = HostEnv.open_bench(&board, &instance, &base);
             assert!(opened.err().unwrap().starts_with(error), "{error}");
         }
         assert!(!is_simulated(&instance("relay", "")));

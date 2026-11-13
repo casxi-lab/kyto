@@ -154,7 +154,7 @@ impl TestEnv {
 }
 
 impl Env for TestEnv {
-    fn open_bench(&self, _: &Instance, _: &Path) -> Result<Bench, String> {
+    fn open_bench(&self, _: &Board, _: &Instance, _: &Path) -> Result<Bench, String> {
         let script = self.script.borrow_mut().take().ok_or("the bench is open")?;
         let mut bench = env::simulated(&self.world, script);
         if self.deaf {

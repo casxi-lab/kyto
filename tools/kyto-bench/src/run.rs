@@ -58,7 +58,7 @@ pub fn run(env: &dyn Env, inputs: &Inputs) -> Result<Receipt, String> {
         }
         sources.push(read);
     }
-    let mut bench = env.open_bench(&inputs.instance, &inputs.instance_dir)?;
+    let mut bench = env.open_bench(&inputs.board, &inputs.instance, &inputs.instance_dir)?;
     for (index, read) in sources.into_iter().enumerate() {
         let record = &mut receipt.entries[index];
         if let Err(refusal) = prepare_entry(inputs, &mut bench, index, read, record) {

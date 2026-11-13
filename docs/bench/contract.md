@@ -231,10 +231,15 @@ it.
 | [VERD-R04](requirements.md#verd-r04) | `rejudging_a_written_receipt_gives_the_recorded_verdicts` | `tools/kyto-bench/tests/run.rs` | negative |
 | [VERD-R04](requirements.md#verd-r04) | `a_fault_that_leaves_the_supply_unconfirmed_switches_it_off_again` | `tools/kyto-bench/tests/run.rs` | negative |
 | [VERD-R04](requirements.md#verd-r04) | `nothing_runs_after_a_bench_fault_and_no_cold_boot_after_a_failure` | `tools/kyto-bench-core/src/rejudge.rs` | negative |
+| [VERD-R04](requirements.md#verd-r04) | `a_failed_cold_boot_ends_its_entry_and_the_next_entry_runs` | `tools/kyto-bench/tests/run.rs` | negative |
+| [VERD-R04](requirements.md#verd-r04) | `a_bench_fault_ends_the_run_and_the_rest_is_not_run` | `tools/kyto-bench/tests/run.rs` | negative |
 | [VERD-R05](requirements.md#verd-r05) | `a_boot_that_is_not_from_the_network_fails` | `tools/kyto-bench-core/src/verdict.rs` | negative |
+| [VERD-R05](requirements.md#verd-r05) | `a_recorded_boot_without_the_network_marker_fails` | `tools/kyto-bench/tests/run.rs` | negative |
+| [VERD-R05](requirements.md#verd-r05) | `a_recorded_fall_back_to_the_sd_card_fails` | `tools/kyto-bench/tests/run.rs` | negative |
 | [VERD-R06](requirements.md#verd-r06) | `the_end_marker_must_appear_by_the_boot_timeout` | `tools/kyto-bench-core/src/verdict.rs` | negative |
 | [VERD-R06](requirements.md#verd-r06) | `an_end_marker_without_its_line_feed_ends_no_cold_boot` | `tools/kyto-bench/tests/run.rs` | negative |
 | [VERD-R06](requirements.md#verd-r06) | `a_cold_boot_ends_at_its_deadline_whatever_the_console_reports` | `tools/kyto-bench/tests/run.rs` | negative |
+| [VERD-R06](requirements.md#verd-r06) | `a_boot_timeout_fails_and_the_supply_is_confirmed_off` | `tools/kyto-bench/tests/run.rs` | negative |
 | [VERD-R06](requirements.md#verd-r06) | `a_deadline_that_the_console_reports_early_ends_no_cold_boot` | `tools/kyto-bench/tests/run.rs` | positive |
 | [VERD-R07](requirements.md#verd-r07) | `firmware_versions_and_segments_are_those_of_the_entry` | `tools/kyto-bench-core/src/verdict.rs` | negative |
 | [VERD-R07](requirements.md#verd-r07) | `a_firmware_version_other_than_expected_fails` | `tools/kyto-bench-core/src/verdict.rs` | negative |
@@ -280,6 +285,7 @@ it.
 | [PROV-R06](requirements.md#prov-r06) | `a_missing_variant_file_is_refused_when_the_stepping_is_unknown` | `tools/kyto-bench-core/src/payload.rs` | negative |
 | [PROV-R06](requirements.md#prov-r06) | `a_stepping_names_its_variant_in_any_ascii_case` | `tools/kyto-bench-core/src/payload.rs` | negative |
 | [PROV-R07](requirements.md#prov-r07) | `evidence_needs_a_known_commit_a_clean_tree_and_real_devices` | `tools/kyto-bench-core/src/evidence.rs` | negative |
+| [PROV-R07](requirements.md#prov-r07) | `a_run_with_an_unknown_commit_or_a_changed_tree_is_not_evidence` | `tools/kyto-bench/tests/run.rs` | negative |
 | [PROV-R07](requirements.md#prov-r07) | `evidence_lists_exactly_the_reasons_that_apply` | `tools/kyto-bench-core/src/receipt.rs` | negative |
 | [PROV-R07](requirements.md#prov-r07) | `the_example_runs_to_pass_with_the_built_binary` | `tools/kyto-bench/tests/release.rs` | negative |
 | [PROV-R08](requirements.md#prov-r08) | `the_build_script_runs_on_every_build_and_gives_both_values` | `tools/kyto-bench/src/provenance.rs` | positive |
@@ -296,6 +302,8 @@ it.
 | [POWER-R02](requirements.md#power-r02) | `the_switch_happens_only_while_off_is_confirmed` | `tools/kyto-bench/tests/run.rs` | positive |
 | [POWER-R02](requirements.md#power-r02) | `a_cold_boot_ends_at_its_deadline_whatever_the_console_reports` | `tools/kyto-bench/tests/run.rs` | positive |
 | [POWER-R02](requirements.md#power-r02) | `an_unconfirmed_power_on_ends_at_its_timeout_and_is_switched_off` | `tools/kyto-bench/tests/run.rs` | positive |
+| [POWER-R02](requirements.md#power-r02) | `a_boot_timeout_fails_and_the_supply_is_confirmed_off` | `tools/kyto-bench/tests/run.rs` | positive |
+| [POWER-R02](requirements.md#power-r02) | `a_missing_boot_marker_fails_and_the_supply_is_confirmed_off` | `tools/kyto-bench/tests/run.rs` | positive |
 | [POWER-R02](requirements.md#power-r02) | `residual_voltage_above_the_off_threshold_is_not_off` | `tools/kyto-bench/tests/run.rs` | negative |
 | [POWER-R02](requirements.md#power-r02) | `the_off_interval_runs_from_the_last_off_confirmation_of_the_run` | `tools/kyto-bench-core/src/rejudge.rs` | negative |
 | [POWER-R03](requirements.md#power-r03) | `an_unconfirmed_command_or_a_console_not_ready_is_a_fault` | `tools/kyto-bench-core/src/power.rs` | negative |
@@ -305,6 +313,8 @@ it.
 | [POWER-R03](requirements.md#power-r03) | `every_device_error_is_a_fault` | `tools/kyto-bench-core/src/power.rs` | negative |
 | [POWER-R03](requirements.md#power-r03) | `console_output_before_the_power_on_is_a_bench_fault` | `tools/kyto-bench-core/src/verdict.rs` | negative |
 | [POWER-R03](requirements.md#power-r03) | `rejudging_a_written_receipt_gives_the_recorded_verdicts` | `tools/kyto-bench/tests/run.rs` | negative |
+| [POWER-R03](requirements.md#power-r03) | `an_unconfirmed_power_on_ends_at_its_timeout_and_is_switched_off` | `tools/kyto-bench/tests/run.rs` | negative |
+| [POWER-R03](requirements.md#power-r03) | `an_unconfirmed_power_off_after_a_cold_boot_is_a_bench_fault` | `tools/kyto-bench/tests/run.rs` | negative |
 | [POWER-R04](requirements.md#power-r04) | `a_fault_that_leaves_the_supply_unconfirmed_switches_it_off_again` | `tools/kyto-bench/tests/run.rs` | negative |
 | [POWER-R04](requirements.md#power-r04) | `residual_voltage_above_the_off_threshold_is_not_off` | `tools/kyto-bench/tests/run.rs` | negative |
 | [POWER-R05](requirements.md#power-r05) | `a_run_that_panics_switches_the_supply_off_and_leaves_no_output` | `tools/kyto-bench/tests/run.rs` | negative |
@@ -320,12 +330,8 @@ it.
 | Obligation | Why open | What closes it |
 | --- | --- | --- |
 | Fuzz tests of the parsing of console transcripts, run plans and receipts | No fuzz test exists | Fuzz tests in the `tools` workspace with a fixed seed and a number of cases written as a constant, run by the `test` step of `cargo xtask check` |
-| `VERD-R05` on console output recorded from a real board | Every test reads console output written for the examples | Console output recorded from a Raspberry Pi 5, one without the network boot mode line and one in which the firmware falls back to the SD card, with addresses, MAC addresses and serial numbers replaced by documentation values, each replayed by a run on simulated devices |
 | `VERD-R10` on bytes read back | No test gives a receipt with a lone CR or LF and reads it back, or a segment digested over line ends that were changed | Negative cases of a receipt that keeps bytes that are not UTF-8 and lone CR and LF bytes as read, and of a segment whose digest was taken over changed line ends |
-| `PROV-R07` on a run | Only `evidence.simulated` is shown on a run | A run whose tool commit is unknown and whose working tree changed, giving a receipt that is not eligible with both reasons |
 | `PROV-R08` across builds | No test builds the tool, changes its working tree and builds it again. That every build asks Git again rests on Cargo running the build script on every build while a path that it watches does not exist | A test that builds the tool in a Git checkout, then changes a tracked file, adds an untracked file, edits a tracked file marked assume-unchanged or skip-worktree, or adds a file that only a local exclude hides, builds it again after each change and reads `tool.clean` as `false` |
-| `POWER-R02` after a missing marker | No run test asserts the power off and its confirming reading after a cold boot that fails because a marker of the board is missing while its end marker comes | A run test of that cold boot that asserts the power off command and the reading that confirms it |
-| `POWER-R03` for a power off after a cold boot | No run test has a power off after a cold boot that was sent and that readings do not confirm | A run test of that power off that gives `BENCH FAULT` and the exit status 3 |
 | `POWER-R04` on standard error | No test reads what a run says on standard error after it sends the power off again | A test that reads the standard error of a run whose fault leaves the supply unconfirmed, and of one whose power off is then confirmed |
 | `POWER-R05` and `POWER-R06` for an error of the tool | No test reads the message on standard error or runs the binary to the exit status 101, the status of a Rust panic | A test that runs the built binary to an error of the tool and reads its message on standard error and its exit status 101 |
 | `POWER-R01` on a real bench | Power commands are confirmed only by the simulated supply meter | Drivers for a real power device and supply meter, and runs on a bench |

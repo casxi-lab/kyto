@@ -17,8 +17,11 @@ Every requirement is shown so far by tests on the host: unit tests of
 `kyto-bench-core` and `kyto-bench` on records and simulated devices built in
 code, runs of the command on simulated devices, and runs of the built binary
 on the example. The console output that they read was written for the
-examples, and no test is a run on a real bench. The tests that remain are
-the contract's [open obligations](contract.md#open-obligations).
+examples, apart from two recordings of a Raspberry Pi 5 boot whose serial
+number, MAC and IP addresses, TFTP path prefix and SD card identifiers are
+replaced by documentation values, and no test is a run on a real bench. The
+tests that remain are the contract's
+[open obligations](contract.md#open-obligations).
 
 ## Verdicts
 

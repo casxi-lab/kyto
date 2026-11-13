@@ -9,6 +9,7 @@
 use std::cell::RefCell;
 use std::ffi::OsString;
 use std::fs;
+use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -146,6 +147,28 @@ impl Console for Early {
     }
 }
 
+/// A console that panics when it is first read, once the supply is on, as
+/// a run that stops on an error of the tool does.
+struct Panicking(Box<dyn Console>);
+
+impl Console for Panicking {
+    fn open(&mut self, deadline: Nanos) -> Result<Nanos, DeviceError> {
+        self.0.open(deadline)
+    }
+
+    fn receive(&mut self, _: Nanos) -> Result<Received, DeviceError> {
+        panic!("an error of the tool while it reads the console");
+    }
+
+    fn send(&mut self, bytes: &[u8]) -> Result<Nanos, DeviceError> {
+        self.0.send(bytes)
+    }
+
+    fn close(&mut self) -> Result<(), DeviceError> {
+        self.0.close()
+    }
+}
+
 /// A power switch whose command of the number given, from 1, fails before
 /// it is sent.
 struct Failing(Box<dyn PowerSwitch>, u32, u32);
@@ -162,7 +185,8 @@ impl PowerSwitch for Failing {
 
 /// Surroundings whose bench is a simulated device of each role on `world`,
 /// with a [`Deaf`] console when `deaf` is set, an [`Early`] one when `early`
-/// is, and a [`Failing`] switch when `failing` gives a command. When the
+/// is, a [`Panicking`] one when `panics` is, and a [`Failing`] switch when
+/// `failing` gives a command. When the
 /// bench is opened, a directory is made at `block`, if it is given.
 struct TestEnv {
     world: SimWorld,
@@ -170,6 +194,7 @@ struct TestEnv {
     boards: Vec<&'static str>,
     deaf: bool,
     early: bool,
+    panics: bool,
     failing: Option<u32>,
     block: Option<PathBuf>,
 }
@@ -184,6 +209,7 @@ impl TestEnv {
             boards,
             deaf: false,
             early: false,
+            panics: false,
             failing: None,
             block: None,
         }
@@ -212,6 +238,9 @@ impl Env for TestEnv {
         }
         if self.early {
             bench.console = Box::new(Early(bench.console, Rc::clone(&bench.clock)));
+        }
+        if self.panics {
+            bench.console = Box::new(Panicking(bench.console));
         }
         if let Some(command) = self.failing {
             bench.power = Box::new(Failing(bench.power, 0, command));
@@ -921,6 +950,25 @@ fn a_fault_that_leaves_the_supply_unconfirmed_switches_it_off_again() {
         let mut meter = SimSupplyMeter::new(&env.world);
         assert_eq!(meter.sample().unwrap().micro, 0);
     }
+}
+
+#[test]
+fn a_run_that_panics_switches_the_supply_off_and_leaves_no_output() {
+    let mut env = TestEnv::example();
+    env.panics = true;
+    let dir = scratch("panic");
+    let ran = panic::catch_unwind(AssertUnwindSafe(|| run_example_in(&dir, &env)));
+    assert!(ran.is_err(), "the panic goes on once the supply is off");
+    // The panic came after the first power on, and the supply was switched
+    // off again: the last command is an off, and the supply reads 0 V.
+    let commands: Vec<PowerState> = env.world.power_commands().iter().map(|c| c.1).collect();
+    assert_eq!(commands, [PowerState::Off, PowerState::On, PowerState::Off]);
+    let mut meter = SimSupplyMeter::new(&env.world);
+    assert_eq!(meter.sample().unwrap().micro, 0);
+    assert!(
+        !dir.join("out").exists(),
+        "no receipt and no output directory"
+    );
 }
 
 #[test]

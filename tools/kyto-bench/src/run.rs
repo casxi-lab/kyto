@@ -23,6 +23,7 @@
 //! that judge what happened are those of `kyto_bench_core`, which a reader
 //! of the receipt calls again on what it records.
 
+use std::io::{self, Write as _};
 use std::panic::{self, AssertUnwindSafe};
 use std::rc::Rc;
 
@@ -94,7 +95,10 @@ pub fn run(env: &dyn Env, inputs: &Inputs) -> Result<Receipt, String> {
 fn abort_off(bench: &mut Bench, confirmation: &Confirmation, events: &mut Vec<Event>, why: &str) {
     let off = power_off_confirmed(bench, confirmation, events, 0);
     let not = if off.is_some() { "" } else { "not " };
-    eprintln!("kyto-bench: {why}; readings did {not}confirm the power off");
+    let _ = writeln!(
+        io::stderr(),
+        "kyto-bench: {why}; readings did {not}confirm the power off"
+    );
 }
 
 /// Records the source files `read` of entry `index` of `inputs` in `record`
@@ -142,7 +146,11 @@ pub fn prepare_entry(
         .collect();
     let delivery = &mut *bench.delivery;
     let report = |error: &dyn std::fmt::Display| {
-        eprintln!("kyto-bench: staging the payload of {}: {error}", entry.name);
+        let name = &entry.name;
+        let _ = writeln!(
+            io::stderr(),
+            "kyto-bench: staging the payload of {name}: {error}"
+        );
     };
     match WriteGate::new(&entry.writes, &inputs.board).stage(delivery, &files) {
         Ok(generation) => {

@@ -7,6 +7,7 @@
 #![allow(clippy::disallowed_types)]
 
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -31,6 +32,15 @@ fn scratch(name: &str) -> PathBuf {
 /// Runs `kyto-bench run` with the plan, the example instance configuration
 /// and the payload root given, into `out`; its exit status.
 fn kyto_bench_run(plan: &Path, payloads: &Path, out: &Path) -> Option<i32> {
+    let output = kyto_bench(plan, payloads, out).output().unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.ends_with(&format!("{}\n", out.join("receipt.json").display())));
+    output.status.code()
+}
+
+/// The command line of `kyto-bench run` with the plan, the example instance
+/// configuration and the payload root given, into `out`.
+fn kyto_bench(plan: &Path, payloads: &Path, out: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_kyto-bench"));
     command.arg("run").arg("--plan").arg(plan);
     command
@@ -41,10 +51,7 @@ fn kyto_bench_run(plan: &Path, payloads: &Path, out: &Path) -> Option<i32> {
         .arg(payloads)
         .arg("--out")
         .arg(out);
-    let output = command.output().unwrap();
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.ends_with(&format!("{}\n", out.join("receipt.json").display())));
-    output.status.code()
+    command
 }
 
 fn receipt(out: &Path) -> Receipt {
@@ -128,4 +135,26 @@ fn release_binary_refuses_an_unenabled_eeprom_payload() {
     assert_eq!(found, ("write.not_enabled", Some(0), "pieeprom.upd"));
     assert_eq!(receipt.verdict, None);
     assert!(receipt.start.events.is_empty(), "no power command");
+}
+
+#[test]
+fn output_that_nothing_reads_changes_no_exit_status() {
+    // Standard output and standard error are pipes whose reading end is
+    // closed, so every message and result fails to be written.
+    let closed = || {
+        let (reader, writer) = io::pipe().unwrap();
+        drop(reader);
+        writer
+    };
+    // A run that passes writes its result on standard output, and a plan
+    // that cannot be read gives an error on standard error.
+    let (dir, examples) = (scratch("closed-output"), examples());
+    let plans = [examples.join("run-plan.toml"), dir.join("absent.toml")];
+    for (plan, status) in plans.iter().zip([0, 2]) {
+        let out = dir.join(status.to_string());
+        let mut command = kyto_bench(plan, &examples.join("payload"), &out);
+        let ran = command.stdout(closed()).stderr(closed()).status().unwrap();
+        assert_eq!(ran.code(), Some(status), "{}", plan.display());
+        assert_eq!(out.join("receipt.json").exists(), status == 0);
+    }
 }

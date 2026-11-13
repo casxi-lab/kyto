@@ -179,9 +179,10 @@ cargo run --locked --release --manifest-path tools/Cargo.toml -- run \
 
 Its exit status is 0 for `PASS`, 1 for `FAIL`, 2 for a usage or input error
 or a receipt that cannot be written, with no receipt left, 3 for
-`BENCH FAULT`, 4 for a run refused before any power command, and 5 when the
+`BENCH FAULT`, 4 for a run refused before any power command, 5 when the
 receipt was written but its public version was refused or cannot be
-written.
+written, and 101 when the tool stopped on an error of its own, with no
+receipt left.
 [The formats page](docs/bench/formats.md) describes the command, the files it
 reads and writes, and every rule of a verdict.
 

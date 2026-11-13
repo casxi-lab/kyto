@@ -48,6 +48,10 @@ run needs another one. The exit status gives the result:
 | 3 | The run is `"BENCH FAULT"` |
 | 4 | The run was [refused](#refused-runs) before any power command; the receipt says why |
 | 5 | The receipt was written, but not its public version: the [leak check](#the-leak-check) refused it, and the error names the rule and the field of each value found, or it cannot be written, and the error says why. The receipt gives the verdict or the refusal |
+| 101 | The run stopped on an error of the tool itself, a panic. It switched the supply off once more and says on standard error whether readings confirmed it; no receipt is left, and the output directory is removed |
+
+A message or result that cannot be written, as when nothing reads standard
+output or standard error any more, changes no exit status.
 
 The tests of the tool read the Raspberry Pi 5 description, the identity
 record template and the examples under `tools/examples/`, run the example run

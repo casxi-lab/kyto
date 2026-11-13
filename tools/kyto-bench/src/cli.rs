@@ -4,6 +4,8 @@
 //! result as its exit status.
 
 use std::ffi::OsString;
+use std::io::{self, Write as _};
+use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
 use clap::{Arg, ArgMatches, Command, value_parser};
@@ -34,7 +36,8 @@ pub const PUBLIC_REFUSED: u8 = 5;
 
 const EXIT_STATUS: &str = "Exit status: 0 PASS, 1 FAIL, 2 usage or input error, or a receipt \
 that cannot be written (no receipt), 3 BENCH FAULT, 4 refused before any power command \
-(receipt written), 5 public version refused or not written (receipt written).";
+(receipt written), 5 public version refused or not written (receipt written), 101 an error \
+of the tool itself, after switching the supply off (no receipt).";
 
 /// The command line.
 pub fn command() -> Command {
@@ -87,7 +90,7 @@ pub fn run<T: Into<OsString> + Clone>(args: impl IntoIterator<Item = T>, env: &d
         return INPUT_ERROR;
     };
     run_plan(args, env).unwrap_or_else(|message| {
-        eprintln!("kyto-bench: {message}");
+        let _ = writeln!(io::stderr(), "kyto-bench: {message}");
         INPUT_ERROR
     })
 }
@@ -112,7 +115,12 @@ fn run_plan(args: &ArgMatches, env: &dyn Env) -> Result<u8, String> {
         env.boards(),
     )?;
     output::create(out)?;
-    let receipt = run::run(env, &inputs).inspect_err(|_| output::remove_empty(out))?;
+    // A run that gives no receipt, or unwinds, leaves no output directory.
+    let ran = panic::catch_unwind(AssertUnwindSafe(|| run::run(env, &inputs)));
+    if !matches!(ran, Ok(Ok(_))) {
+        output::remove_empty(out);
+    }
+    let receipt = ran.unwrap_or_else(|panic| panic::resume_unwind(panic))?;
     let (status, result) = match (&receipt.refusal, receipt.verdict) {
         (Some(refusal), _) => (REFUSED, format!("refused by {}", refusal.rule)),
         (None, Some(Verdict::Pass)) => (PASS, "PASS".into()),
@@ -124,9 +132,10 @@ fn run_plan(args: &ArgMatches, env: &dyn Env) -> Result<u8, String> {
         output::remove_empty(out);
         format!("the run gave {result}, but no receipt: {message}")
     })?;
-    println!("{result}: {}", out.join(RECEIPT).display());
+    let _ = writeln!(io::stdout(), "{result}: {}", out.join(RECEIPT).display());
     for why in &unwritten {
-        eprintln!("kyto-bench: the run gave {result}, but no public version: {why}");
+        let why = format!("the run gave {result}, but no public version: {why}");
+        let _ = writeln!(io::stderr(), "kyto-bench: {why}");
     }
     Ok(if unwritten.is_empty() {
         status

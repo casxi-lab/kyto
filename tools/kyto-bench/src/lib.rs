@@ -8,6 +8,11 @@
 //! receipt ([`assemble`]) and its public version ([`output`]). The formats
 //! and rules it uses are in `kyto_bench_core`.
 
+// A message that cannot be written, as when nothing reads it any more, must
+// not end a run or change its exit status, so the tool writes messages with
+// `writeln!` and ignores a failure; the print macros would panic.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
+
 pub mod assemble;
 pub mod cli;
 pub mod device;

@@ -246,11 +246,11 @@ A bound whose field the record gives as another value does not apply. A rule
 that needs a value the record does not give is undecided: an unknown
 manufacturing version, or one above every version in `releases`, and a
 bound whose field is unknown. The result is the latest decided date, if
-there is one, and the list of the undecided rules that could make the
-minimum later: an undecided manufacturing version, and every undecided bound
-whose date is later than the decided date, or every undecided bound when no
-date is decided. The board needs a release of the decided date or later,
-possibly later still; the minimum is decided when the list is empty.
+there is one, and the list of every undecided rule, in the order of the
+description, whether its date is before or after the decided date. The
+minimum is decided when the list is empty; otherwise it is marked undecided:
+the board needs a release of the decided date or later, possibly later
+still.
 
 ### Write triggers and refused properties
 

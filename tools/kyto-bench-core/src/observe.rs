@@ -7,6 +7,7 @@
 //! same observations as the run.
 
 use std::collections::BTreeSet;
+use std::ops::Range;
 
 use serde::{Deserialize, Serialize};
 
@@ -89,12 +90,14 @@ pub struct ServerSeen {
 }
 
 /// A file read in full: its payload name, `None` when its path is outside
-/// the path prefix or names no payload file, and the bytes the line gives.
+/// the path prefix or is not a payload name after it; whether its path is
+/// inside the prefix; and the bytes the line gives.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReadSeen {
     pub line: u64,
     pub name: Option<PayloadName>,
+    pub inside_prefix: bool,
     pub bytes: Option<u64>,
 }
 
@@ -183,11 +186,9 @@ impl<'a> Matcher<'a> {
     /// Takes the next chunk of the transcript, received at `at_ns`.
     pub fn push(&mut self, at_ns: u64, bytes: &[u8]) {
         self.bytes.extend_from_slice(bytes);
-        let lines = self.splitter.push(at_ns, bytes);
-        let after = self.received() - self.splitter.pending().len() as u64;
-        for (index, line) in lines.iter().enumerate() {
-            self.line(line, lines.get(index + 1).map_or(after, |next| next.offset));
-        }
+        let mut splitter = std::mem::take(&mut self.splitter);
+        splitter.push(at_ns, bytes, |line, after| self.line(&line, after));
+        self.splitter = splitter;
     }
 
     /// The step whose bytes are due: its trigger line has appeared and it has
@@ -334,12 +335,14 @@ impl<'a> Matcher<'a> {
                 });
             }
             if let Some(path) = tftp.read.pattern.group(text, "path") {
-                let name = names::read_path_name(path, self.tftp.path_prefix.as_bytes()).ok();
+                let read = names::read_path_name(path, self.tftp.path_prefix.as_bytes());
+                let inside_prefix = !matches!(read, Err(names::ReadPathError::OutsidePrefix));
                 let bytes = tftp.read.pattern.group(text, "bytes");
                 let bytes = bytes.and_then(|bytes| std::str::from_utf8(bytes).ok()?.parse().ok());
                 seen.tftp.reads.push(ReadSeen {
                     line: offset,
-                    name,
+                    name: read.ok(),
+                    inside_prefix,
                     bytes,
                 });
             }
@@ -457,6 +460,36 @@ pub fn boot_files(board: &Board, reads: &[ReadSeen], payload: &[PinnedFile]) -> 
                 name: name.clone(),
                 sha256,
             });
+        }
+    }
+    found
+}
+
+/// The spans of `stream` that the named groups of the sensitive lines of
+/// `board` hold, each with its rule `board.<name>` and its bytes; empty
+/// spans and values that the board never hides are left out. Each piece of
+/// the stream between LF and CR bytes is matched without the bytes before
+/// its first printable byte and after its last graphic one, so that neither
+/// a lost LF nor a stray byte keeps a line from its form.
+pub fn sensitive_values(board: &Board, stream: &[u8]) -> Vec<(Range<usize>, String, Vec<u8>)> {
+    let (mut found, mut start) = (Vec::new(), 0);
+    for piece in stream.split(|byte| matches!(byte, b'\n' | b'\r')) {
+        let skip = piece
+            .iter()
+            .take_while(|byte| !(b' '..=b'~').contains(*byte));
+        let skip = skip.count();
+        let end = piece.iter().rposition(u8::is_ascii_graphic);
+        let (line, at) = (&piece[skip..end.map_or(skip, |end| end + 1)], start + skip);
+        start += piece.len() + 1;
+        for sensitive in &board.sensitive {
+            let groups = sensitive.form.pattern.named_groups(line);
+            for (_, span) in groups.into_iter().flatten() {
+                let value = &line[span.clone()];
+                if !value.is_empty() && !board.never.iter().any(|never| never.as_bytes() == value) {
+                    let rule = format!("board.{}", sensitive.name);
+                    found.push((at + span.start..at + span.end, rule, value.to_vec()));
+                }
+            }
         }
     }
     found
@@ -795,7 +828,9 @@ mod tests {
             }]
         );
         // The segment between the start of the operating system and READY
-        // has the digest of the plan.
+        // has the digest of the plan, that of the two lines between them.
+        let between = format!("Example echo payload\r\n{BUILD}\r\n");
+        assert_eq!(entry.segments[0].sha256, Sha256::of(between.as_bytes()));
         let segment = SegmentSeen {
             name: "banner".into(),
             from_line: offset(13),
@@ -911,19 +946,21 @@ mod tests {
             " 18.40 Read kernel.img failed",
         ];
         let seen = run(&plan.entries[0], &tftp, chunks(&lines), &[]).seen;
-        let reads: Vec<Option<PayloadName>> = seen
+        let reads: Vec<(Option<PayloadName>, bool)> = seen
             .tftp
             .reads
             .iter()
-            .map(|read| read.name.clone())
+            .map(|read| (read.name.clone(), read.inside_prefix))
             .collect();
+        // A path outside the prefix and one that is not a payload name after
+        // it are told apart.
         assert_eq!(
             reads,
             [
-                Some(name("config.txt")),
-                Some(name("overlays/bcm2712d0.dtbo")),
-                None,
-                None
+                (Some(name("config.txt")), true),
+                (Some(name("overlays/bcm2712d0.dtbo")), true),
+                (None, false),
+                (None, true)
             ]
         );
         assert_eq!(seen.boot_files.len(), 1);
@@ -1035,6 +1072,7 @@ mod tests {
         let read = |line, file: &str| ReadSeen {
             line,
             name: Some(name(file)),
+            inside_prefix: true,
             bytes: None,
         };
         let reads = [
@@ -1043,6 +1081,7 @@ mod tests {
             ReadSeen {
                 line: 2,
                 name: None,
+                inside_prefix: false,
                 bytes: None,
             },
             read(3, "bcm2712-rpi-5-b.dtb"),

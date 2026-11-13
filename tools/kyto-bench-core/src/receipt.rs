@@ -12,6 +12,7 @@ use base64::engine::general_purpose::STANDARD;
 use serde::de::DeserializeOwned;
 use serde::ser::{self, SerializeMap as _};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+use serde_json::Value as Json;
 
 use crate::board::Board;
 use crate::digest::{Sha256, is_lower_hex};
@@ -487,7 +488,7 @@ pub enum ReceiptError {
     Invalid { at: String, reason: String },
 }
 
-fn invalid(at: impl Into<String>, reason: impl Into<String>) -> ReceiptError {
+pub(crate) fn invalid(at: impl Into<String>, reason: impl Into<String>) -> ReceiptError {
     ReceiptError::Invalid {
         at: at.into(),
         reason: reason.into(),
@@ -509,7 +510,7 @@ impl Receipt {
     /// Reads a receipt strictly, as [`read_rendered`] reads a document, and
     /// checks the rules of [`Receipt::check`].
     pub fn parse(text: &[u8]) -> Result<Self, ReceiptError> {
-        let receipt: Self = read_rendered(text, FORMAT)?;
+        let receipt: Self = read_rendered(text, FORMAT, FORMAT_VERSION)?;
         receipt.check()?;
         Ok(receipt)
     }
@@ -523,8 +524,9 @@ impl Receipt {
     /// plan or of its pinned set in order; a refused run has no run verdict,
     /// no event before the first entry, entries that were not run and
     /// checked nothing, and a refusal that names its entry; every entry not
-    /// run has no cold boot, and a cold boot's console output is described
-    /// by its index; a check has a detail exactly when it did not pass.
+    /// run has no cold boot, and a cold boot's console output, at most the
+    /// capture limit of its entry, is described by its index; a check has a
+    /// detail exactly when it did not pass.
     pub fn check(&self) -> Result<(), ReceiptError> {
         let (tool, evidence, inputs) = (&self.tool, &self.evidence, &self.inputs);
         let (plan_text, board) = (&inputs.run_plan.text, &inputs.board_description);
@@ -593,6 +595,8 @@ impl Receipt {
                     at("index") => cold_boot.index == number, "the index of the cold boot";
                     at("serial/length") => serial.length == serial.bytes_base64.0.len() as u64,
                         "the number of bytes";
+                    at("serial/length") => serial.length <= planned.max_capture_bytes,
+                        "at most the max_capture_bytes of the plan's entry";
                     at("serial/index") => serial.index.len() <= MAX_CHUNKS, "at most 65536 chunks";
                     at("serial/index") => chunks.is_ok(), chunks.err().map(|error| error.to_string()).unwrap_or_default();
                     at("verdict") => cold_boot.verdict != Verdict::NotRun, NOT_RUN;
@@ -616,16 +620,17 @@ fn check_results(at: &str, checks: &[Check]) -> Result<(), ReceiptError> {
     Ok(())
 }
 
-/// Reads a JSON document of `format` version 1 in the form of receipts:
+/// Reads a JSON document of `format` and `version` in the form of receipts:
 /// its `format` and `format_version` are read first; then every field, none
 /// unknown or missing; and the text must be the rendering of what it holds.
 pub(crate) fn read_rendered<T: Serialize + DeserializeOwned>(
     text: &[u8],
     format: &str,
+    version: i64,
 ) -> Result<T, ReceiptError> {
     let syntax = |error: serde_json::Error| ReceiptError::Syntax(error.to_string());
     let header: Header = serde_json::from_slice(text).map_err(syntax)?;
-    if !header.is(format, FORMAT_VERSION) {
+    if !header.is(format, version) {
         return Err(ReceiptError::Format(header));
     }
     let document: T = serde_json::from_slice(text).map_err(syntax)?;
@@ -640,6 +645,43 @@ pub(crate) fn read_rendered<T: Serialize + DeserializeOwned>(
 pub(crate) fn render_json(value: &impl Serialize) -> String {
     let json = serde_json::to_string_pretty(value).expect("a document is JSON without map keys");
     json + "\n"
+}
+
+/// Calls `visit` with the JSON pointer and the text of every string of
+/// `value`, a receipt or a part of one, in the order of the document.
+pub(crate) fn walk(value: &mut Json, at: &str, visit: &mut dyn FnMut(&str, &mut String)) {
+    match value {
+        Json::String(text) => visit(at, text),
+        Json::Array(items) => {
+            for (index, item) in items.iter_mut().enumerate() {
+                walk(item, &format!("{at}/{index}"), visit);
+            }
+        }
+        Json::Object(map) => {
+            for (key, item) in map.iter_mut() {
+                walk(item, &format!("{at}/{key}"), visit);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The last key of the JSON pointer `at`.
+pub(crate) fn key(at: &str) -> &str {
+    at.rsplit('/').next().unwrap_or_default()
+}
+
+/// Whether the field of a receipt at `at` is a digest.
+pub(crate) fn is_digest(at: &str) -> bool {
+    let key = key(at);
+    key == "sha256" || key.ends_with("_sha256") || at == "/bench/hardware_revision/value"
+}
+
+/// The bytes of the field of a receipt at `at` when it is a recorded stream:
+/// the console output of a cold boot or the bytes of a send.
+pub(crate) fn decoded(at: &str, text: &str) -> Option<Vec<u8>> {
+    let stream = key(at) == "bytes_base64";
+    stream.then(|| STANDARD.decode(text).ok()).flatten()
 }
 
 const DIGEST: &str = "the SHA-256 of the recorded text";
@@ -1080,6 +1122,21 @@ steps = [{ after = "ready", send = "?\r", expect = '^STATS seq=1', timeout_ms = 
             .index
             .truncate(MAX_CHUNKS);
         assert!(Receipt::parse(receipt.render().as_bytes()).is_ok());
+        // At most the capture limit of the plan's entry.
+        let limit = |bytes: u64| {
+            let plan = PLAN.replace(
+                "cold_boots = 1\n",
+                &format!("cold_boots = 1\nmax_capture_bytes = {bytes}\n"),
+            );
+            let mut receipt = example();
+            receipt.inputs.run_plan = Text {
+                sha256: Sha256::of(plan.as_bytes()),
+                text: plan,
+            };
+            receipt
+        };
+        assert!(Receipt::parse(limit(61).render().as_bytes()).is_ok());
+        assert_eq!(invalid_at(&limit(60)), format!("{at}length"));
     }
 
     #[test]

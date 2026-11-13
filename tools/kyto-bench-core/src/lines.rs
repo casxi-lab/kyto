@@ -57,15 +57,15 @@ impl LineSplitter {
         &self.pending
     }
 
-    /// Takes the next chunk, received at `at_ns`, and returns the lines it
-    /// ends, in order. An empty chunk ends no line and leaves the time of the
-    /// last chunk unchanged.
-    pub fn push(&mut self, at_ns: u64, bytes: &[u8]) -> Vec<Line> {
+    /// Takes the next chunk, received at `at_ns`, and gives `each` the lines
+    /// it ends, in order, one at a time, each with the offset after its LF.
+    /// An empty chunk ends no line and leaves the time of the last chunk
+    /// unchanged.
+    pub fn push(&mut self, at_ns: u64, bytes: &[u8], mut each: impl FnMut(Line, u64)) {
         if bytes.is_empty() {
-            return Vec::new();
+            return;
         }
         self.last_at_ns = Some(at_ns);
-        let mut lines = Vec::new();
         let mut rest = bytes;
         while let Some(at) = rest.iter().position(|byte| *byte == b'\n') {
             self.pending.extend_from_slice(&rest[..at]);
@@ -74,17 +74,17 @@ impl LineSplitter {
             if content.last() == Some(&b'\r') {
                 content.pop();
             }
-            lines.push(Line {
+            let line = Line {
                 offset: self.start,
                 content,
                 terminated: true,
                 at_ns,
-            });
+            };
             self.start += length;
+            each(line, self.start);
             rest = &rest[at + 1..];
         }
         self.pending.extend_from_slice(rest);
-        lines
     }
 
     /// Ends the transcript and returns the unterminated last line, if bytes
@@ -108,7 +108,7 @@ pub fn split<'a>(chunks: impl IntoIterator<Item = (u64, &'a [u8])>) -> Vec<Line>
     let mut splitter = LineSplitter::new();
     let mut lines = Vec::new();
     for (at_ns, bytes) in chunks {
-        lines.extend(splitter.push(at_ns, bytes));
+        splitter.push(at_ns, bytes, |line, _| lines.push(line));
     }
     lines.extend(splitter.finish());
     lines
@@ -256,11 +256,20 @@ mod tests {
     #[test]
     fn the_splitter_counts_received_bytes_and_holds_the_open_line() {
         let mut splitter = LineSplitter::new();
-        assert_eq!(splitter.push(1, b"ab\ncd"), [line(0, b"ab", true, 1)]);
-        assert_eq!(splitter.received(), 5);
+        let pushed = |splitter: &mut LineSplitter, at_ns, bytes: &[u8]| {
+            let mut lines = Vec::new();
+            splitter.push(at_ns, bytes, |line, after| lines.push((line, after)));
+            lines
+        };
+        let lines = pushed(&mut splitter, 1, b"ab\r\nc\ncd");
+        assert_eq!(
+            lines,
+            [(line(0, b"ab", true, 1), 4), (line(4, b"c", true, 1), 6)]
+        );
+        assert_eq!(splitter.received(), 8);
         assert_eq!(splitter.pending(), b"cd");
-        assert!(splitter.push(2, b"").is_empty());
-        assert_eq!(splitter.finish(), Some(line(3, b"cd", false, 1)));
+        assert!(pushed(&mut splitter, 2, b"").is_empty());
+        assert_eq!(splitter.finish(), Some(line(6, b"cd", false, 1)));
     }
 
     #[test]

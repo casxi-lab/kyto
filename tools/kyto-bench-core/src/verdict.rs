@@ -260,7 +260,8 @@ pub fn cold_boot(checks: &[Check]) -> Verdict {
 
 /// The verdict of an entry of `planned` cold boots from its record: NOT RUN
 /// when it has no event, check or cold boot; BENCH FAULT when one of its
-/// checks is a fault or a cold boot is BENCH FAULT; else FAIL when a cold
+/// checks is a fault or a cold boot is BENCH FAULT or NOT RUN, which no cold
+/// boot that ran is; else FAIL when a cold
 /// boot is FAIL; else PASS when every planned cold boot ran, and BENCH
 /// FAULT when the entry stopped short with no reason.
 pub fn entry(record: &EntryRecord, planned: u32) -> Verdict {
@@ -278,25 +279,19 @@ pub fn entry(record: &EntryRecord, planned: u32) -> Verdict {
 /// entries: BENCH FAULT when an entry is BENCH FAULT or NOT RUN, which only
 /// a fault leaves; else FAIL when an entry is FAIL; else PASS.
 pub fn run(entries: &[Verdict]) -> Verdict {
-    let fault = |verdict: &Verdict| {
-        if *verdict == Verdict::NotRun {
-            Verdict::BenchFault
-        } else {
-            *verdict
-        }
-    };
-    worst(entries.iter().map(fault))
+    worst(entries.iter().copied())
 }
 
-/// The worst of `verdicts`: BENCH FAULT, then FAIL, then PASS.
+/// The worst of `verdicts`: BENCH FAULT, which NOT RUN counts as, then
+/// FAIL, then PASS.
 fn worst(verdicts: impl IntoIterator<Item = Verdict>) -> Verdict {
-    let order = [Verdict::Pass, Verdict::Fail, Verdict::BenchFault];
-    let rank = |verdict: &Verdict| order.iter().position(|v| v == verdict).unwrap_or(0);
-    order[verdicts
-        .into_iter()
-        .map(|verdict| rank(&verdict))
-        .max()
-        .unwrap_or(0)]
+    let rank = |verdict| match verdict {
+        Verdict::Pass => 0,
+        Verdict::Fail => 1,
+        Verdict::BenchFault | Verdict::NotRun => 2,
+    };
+    let worst = verdicts.into_iter().map(rank).max().unwrap_or(0);
+    [Verdict::Pass, Verdict::Fail, Verdict::BenchFault][worst]
 }
 
 #[cfg(test)]
@@ -780,6 +775,12 @@ firmware.bootloader = {{ hash = "1accd665", date = "2026/09/25" }}
         assert_eq!(entry(&record(pass(), &[V::Pass, V::Fail]), 3), V::Fail);
         assert_eq!(entry(&record(pass(), &[V::BenchFault]), 3), V::BenchFault);
         assert_eq!(entry(&record(vec![check(O::Fault)], &[]), 3), V::BenchFault);
+        // A cold boot that claims not to have run is never taken as passing.
+        assert_eq!(entry(&record(pass(), &[V::NotRun]), 1), V::BenchFault);
+        assert_eq!(
+            entry(&record(pass(), &[V::Fail, V::NotRun]), 2),
+            V::BenchFault
+        );
         assert_eq!(run(&[V::Pass, V::Pass]), V::Pass);
         assert_eq!(run(&[V::Pass, V::Fail, V::Pass]), V::Fail);
         assert_eq!(run(&[V::Fail, V::BenchFault, V::NotRun]), V::BenchFault);

@@ -184,6 +184,7 @@ mod tests {
             ("power.off_interval", "on"),
             ("power.off_unconfirmed", "off"),
             ("power.order", "events"),
+            ("console.before_power_on", "console"),
             ("boot.network", "board.network_boot"),
             ("boot.fallback", "board.network_boot"),
             ("boot.end", "ready"),
@@ -250,6 +251,14 @@ mod tests {
         let again = rejudge(&unconfirmed).unwrap();
         assert_eq!(again.entries[0].cold_boots[0].verdict, Verdict::BenchFault);
         assert_eq!(again.verdict, Some(Verdict::BenchFault));
+        // So does console output that came before the power on.
+        let mut early = receipt.clone();
+        early.entries[0].cold_boots[0].serial.index[0][1] = 5_000_000_000;
+        let again = rejudge(&early).unwrap();
+        let checks = &again.entries[0].cold_boots[0].checks;
+        let found = checks.iter().find(|c| c.rule == "console.before_power_on");
+        assert_eq!(found.map(|c| c.result), Some(Outcome::Fault));
+        assert_eq!(again.entries[0].cold_boots[0].verdict, Verdict::BenchFault);
         // So does a power off at the start that was not confirmed.
         let mut start = receipt.clone();
         start.start.events.pop();

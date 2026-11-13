@@ -1271,6 +1271,7 @@ table says otherwise:
 | `power.off_interval` | `on` | fault | only for a cold boot with a power on: the supply was not confirmed off before the cold boot, or an event of a step that follows `wait_off_interval` in the board's `cold_boot.order`, the console ready or the power on, came less than `off_interval_ms` after that confirmation |
 | `power.off_unconfirmed` | `off` | fault | the last power command of the cold boot is not a power off that readings confirm |
 | `power.order` | `events` | fault | an event is [out of order](#the-supply) |
+| `console.before_power_on` | `console` | fault | a chunk of the console output was received before the power on, or the cold boot has console output but no power on: output while the supply was confirmed off contradicts that confirmation |
 | `device.error` | the role of the device | fault | one check for each `device_error` event, which it reports |
 | `boot.network` | `board.` and the board's `network_marker` | fail | no boot mode line is of the board's network mode |
 | `boot.fallback` | the same | fail | the last boot mode line is of another mode |
@@ -1709,6 +1710,8 @@ plan. Re-deriving gives:
   7.7 s; `power.order`, since the console ready, the power on, the reading,
   the send, the end, the power off, the reading and the console closed come
   in this order, at times and after byte counts that never decrease;
+  `console.before_power_on`, since the first chunk came at 6.1 s, after the
+  power on at 5.1 s;
   `boot.network` and `boot.fallback` on `board.network_boot`, since line 0
   is the only boot mode line and is of the network mode; `boot.end` on
   `ready`, whose line 41 came at 7.6 s, within 60000 ms of the power on;

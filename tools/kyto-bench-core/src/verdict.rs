@@ -74,7 +74,8 @@ pub fn judge(c: &ColdBoot<'_>) -> Result<(Observations, Vec<Check>), IndexError>
     };
     let seen = observe(&inputs)?;
     let lines = lines::split(lines::chunks(transcript, index)?);
-    let mut checks = power::cold_boot_checks(board, &c.parameters.confirmation, events, c.off_at);
+    let confirmation = &c.parameters.confirmation;
+    let mut checks = power::cold_boot_checks(board, confirmation, events, index, c.off_at);
     let mut fail = |rule: &str, subject: &str, failure: Option<String>| {
         checks.push(Check::new(rule, subject, Outcome::Fail, failure));
     };
@@ -500,6 +501,7 @@ firmware.bootloader = {{ hash = "1accd665", date = "2026/09/25" }}
             ("power.off_interval", "on"),
             ("power.off_unconfirmed", "off"),
             ("power.order", "events"),
+            ("console.before_power_on", "console"),
             ("boot.network", "board.network_boot"),
             ("boot.fallback", "board.network_boot"),
             ("boot.end", "ready"),
@@ -526,6 +528,19 @@ firmware.bootloader = {{ hash = "1accd665", date = "2026/09/25" }}
         assert_eq!(cold_boot(&checks), Verdict::Pass);
         assert_eq!(seen.tftp.servers.len(), 1);
         assert_eq!(seen.segments.len(), 1);
+    }
+
+    #[test]
+    fn console_output_before_the_power_on_is_a_bench_fault() {
+        let mut case = case(&LINES);
+        let rule = ("console.before_power_on", "console");
+        assert_eq!(case.result(rule.0, rule.1), Outcome::Pass);
+        // Every line came while the supply was confirmed off; markers,
+        // the end marker included, are no less there.
+        case.index = vec![[0, ON - STEP]];
+        assert_eq!(case.result(rule.0, rule.1), Outcome::Fault);
+        assert_eq!(case.result("boot.end", "ready"), Outcome::Pass);
+        assert_eq!(cold_boot(&case.judged().1), Verdict::BenchFault);
     }
 
     #[test]

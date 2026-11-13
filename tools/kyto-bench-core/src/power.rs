@@ -108,15 +108,17 @@ pub fn start_check(confirmation: &Confirmation, events: &[Event]) -> Check {
 }
 
 /// The checks of the supply, the console and the devices in a cold boot
-/// whose events are `events`, the supply having been confirmed off before
-/// it at `off_at`, each a fault when it does not pass, in this order:
-/// `console.not_ready`, `power.on_unconfirmed`, `power.off_interval` when
-/// the supply was switched on, `power.off_unconfirmed`, `power.order` and
-/// [`device_errors`].
+/// whose events are `events` and whose console output came in the chunks
+/// of `index`, each `[offset, at_ns]`, the supply having been confirmed off
+/// before it at `off_at`, each a fault when it does not pass, in this
+/// order: `console.not_ready`, `power.on_unconfirmed`, `power.off_interval`
+/// when the supply was switched on, `power.off_unconfirmed`, `power.order`,
+/// `console.before_power_on` and [`device_errors`].
 pub fn cold_boot_checks(
     board: &Board,
     confirmation: &Confirmation,
     events: &[Event],
+    index: &[[u64; 2]],
     off_at: Option<u64>,
 ) -> Vec<Check> {
     let ready = events
@@ -159,6 +161,11 @@ pub fn cold_boot_checks(
     checks.push(fault("power.off_unconfirmed", "off", failure));
     let disorder = disorder(events).map(|index| format!("event {index} is out of order"));
     checks.push(fault("power.order", "events", disorder));
+    // Output while the supply was off contradicts the off confirmation.
+    let on_at = on.map(|on| events[on].at_ns);
+    let early = index.iter().any(|&[_, at]| on_at.is_none_or(|on| at < on));
+    let failure = early.then(|| "console output came before the power on".into());
+    checks.push(fault("console.before_power_on", "console", failure));
     checks.extend(device_errors(events));
     checks
 }
@@ -261,7 +268,7 @@ mod tests {
 
     fn checks(events: &[Event], off_at: Option<u64>) -> Vec<Check> {
         let board = Board::parse(RASPBERRY_PI_5).unwrap();
-        cold_boot_checks(&board, &confirmation(1), events, off_at)
+        cold_boot_checks(&board, &confirmation(1), events, &[], off_at)
     }
 
     /// The result of `rule` on `subject` among `checks`.
@@ -360,8 +367,30 @@ mod tests {
             pass("power.off_interval", "on"),
             pass("power.off_unconfirmed", "off"),
             pass("power.order", "events"),
+            pass("console.before_power_on", "console"),
         ];
         assert_eq!(results(&checks), expected);
+    }
+
+    #[test]
+    fn console_output_before_the_power_on_is_a_fault() {
+        let (board, events) = (Board::parse(RASPBERRY_PI_5).unwrap(), worked());
+        let on = events.iter().find(|e| command(e) == Some(Command::On));
+        let on = on.unwrap().at_ns;
+        let rule = |events: &[Event], index: &[[u64; 2]]| {
+            let found = cold_boot_checks(&board, &confirmation(1), events, index, Some(100 * MS));
+            result(&found, "console.before_power_on", "console")
+        };
+        assert_eq!(rule(&events, &[[0, on], [5, on + MS]]), Outcome::Pass);
+        assert_eq!(rule(&events, &[[0, on - 1]]), Outcome::Fault);
+        assert_eq!(rule(&events, &[[0, on], [5, on - 1]]), Outcome::Fault);
+        // Without a power on, any output came while the supply was off.
+        let off: Vec<Event> = events
+            .into_iter()
+            .filter(|e| command(e) != Some(Command::On))
+            .collect();
+        assert_eq!(rule(&off, &[]), Outcome::Pass);
+        assert_eq!(rule(&off, &[[0, on]]), Outcome::Fault);
     }
 
     #[test]
@@ -429,7 +458,7 @@ mod tests {
         let board = Board::parse(&text).unwrap();
         let mut events = worked();
         events[0].at_ns = 0;
-        let found = cold_boot_checks(&board, &confirmation(1), &events, Some(100 * MS));
+        let found = cold_boot_checks(&board, &confirmation(1), &events, &[], Some(100 * MS));
         assert_eq!(result(&found, "power.off_interval", "on"), Outcome::Pass);
         // With the console opened right after a wait that comes first, it
         // counts as well.
@@ -438,7 +467,7 @@ mod tests {
             "order = [\"wait_off_interval\", \"open_console\", \"publish\", \"power_on\"]",
         );
         let board = Board::parse(&text).unwrap();
-        let found = cold_boot_checks(&board, &confirmation(1), &events, Some(100 * MS));
+        let found = cold_boot_checks(&board, &confirmation(1), &events, &[], Some(100 * MS));
         assert_eq!(result(&found, "power.off_interval", "on"), Outcome::Fault);
         assert_eq!(
             result(&checks(&events, Some(100 * MS)), "power.off_interval", "on"),

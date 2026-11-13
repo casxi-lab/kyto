@@ -1502,19 +1502,55 @@ fn assert_pointer(error: &ReceiptError) {
     assert!(key.is_some_and(|key| RECEIPT_KEYS.contains(&key)), "{at}");
 }
 
-/// Reads the rendering of `forged`, a receipt with typed fields changed: it
-/// is read as it is, or refused at a JSON pointer, and re-deriving a
-/// receipt that is read gives a receipt or an error at a JSON pointer.
-fn read_forged(forged: &Receipt) {
-    match Receipt::parse(forged.render().as_bytes()) {
-        Ok(read) => {
-            assert_eq!(&read, forged);
-            if let Err(error) = rejudge(&read) {
-                assert_pointer(&error);
-            }
+/// `receipt` with the judgements of `from`, which re-deriving makes again:
+/// its evidence, refusal and verdict, the checks and verdict of each entry,
+/// and the observations, checks and verdict of each cold boot.
+fn judged_as(receipt: &Receipt, from: &Receipt) -> Receipt {
+    let mut judged = receipt.clone();
+    judged.evidence = from.evidence.clone();
+    judged.refusal = from.refusal.clone();
+    judged.verdict = from.verdict;
+    for (entry, original) in judged.entries.iter_mut().zip(&from.entries) {
+        entry.checks = original.checks.clone();
+        entry.verdict = original.verdict;
+        let boots = entry.cold_boots.iter_mut().zip(&original.cold_boots);
+        for (cold_boot, original) in boots {
+            cold_boot.observations = original.observations.clone();
+            cold_boot.checks = original.checks.clone();
+            cold_boot.verdict = original.verdict;
         }
-        Err(error) => assert_pointer(&error),
     }
+    judged
+}
+
+/// Reads the rendering of `forged`, the receipt `original` that a run wrote
+/// with typed fields changed: it is read as it is, or refused at a JSON
+/// pointer, and re-deriving a receipt that is read gives a receipt or an
+/// error at a JSON pointer. When only judgements were changed, re-deriving
+/// undoes them and gives `original`; returns whether it did.
+fn read_forged(original: &Receipt, forged: &Receipt) -> bool {
+    let read = match Receipt::parse(forged.render().as_bytes()) {
+        Ok(read) => read,
+        Err(error) => {
+            assert_pointer(&error);
+            return false;
+        }
+    };
+    assert_eq!(&read, forged);
+    let again = rejudge(&read);
+    if read != *original && judged_as(&read, original) == *original {
+        let again = again.as_ref();
+        assert_eq!(
+            again,
+            Ok(original),
+            "re-deriving undoes a changed judgement"
+        );
+        return true;
+    }
+    if let Err(error) = again {
+        assert_pointer(&error);
+    }
+    false
 }
 
 fn verdict_of(rng: &mut Rng) -> Verdict {
@@ -1686,6 +1722,7 @@ fn forge(rng: &mut Rng, receipt: &mut Receipt, plans: &[String]) {
 struct ReceiptCover {
     verdicts: BTreeSet<String>,
     sent: u64,
+    undone: u64,
     not_utf8: u64,
     lone_cr: u64,
 }
@@ -1695,7 +1732,8 @@ struct ReceiptCover {
 /// as written, re-derive to themselves and hold the bytes that the console
 /// gave, CR, LF and bytes that are not UTF-8 among them, exactly. A receipt
 /// with a typed field changed is read as it is, or refused at a JSON
-/// pointer, and re-deriving one that is read does not panic.
+/// pointer, and re-deriving one that is read does not panic; when only its
+/// judgements were changed, re-deriving gives back the receipt as written.
 fn receipts(cases: u64) {
     let board = pi5();
     let (seeds, plans, inputs) = (Seeds::new(&board), seed_plans(), receipt_inputs(&board));
@@ -1726,7 +1764,7 @@ fn receipts(cases: u64) {
         for _ in 0..FORGERIES {
             let mut forged = read.clone();
             forge(rng, &mut forged, &plans);
-            read_forged(&forged);
+            cover.undone += u64::from(read_forged(&read, &forged));
         }
         let verdict = format!("{:?}", read.verdict);
         cover.verdicts.insert(verdict);
@@ -1741,7 +1779,7 @@ fn receipts(cases: u64) {
         cover.lone_cr += u64::from(lone);
     });
     assert!(cover.verdicts.len() >= 2, "{:?}", cover.verdicts);
-    let counts = [cover.sent, cover.not_utf8, cover.lone_cr];
+    let counts = [cover.sent, cover.undone, cover.not_utf8, cover.lone_cr];
     assert!(counts.iter().all(|count| *count > cases / 10), "{counts:?}");
 }
 

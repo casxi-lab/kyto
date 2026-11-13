@@ -4,6 +4,7 @@
 //! public versions). [`public_version`] makes one and checks it with
 //! [`verify`], which finds any value that remains.
 
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::ops::Range;
 
 use base64::Engine as _;
@@ -13,10 +14,9 @@ use serde_json::Value;
 
 use crate::board::Board;
 use crate::digest::Sha256;
-use crate::document::render_json;
 use crate::instance::{InstanceValue, MIN_SEARCHED_LEN};
 use crate::lines;
-use crate::receipt::Receipt;
+use crate::receipt::{Receipt, ReceiptError, read_rendered, render_json};
 
 /// The `format` of a public version.
 pub const FORMAT: &str = "kyto-bench public receipt";
@@ -33,11 +33,34 @@ pub const RELAY_RULE: &str = "instance.local.power.relay";
 /// The rule of the nonce.
 pub const NONCE_RULE: &str = "nonce";
 
+/// The rule of the unterminated last line of a cold boot's console output.
+pub const UNTERMINATED_RULE: &str = "console.unterminated_line";
+
+/// The rule of a segment whose digest covers replaced bytes.
+pub const SEGMENT_RULE: &str = "segment.covers_hidden";
+
+/// The rule of a receipt with more values to hide, or more bytes of them,
+/// than a public version searches for.
+pub const LIMIT_RULE: &str = "public.values_limit";
+
+/// The most values to hide that a public version searches for.
+pub const MAX_VALUES: usize = 1024;
+
+/// The most bytes of the values to hide that a public version searches for.
+pub const MAX_VALUE_BYTES: usize = 64 << 10;
+
 /// A value that a public version must not show, with the rule that hides it.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Secret {
     pub rule: String,
     pub value: Vec<u8>,
+}
+
+impl Secret {
+    fn new(rule: &str, value: &[u8]) -> Self {
+        let (rule, value) = (rule.into(), value.into());
+        Self { rule, value }
+    }
 }
 
 /// A field that a public version always withholds, by its JSON pointer in
@@ -89,57 +112,62 @@ impl PublicReceipt {
     pub fn render(&self) -> String {
         render_json(self)
     }
+
+    /// Reads a public version as a receipt is read, but for the rules that
+    /// tie the parts of a receipt together: its `receipt` is kept as JSON,
+    /// since a replaced value need not keep the form of its field.
+    pub fn parse(text: &[u8]) -> Result<Self, ReceiptError> {
+        read_rendered(text, FORMAT)
+    }
 }
 
 /// The values of at least 4 bytes that the public version of `receipt`
-/// must not show: each value that a sensitive line of `board` holds in a
-/// recorded stream, under `board.<name>`; the TFTP parameters that the
-/// receipt records; the `instance` values; and the nonce, last.
-pub fn secrets(receipt: &Receipt, board: &Board, instance: &[InstanceValue]) -> Vec<Secret> {
-    let secret = |rule: &str, value: &[u8]| Secret {
-        rule: rule.into(),
-        value: value.into(),
+/// must not show, sorted: each value that a sensitive line of `board` holds
+/// in a recorded stream, under `board.<name>`; the TFTP parameters that the
+/// receipt records; the `instance` values; and the nonce, last. Beyond
+/// [`MAX_VALUES`] or [`MAX_VALUE_BYTES`], the error is a leak of
+/// [`LIMIT_RULE`] at the whole receipt.
+pub fn secrets(
+    receipt: &Receipt,
+    board: &Board,
+    instance: &[InstanceValue],
+) -> Result<Vec<Secret>, Vec<Leak>> {
+    let mut found = BTreeSet::new();
+    let mut add = |rule: &str, value: &[u8]| {
+        if value.len() >= MIN_SEARCHED_LEN && found.len() <= MAX_VALUES {
+            found.insert(Secret::new(rule, value));
+        }
     };
-    let mut found = Vec::new();
     walk(&mut to_value(receipt), "", &mut |at, text| {
-        let stream = decoded(at, text).unwrap_or_default();
-        found.extend(
-            hits(board, &stream)
-                .iter()
-                .map(|(_, rule, value)| secret(rule, value)),
-        );
+        for (_, rule, value) in hits(board, &decoded(at, text).unwrap_or_default()) {
+            add(&rule, &value);
+        }
     });
-    let recorded = withheld_fields(receipt).into_iter().skip(1);
-    found.extend(recorded.map(|(_, rule, value)| secret(rule, value.as_bytes())));
-    found.extend(
-        instance
-            .iter()
-            .map(|value| secret(&value.rule, value.value.as_bytes())),
-    );
-    found.retain(|secret| secret.value.len() >= MIN_SEARCHED_LEN);
-    found.sort();
-    found.dedup();
-    found.push(secret(NONCE_RULE, receipt.nonce.as_bytes()));
-    found
+    for (_, rule, value) in withheld_fields(receipt).into_iter().skip(1) {
+        add(rule, value.as_bytes());
+    }
+    for value in instance {
+        add(&value.rule, value.value.as_bytes());
+    }
+    let bytes: usize = found.iter().map(|secret| secret.value.len()).sum();
+    if found.len() > MAX_VALUES || bytes > MAX_VALUE_BYTES {
+        let (rule, field) = (LIMIT_RULE.into(), String::new());
+        return Err(vec![Leak { rule, field }]);
+    }
+    let nonce = Secret::new(NONCE_RULE, receipt.nonce.as_bytes());
+    Ok(found.into_iter().chain([nonce]).collect())
 }
 
 /// Makes the public version of `receipt` on `board`, whose instance values
-/// are `instance`, and checks it with [`verify`]; the leaks are the error.
-///
-/// The nonce, the TFTP server address and a path prefix that is not empty
-/// are withheld. In every recorded stream, every span of a sensitive line's
-/// named group is replaced, and in every stream and every other string,
-/// every occurrence of a value of [`secrets`] but the nonce; the relay of
-/// every power event is replaced whole. Overlapping spans are one
-/// replacement with every rule. The recorded run plan and board
-/// description, every digest and every key are never rewritten.
+/// are `instance`, as `docs/bench/formats.md` describes, and checks it with
+/// [`verify`]; the leaks are the error.
 pub fn public_version(
     receipt: &Receipt,
     board: &Board,
     instance: &[InstanceValue],
 ) -> Result<PublicReceipt, Vec<Leak>> {
-    let secrets = secrets(receipt, board, instance);
-    let searched = &secrets[..secrets.len() - 1];
+    let secrets = secrets(receipt, board, instance)?;
+    let finder = Finder::new(&secrets[..secrets.len() - 1]);
     let mut value = to_value(receipt);
     let mut withheld = Vec::new();
     for (field, rule, text) in withheld_fields(receipt) {
@@ -162,30 +190,20 @@ pub fn public_version(
         }
         let stream = decoded(at, text);
         let mut bytes = stream.clone().unwrap_or_else(|| text.as_bytes().to_vec());
-        let mut spans = Vec::new();
+        let mut spans = finder.find(&bytes);
         if key(at) == "relay" {
-            spans.push((0..bytes.len(), RELAY_RULE.to_string()));
+            spans.push((0..bytes.len(), vec![RELAY_RULE.into()]));
         }
         if stream.is_some() {
-            spans.extend(
-                hits(board, &bytes)
-                    .into_iter()
-                    .map(|(span, rule, _)| (span, rule)),
-            );
+            let hits = hits(board, &bytes).into_iter();
+            spans.extend(hits.map(|(span, rule, _)| (span, vec![rule])));
         }
-        for secret in searched {
-            let found = occurrences(&bytes, &secret.value);
-            spans.extend(found.map(|span| (span, secret.rule.clone())));
-        }
+        let open = unterminated(at, &bytes);
+        spans.extend(open.map(|span| (span, vec![UNTERMINATED_RULE.into()])));
         if stream.is_none() {
             // Whole characters are replaced, so the string stays UTF-8.
             for (span, _) in &mut spans {
-                while !text.is_char_boundary(span.start) {
-                    span.start -= 1;
-                }
-                while !text.is_char_boundary(span.end) {
-                    span.end += 1;
-                }
+                *span = text.floor_char_boundary(span.start)..text.ceil_char_boundary(span.end);
             }
         }
         for (span, rules) in merge(spans) {
@@ -216,29 +234,34 @@ pub fn public_version(
     Ok(public)
 }
 
-/// The leak check of a public version: no value of `secrets` occurs in any
-/// string of its receipt, the decoded bytes of its streams, its recorded
-/// texts and its digests included; the sensitive lines of `board` hold
-/// nothing but placeholders in its streams; and every relay is
-/// placeholders. Each leak names its rule and its field, never its value.
+/// The leak check of a public version, whose values to hide are `secrets`,
+/// as `docs/bench/formats.md` describes. Each leak names its rule and its
+/// field, never its value.
 pub fn verify(public: &PublicReceipt, board: &Board, secrets: &[Secret]) -> Result<(), Vec<Leak>> {
+    let finder = Finder::new(secrets);
     let mut leaks = Vec::new();
     walk(&mut public.receipt.clone(), "", &mut |at, text| {
         let stream = decoded(at, text);
         let bytes = stream.as_deref().unwrap_or(text.as_bytes());
-        let found = secrets
-            .iter()
-            .filter(|secret| occurrences(bytes, &secret.value).next().is_some());
-        let mut rules: Vec<String> = found.map(|secret| secret.rule.clone()).collect();
+        let found = finder.find(bytes).into_iter().flat_map(|(_, rules)| rules);
+        let mut rules: Vec<String> = found.collect();
         if stream.is_some() {
             let held = hits(board, bytes)
                 .into_iter()
                 .filter(|(_, _, value)| !is_placeholders(value));
             rules.extend(held.map(|(_, rule, _)| rule));
         }
-        if key(at) == "relay" && !is_placeholders(text.as_bytes()) {
-            rules.push(RELAY_RULE.into());
+        let open = unterminated(at, bytes).is_some_and(|span| !is_placeholders(&bytes[span]));
+        let relay = key(at) == "relay" && !is_placeholders(text.as_bytes());
+        let found = [relay, open, covers_hidden(public, at)];
+        for (rule, found) in [RELAY_RULE, UNTERMINATED_RULE, SEGMENT_RULE]
+            .iter()
+            .zip(found)
+        {
+            rules.extend(found.then(|| rule.to_string()));
         }
+        rules.sort();
+        rules.dedup();
         let field = at.to_string();
         leaks.extend(rules.into_iter().map(|rule| Leak {
             rule,
@@ -334,26 +357,121 @@ fn hits(board: &Board, stream: &[u8]) -> Vec<(Range<usize>, String, Vec<u8>)> {
     found
 }
 
-/// The spans of every occurrence of `value` in `bytes`, overlapping ones too.
-fn occurrences<'a>(bytes: &'a [u8], value: &'a [u8]) -> impl Iterator<Item = Range<usize>> + 'a {
-    let windows = bytes.windows(value.len().max(1)).enumerate();
-    windows
-        .filter(move |(_, window)| *window == value)
-        .map(move |(at, _)| at..at + value.len())
+/// The unterminated last line of the bytes of the field at `at` when it is
+/// the console output of a cold boot.
+fn unterminated(at: &str, bytes: &[u8]) -> Option<Range<usize>> {
+    let lf = bytes.iter().rposition(|byte| *byte == b'\n');
+    let start = lf.map_or(0, |lf| lf + 1);
+    (at.ends_with("/serial/bytes_base64") && start < bytes.len()).then_some(start..bytes.len())
+}
+
+/// Whether the field at `at` is the digest of a segment of a cold boot whose
+/// console output, from the first byte of the line of `from` up to the
+/// first byte of the line of `to`, holds a replaced byte.
+fn covers_hidden(public: &PublicReceipt, at: &str) -> bool {
+    let segment = at.strip_suffix("/sha256").unwrap_or_default();
+    let Some((cold_boot, _)) = segment.split_once("/observations/segments/") else {
+        return false;
+    };
+    let [from, to] = ["from_line", "to_line"].map(|key| {
+        let line = public.receipt.pointer(&format!("{segment}/{key}"));
+        line.and_then(Value::as_u64).unwrap_or(0) as usize
+    });
+    let serial = format!("{cold_boot}/serial/bytes_base64");
+    let replaced =
+        |r: &Replacement| r.field == serial && r.offset < to && r.offset + r.length > from;
+    public.replacements.iter().any(replaced)
+}
+
+/// Every value to hide found in one pass over bytes, as the Aho-Corasick
+/// algorithm finds them: a trie of the values in which each node has the
+/// node of its longest proper suffix, and the length of the longest value
+/// that ends at it with the rules of every value that does.
+struct Finder {
+    next: Vec<BTreeMap<u8, usize>>,
+    suffix: Vec<usize>,
+    ends: Vec<(usize, Vec<String>)>,
+}
+
+impl Finder {
+    fn new(secrets: &[Secret]) -> Self {
+        let (next, suffix, ends) = (vec![BTreeMap::new()], vec![0], vec![(0, Vec::new())]);
+        let mut finder = Self { next, suffix, ends };
+        for secret in secrets {
+            let mut node = 0;
+            for byte in &secret.value {
+                let new = finder.next.len();
+                node = *finder.next[node].entry(*byte).or_insert(new);
+                if node == new {
+                    finder.next.push(BTreeMap::new());
+                    finder.suffix.push(0);
+                    finder.ends.push((0, Vec::new()));
+                }
+            }
+            finder.ends[node].0 = secret.value.len();
+            finder.ends[node].1.push(secret.rule.clone());
+        }
+        // Breadth first, so that the shorter nodes of suffixes come first.
+        let mut queue: VecDeque<usize> = finder.next[0].values().copied().collect();
+        while let Some(node) = queue.pop_front() {
+            for (byte, child) in finder.next[node].clone() {
+                let suffix = finder.step(finder.suffix[node], byte);
+                let (length, rules) = finder.ends[suffix].clone();
+                finder.suffix[child] = suffix;
+                finder.ends[child].0 = finder.ends[child].0.max(length);
+                finder.ends[child].1.extend(rules);
+                queue.push_back(child);
+            }
+        }
+        finder
+    }
+
+    /// The node after `node` on `byte`.
+    fn step(&self, mut node: usize, byte: u8) -> usize {
+        loop {
+            match self.next[node].get(&byte) {
+                Some(next) => return *next,
+                None if node == 0 => return 0,
+                None => node = self.suffix[node],
+            }
+        }
+    }
+
+    /// The spans of `bytes` that values cover, merged where they overlap,
+    /// each with the rules of the values found in it.
+    fn find(&self, bytes: &[u8]) -> Vec<(Range<usize>, Vec<String>)> {
+        let (mut node, mut found) = (0, Vec::<(Range<usize>, Vec<String>)>::new());
+        for (at, byte) in bytes.iter().enumerate() {
+            node = self.step(node, *byte);
+            let (length, rules) = &self.ends[node];
+            if *length > 0 {
+                let (mut span, mut rules) = (at + 1 - length..at + 1, rules.clone());
+                // Spans end in order, so a new one can overlap only the last ones.
+                while let Some((last, more)) = found.pop_if(|(last, _)| span.start < last.end) {
+                    span.start = span.start.min(last.start);
+                    rules.extend(more);
+                }
+                rules.sort();
+                rules.dedup();
+                found.push((span, rules));
+            }
+        }
+        found
+    }
 }
 
 /// Merges spans that overlap or are equal into one, with every rule once,
 /// in order; empty spans are left out.
-fn merge(mut spans: Vec<(Range<usize>, String)>) -> Vec<(Range<usize>, Vec<String>)> {
+fn merge(mut spans: Vec<(Range<usize>, Vec<String>)>) -> Vec<(Range<usize>, Vec<String>)> {
     spans.sort_by_key(|(span, _)| (span.start, span.end));
     let mut merged: Vec<(Range<usize>, Vec<String>)> = Vec::new();
-    for (span, rule) in spans.into_iter().filter(|(span, _)| !span.is_empty()) {
+    for (span, rules) in spans.into_iter().filter(|(span, _)| !span.is_empty()) {
         match merged.last_mut() {
-            Some((last, rules)) if span.start < last.end => {
+            Some((last, all)) if span.start < last.end => {
                 last.end = last.end.max(span.end);
-                rules.push(rule);
+                all.extend(rules);
             }
-            _ => merged.push((span, vec![rule])),
+            _ => merged.push((span, rules)),
         }
     }
     for (_, rules) in &mut merged {
@@ -520,7 +638,7 @@ mod tests {
         let receipt = example();
         let mut public = public(&receipt).unwrap();
         public.receipt["nonce"] = receipt.nonce.clone().into();
-        let secrets = secrets(&receipt, &pi5(), &values());
+        let secrets = secrets(&receipt, &pi5(), &values()).unwrap();
         assert_eq!(
             verify(&public, &pi5(), &secrets),
             Err(vec![leak("nonce", "/nonce")])
@@ -555,7 +673,7 @@ mod tests {
         // too short to be searched for.
         let mut leaked = public.clone();
         *leaked.receipt.pointer_mut(relays[1]).unwrap() = "12".into();
-        let secrets = secrets(&receipt, &pi5(), &values());
+        let secrets = secrets(&receipt, &pi5(), &values()).unwrap();
         assert_eq!(
             verify(&leaked, &pi5(), &secrets),
             Err(vec![leak(RELAY_RULE, relays[1])])
@@ -704,7 +822,138 @@ mod tests {
             ]
         );
         assert!(serial_of(&public).windows(7).any(|w| w == b"0.0.0.0"));
-        let secrets = secrets(&receipt, &pi5(), &values());
+        let secrets = secrets(&receipt, &pi5(), &values()).unwrap();
         assert!(!secrets.iter().any(|secret| secret.value == b"0.0.0.0"));
+    }
+
+    fn instance_value(rule: &str, value: &str) -> InstanceValue {
+        let (rule, value) = (rule.into(), value.into());
+        InstanceValue { rule, value }
+    }
+
+    #[test]
+    fn values_are_found_in_one_pass_overlapping_and_nested() {
+        let receipt = with_serial(b"xabcdefghx zzzzzzzz abc\r\n");
+        let instance = [
+            instance_value("instance.local.console.a", "abcd"),
+            instance_value("instance.local.console.b", "bcdefgh"),
+            instance_value("instance.local.console.c", "cdef"),
+            instance_value("instance.local.console.d", "zzzz"),
+        ];
+        let public = public_version(&receipt, &pi5(), &instance).unwrap();
+        let at = "/entries/0/cold_boots/0/serial/bytes_base64";
+        let rules = ["a", "b", "c"].map(|key| format!("instance.local.console.{key}"));
+        let rules: Vec<&str> = rules.iter().map(String::as_str).collect();
+        let found: Vec<&Replacement> = public
+            .replacements
+            .iter()
+            .filter(|r| r.field == at)
+            .collect();
+        assert_eq!(
+            found,
+            [
+                &replacement(at, 1, 8, &rules),
+                &replacement(at, 11, 8, &["instance.local.console.d"]),
+            ]
+        );
+        assert_eq!(serial_of(&public), b"x########x ######## abc\r\n");
+        // The commit holds abcdef, which two of the values cover.
+        let commit = replacement("/tool/commit", 10, 6, &[rules[0], rules[2]]);
+        assert!(public.replacements.contains(&commit));
+    }
+
+    #[test]
+    fn public_version_is_refused_with_more_values_to_hide_than_it_searches_for() {
+        let line =
+            |n: usize| format!("  4.37 BOOTMODE: 0x06 serial {n:08x} boardrev d04171 stc 1\r\n");
+        let lines = |count: usize| (0..count).map(line).collect::<String>();
+        // The values of the instance and the receipt are 2 of the 1024.
+        let receipt = with_serial(lines(MAX_VALUES - 2).as_bytes());
+        let serial = serial_of(&public(&receipt).unwrap());
+        assert!(!serial.windows(8).any(|w| w == b"000003fd"));
+        let receipt = with_serial(lines(MAX_VALUES - 1).as_bytes());
+        assert_eq!(public(&receipt), Err(vec![leak(LIMIT_RULE, "")]));
+        // One long value counts its bytes.
+        let long = format!(
+            "  4.37 BOOTMODE: 0x06 serial {} boardrev d04171 stc 1\r\n",
+            "a".repeat(MAX_VALUE_BYTES)
+        );
+        assert_eq!(
+            public(&with_serial(long.as_bytes())),
+            Err(vec![leak(LIMIT_RULE, "")])
+        );
+    }
+
+    #[test]
+    fn a_capture_cut_short_hides_its_last_line() {
+        let at = "/entries/0/cold_boots/0/serial/bytes_base64";
+        let cut: [&[u8]; 2] = [
+            b"READY\r\n  4.37 BOOTMODE: 0x06 partition 0 serial 1234abcd boardr",
+            b"READY\r\n  5.51 NETWORK: 00:00:5e:00:53:01 wait for link ",
+        ];
+        for bytes in cut {
+            let public = public(&with_serial(bytes)).unwrap();
+            let rest = bytes.len() - 7;
+            assert_eq!(
+                public.replacements,
+                [replacement(at, 7, rest, &[UNTERMINATED_RULE])]
+            );
+            assert_eq!(
+                serial_of(&public),
+                [&b"READY\r\n"[..], &vec![b'#'; rest]].concat()
+            );
+            // The line put back is a leak, though no form matches it.
+            let mut leaked = public.clone();
+            *leaked.receipt.pointer_mut(at).unwrap() = STANDARD.encode(bytes).into();
+            let secrets = secrets(&with_serial(bytes), &pi5(), &values()).unwrap();
+            assert_eq!(
+                verify(&leaked, &pi5(), &secrets),
+                Err(vec![leak(UNTERMINATED_RULE, at)])
+            );
+        }
+    }
+
+    #[test]
+    fn a_segment_over_a_hidden_value_has_no_public_version() {
+        let bytes = [NETWORK, b"banner\r\nEND\r\n"].concat();
+        let ready = NETWORK.len() - "READY\r\n".len();
+        let end = bytes.len() - "END\r\n".len();
+        let segment = |from_line: usize, to_line: usize| crate::observe::SegmentSeen {
+            name: "banner".into(),
+            from_line: from_line as u64,
+            to_line: to_line as u64,
+            sha256: Sha256::of(&bytes[from_line..to_line]),
+        };
+        let mut receipt = with_serial(&bytes);
+        let segments = &mut receipt.entries[0].cold_boots[0].observations.segments;
+        *segments = vec![segment(ready, end)];
+        assert!(public(&receipt).is_ok());
+        // From the serial number's line to READY: its digest would let the
+        // serial number and the MAC address be guessed.
+        receipt.entries[0].cold_boots[0].observations.segments = vec![segment(0, ready)];
+        let field = "/entries/0/cold_boots/0/observations/segments/0/sha256";
+        assert_eq!(public(&receipt), Err(vec![leak(SEGMENT_RULE, field)]));
+    }
+
+    #[test]
+    fn a_public_version_is_read_as_strictly_as_a_receipt() {
+        let public = public(&with_serial(NETWORK)).unwrap();
+        let text = public.render();
+        assert_eq!(PublicReceipt::parse(text.as_bytes()), Ok(public));
+        let spaced = text.replacen("\"placeholder\": ", "\"placeholder\":  ", 1);
+        assert_eq!(
+            PublicReceipt::parse(spaced.as_bytes()),
+            Err(ReceiptError::NotRendered)
+        );
+        let extra = text.replacen("\"placeholder\": ", "\"extra\": 1,\n  \"placeholder\": ", 1);
+        assert!(matches!(
+            PublicReceipt::parse(extra.as_bytes()),
+            Err(ReceiptError::Syntax(_))
+        ));
+        let receipt = example().render();
+        assert!(matches!(
+            PublicReceipt::parse(receipt.as_bytes()),
+            Err(ReceiptError::Format(_))
+        ));
     }
 }

@@ -3,7 +3,7 @@
 
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 /// The `format` and `format_version` of a document. They are read before the
 /// rest, so that a document of another format or version is named as such.
@@ -45,13 +45,6 @@ pub(crate) fn is_name(text: &str) -> bool {
 /// and without white space at either end.
 pub(crate) fn is_line_text(text: &str) -> bool {
     !text.is_empty() && !text.chars().any(char::is_control) && text.trim() == text
-}
-
-/// The pretty JSON of `value`, the form of receipts: two spaces of
-/// indentation, object keys in the order of their fields, a final newline.
-pub(crate) fn render_json(value: &impl Serialize) -> String {
-    let json = serde_json::to_string_pretty(value).expect("a document is JSON without map keys");
-    json + "\n"
 }
 
 /// Whether every array and table in `value` has at most 100 items.

@@ -10,11 +10,12 @@
 //! tree without its own `.git` never takes the commit of a checkout around
 //! it.
 //!
-//! The script runs again when `HEAD`, the index, the references or a tracked
-//! file changes; only paths that exist are watched. A file that is created
-//! after the last build and is not tracked does not make it run again, so an
-//! incremental build can call such a tree clean; a build from a fresh
-//! checkout cannot.
+//! The script runs on every build of the package, so the values always
+//! describe the tree as it was at the build that made the binary: an
+//! untracked file created after an earlier build makes the next build say
+//! that the tree has changes. Cargo runs the script on every build because
+//! the script watches a path in the build's output directory that nothing
+//! creates, and it then compiles the package again as well.
 
 // The build script is the one part of the tool that runs an external
 // program: Git, to read the commit and the state of the working tree.
@@ -34,6 +35,11 @@ const GIT_LOCATION_VARIABLES: [&str; 5] = [
 ];
 
 fn main() {
+    // Cargo runs the script again when a path it watches does not exist.
+    if let Some(out) = std::env::var_os("OUT_DIR") {
+        let never = Path::new(&out).join("never-created");
+        println!("cargo::rerun-if-changed={}", never.display());
+    }
     let Some(manifest_dir) = std::env::var_os("CARGO_MANIFEST_DIR") else {
         return;
     };
@@ -55,36 +61,14 @@ fn main() {
         println!("cargo::rustc-env=KYTO_BENCH_COMMIT={commit}");
     }
 
-    // `--no-optional-locks` keeps `git status` from refreshing the index,
-    // which would change the index and make this script run on every build.
+    // `--no-optional-locks` keeps `git status` from refreshing the index, so
+    // that a build writes nothing in the repository.
     let status = git(
         &root,
         "--no-optional-locks status --porcelain --untracked-files=all",
     );
     if let Some(status) = &status {
         println!("cargo::rustc-env=KYTO_BENCH_CLEAN={}", status.is_empty());
-    }
-
-    // The paths come from Git, so a linked worktree, where `.git` is a file,
-    // watches its own `HEAD` and index and the shared references.
-    let git_paths = git(
-        &root,
-        "rev-parse --git-path HEAD --git-path index --git-path packed-refs --git-path refs \
-         --git-path reftable",
-    );
-    let tracked = git(&root, "ls-files -z");
-    if let (Some(git_paths), Some(tracked)) = (git_paths, tracked) {
-        for path in String::from_utf8_lossy(&git_paths).lines() {
-            watch(&root.join(path));
-        }
-        for path in tracked
-            .split(|byte| *byte == 0)
-            .filter(|path| !path.is_empty())
-        {
-            if let Ok(path) = std::str::from_utf8(path) {
-                watch(&root.join(path));
-            }
-        }
     }
 }
 
@@ -106,16 +90,4 @@ fn is_commit(text: &str) -> bool {
         && text
             .bytes()
             .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-}
-
-/// Makes Cargo run the script again when `path` changes. A path that does
-/// not exist is skipped, since Cargo would run the script on every build for
-/// it, and so is one that does not fit on one line of the script's output.
-fn watch(path: &Path) {
-    if !path.exists() {
-        return;
-    }
-    if let Some(path) = path.to_str().filter(|path| !path.contains(['\n', '\r'])) {
-        println!("cargo::rerun-if-changed={path}");
-    }
 }

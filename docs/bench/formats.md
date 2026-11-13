@@ -1020,6 +1020,12 @@ receipt, each once and in this order, with `detail` saying what was found:
 whose every device is real, made by a tool of a known commit without
 changes, is eligible as evidence.
 
+`tool.commit` and `tool.clean` describe the tree as it was when the tool was
+built. Every build of the tool asks Git for them again, so a change made
+after an earlier build, an untracked file included, makes the next build's
+`clean` `false`. A build from a source tree that is not a Git checkout of its
+own records both as `null`.
+
 ### Inputs of judgement
 
 `inputs` holds what the checks and verdicts of a run read, so that a receipt

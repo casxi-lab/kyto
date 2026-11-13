@@ -19,22 +19,22 @@ use crate::run;
 pub const PASS: u8 = 0;
 /// The exit status of a run that failed.
 pub const FAIL: u8 = 1;
-/// The exit status of a usage or input error, when no receipt was written,
-/// and of a run whose receipt or public version could not be written.
+/// The exit status of a usage or input error, and of a run whose receipt
+/// could not be written; no receipt is left.
 pub const INPUT_ERROR: u8 = 2;
 /// The exit status of a run that a fault of the bench ended.
 pub const BENCH_FAULT: u8 = 3;
 /// The exit status of a run refused before any power command; the receipt
 /// says why.
 pub const REFUSED: u8 = 4;
-/// The exit status of a run whose receipt was written but whose public
-/// version was refused, since it would show a value to hide; the receipt
-/// gives the verdict.
+/// The exit status of a run whose receipt was written but not its public
+/// version: the leak check refused it, since it would show a value to hide,
+/// or it could not be written; the receipt gives the result.
 pub const PUBLIC_REFUSED: u8 = 5;
 
-const EXIT_STATUS: &str = "Exit status: 0 PASS, 1 FAIL, 2 usage or input error (no receipt), \
-or an output file that cannot be written (the error gives the result), 3 BENCH FAULT, \
-4 refused before any power command (receipt written), 5 public version refused (receipt written).";
+const EXIT_STATUS: &str = "Exit status: 0 PASS, 1 FAIL, 2 usage or input error, or a receipt \
+that cannot be written (no receipt), 3 BENCH FAULT, 4 refused before any power command \
+(receipt written), 5 public version refused or not written (receipt written).";
 
 /// The command line.
 pub fn command() -> Command {
@@ -80,7 +80,7 @@ pub fn run<T: Into<OsString> + Clone>(args: impl IntoIterator<Item = T>, env: &d
         Ok(matches) => matches,
         Err(error) => {
             let _ = error.print();
-            return u8::try_from(error.exit_code()).unwrap_or(INPUT_ERROR);
+            return usage_status(&error);
         }
     };
     let Some(("run", args)) = matches.subcommand() else {
@@ -90,6 +90,12 @@ pub fn run<T: Into<OsString> + Clone>(args: impl IntoIterator<Item = T>, env: &d
         eprintln!("kyto-bench: {message}");
         INPUT_ERROR
     })
+}
+
+/// The exit status of a command line that clap does not run: [`PASS`] for
+/// help, [`INPUT_ERROR`] for a usage error.
+fn usage_status(error: &clap::Error) -> u8 {
+    u8::try_from(error.exit_code()).unwrap_or(INPUT_ERROR)
 }
 
 /// The command `run`.
@@ -114,13 +120,15 @@ fn run_plan(args: &ArgMatches, env: &dyn Env) -> Result<u8, String> {
         _ => (BENCH_FAULT, "BENCH FAULT".into()),
     };
     let written = output::write(out, &receipt, &inputs.instance.deidentify_values());
-    let leaks = written.map_err(|message| format!("the run gave {result}, but {message}"))?;
+    let unwritten = written.map_err(|message| {
+        output::remove_empty(out);
+        format!("the run gave {result}, but no receipt: {message}")
+    })?;
     println!("{result}: {}", out.join(RECEIPT).display());
-    for leak in &leaks {
-        let (rule, field) = (&leak.rule, &leak.field);
-        eprintln!("kyto-bench: no public version: {rule} finds a value to hide at {field:?}");
+    for why in &unwritten {
+        eprintln!("kyto-bench: the run gave {result}, but no public version: {why}");
     }
-    Ok(if leaks.is_empty() {
+    Ok(if unwritten.is_empty() {
         status
     } else {
         PUBLIC_REFUSED
@@ -150,11 +158,12 @@ mod tests {
         }
     }
 
-    /// The exit status of `args`, whose messages clap prints.
+    /// The exit status that [`run`] gives `args`, without the messages
+    /// that clap prints.
     fn run_quietly(args: &[&str]) -> u8 {
         match command().try_get_matches_from(args) {
             Ok(_) => PASS,
-            Err(error) => u8::try_from(error.exit_code()).unwrap_or(INPUT_ERROR),
+            Err(error) => usage_status(&error),
         }
     }
 }

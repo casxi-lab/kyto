@@ -177,10 +177,11 @@ cargo run --locked --release --manifest-path tools/Cargo.toml -- run \
   --out tools/target/example-run
 ```
 
-Its exit status is 0 for `PASS`, 1 for `FAIL`, 2 for a usage or input error,
-with no receipt, or for a receipt or public version that cannot be written,
-3 for `BENCH FAULT`, 4 for a run refused before any power command, and 5
-when the public version of the receipt was refused.
+Its exit status is 0 for `PASS`, 1 for `FAIL`, 2 for a usage or input error
+or a receipt that cannot be written, with no receipt left, 3 for
+`BENCH FAULT`, 4 for a run refused before any power command, and 5 when the
+receipt was written but its public version was refused or cannot be
+written.
 [The formats page](docs/bench/formats.md) describes the command, the files it
 reads and writes, and every rule of a verdict.
 

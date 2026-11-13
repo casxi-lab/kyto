@@ -29,17 +29,28 @@ pub fn remove_empty(out: &Path) {
 }
 
 /// Writes `receipt` into `out`, then its public version with the instance
-/// values `hidden` hidden, unless the leak check refuses it; the leaks that
-/// kept it from being written.
-pub fn write(out: &Path, receipt: &Receipt, hidden: &[InstanceValue]) -> Result<Vec<Leak>, String> {
+/// values `hidden` hidden, unless the leak check refuses it; why the public
+/// version was not written, if it was not: each value that the leak check
+/// found, or the failure to write it. The error is that of the receipt,
+/// which is then not left in `out`.
+pub fn write(
+    out: &Path,
+    receipt: &Receipt,
+    hidden: &[InstanceValue],
+) -> Result<Vec<String>, String> {
     write_new(&out.join(RECEIPT), &receipt.render())?;
-    match public::public_version(receipt, hidden) {
-        Ok(public) => write_new(&out.join(PUBLIC), &public.render()).map(|()| Vec::new()),
-        Err(leaks) => Ok(leaks),
-    }
+    let leak = |leak: &Leak| format!("{} finds a value to hide at {:?}", leak.rule, leak.field);
+    Ok(match public::public_version(receipt, hidden) {
+        Ok(public) => write_new(&out.join(PUBLIC), &public.render())
+            .err()
+            .into_iter()
+            .collect(),
+        Err(leaks) => leaks.iter().map(leak).collect(),
+    })
 }
 
-/// Writes `text` into a new file at `path`, which must not exist.
+/// Writes `text` into a new file at `path`, which must not exist; a file
+/// that could not be written whole is removed.
 fn write_new(path: &Path, text: &str) -> Result<(), String> {
     let failed = |error: std::io::Error| format!("cannot write {}: {error}", path.display());
     let mut file = OpenOptions::new()
@@ -47,7 +58,11 @@ fn write_new(path: &Path, text: &str) -> Result<(), String> {
         .create_new(true)
         .open(path)
         .map_err(failed)?;
-    file.write_all(text.as_bytes())
-        .and_then(|()| file.sync_all())
-        .map_err(failed)
+    let written = file
+        .write_all(text.as_bytes())
+        .and_then(|()| file.sync_all());
+    written.map_err(|error| {
+        let _ = fs::remove_file(path);
+        failed(error)
+    })
 }

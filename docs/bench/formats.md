@@ -44,10 +44,10 @@ run needs another one. The exit status gives the result:
 | --- | --- |
 | 0 | The run is `"PASS"` |
 | 1 | The run is `"FAIL"` |
-| 2 | A usage or input error: the command line is not valid, the run plan or the instance configuration cannot be read, a document does not pass its checks, the bench cannot be opened or the output directory cannot be created, and no receipt is written; or the receipt or its public version cannot be written, and the error gives the result of the run |
+| 2 | A usage or input error: the command line is not valid, the run plan or the instance configuration cannot be read, a document does not pass its checks, the bench cannot be opened or the output directory cannot be created; or the receipt cannot be written, and the error gives the result of the run. No receipt is left: a receipt that cannot be written whole is removed |
 | 3 | The run is `"BENCH FAULT"` |
 | 4 | The run was [refused](#refused-runs) before any power command; the receipt says why |
-| 5 | The receipt was written, but the [leak check](#the-leak-check) refused its public version; the receipt gives the verdict or the refusal, and the error names the rule and the field of each value found |
+| 5 | The receipt was written, but not its public version: the [leak check](#the-leak-check) refused it, and the error names the rule and the field of each value found, or it cannot be written, and the error says why. The receipt gives the verdict or the refusal |
 
 The tests of the tool read the Raspberry Pi 5 description, the identity
 record template and the examples under `tools/examples/`, run the example run

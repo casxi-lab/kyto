@@ -473,12 +473,17 @@ firmware.bootloader = {{ hash = "1accd665", date = "2026/09/25" }}
     }
 
     fn case(lines: &[&str]) -> Case {
+        case_ended(lines, "\r\n")
+    }
+
+    /// [`case`] with every line ended by `ending`.
+    fn case_ended(lines: &[&str], ending: &str) -> Case {
         let (mut serial, mut index) = (Vec::new(), Vec::new());
         let mut send = None;
         for (number, line) in lines.iter().enumerate() {
             let at = ON + (number as u64 + 1) * STEP;
             index.push([serial.len() as u64, at]);
-            serial.extend_from_slice(format!("{line}\r\n").as_bytes());
+            serial.extend_from_slice(format!("{line}{ending}").as_bytes());
             if *line == "READY" && send.is_none() {
                 send = Some((at, serial.len() as u64));
             }
@@ -1142,6 +1147,44 @@ firmware.bootloader = {{ hash = "1accd665", date = "2026/09/25" }}
         });
         assert_eq!(two.result("segment.digest", "mode"), Outcome::Pass);
         assert_eq!(two.result("segment.digest", "banner"), Outcome::Pass);
+    }
+
+    #[test]
+    fn a_segment_digest_over_normalised_line_ends_fails() {
+        // The segment of the entry is the line between those of the start
+        // of the operating system and READY, with its CR LF, as the board
+        // wrote them; the digest is of those bytes.
+        let raw = case(&LINES);
+        let (seen, _) = raw.judged();
+        let line = b"Example echo payload\r\n";
+        let start = raw
+            .serial
+            .windows(line.len())
+            .position(|w| w == line)
+            .unwrap();
+        let segment = &seen.segments[0];
+        assert_eq!(segment.to_line as usize, start + line.len());
+        assert_eq!(
+            segment.sha256,
+            Sha256::of(&raw.serial[start..start + line.len()])
+        );
+        assert_eq!(raw.result("segment.digest", "banner"), Outcome::Pass);
+        // A digest taken over the line with its line end normalised to LF,
+        // or without it, fails.
+        let banner = Sha256::of(line).to_string();
+        for normalised in [&b"Example echo payload\n"[..], b"Example echo payload"] {
+            let mut case = case(&LINES);
+            let digest = Sha256::of(normalised).to_string();
+            case.plan = plan(|text| text.replace(&banner, &digest));
+            assert_eq!(case.result("segment.digest", "banner"), Outcome::Fail);
+        }
+        // A board that ends its lines with LF alone does not show the digest
+        // of the CR LF line, but that of its own bytes.
+        let mut lf = case_ended(&LINES, "\n");
+        assert_eq!(lf.result("segment.digest", "banner"), Outcome::Fail);
+        let digest = Sha256::of(b"Example echo payload\n").to_string();
+        lf.plan = plan(|text| text.replace(&banner, &digest));
+        assert_eq!(lf.result("segment.digest", "banner"), Outcome::Pass);
     }
 
     fn check(result: Outcome) -> Check {

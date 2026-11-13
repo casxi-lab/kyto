@@ -1472,4 +1472,192 @@ steps = [{ after = "ready", send = "?\r", expect = '^STATS seq=1', timeout_ms = 
         receipt.entries[0].payload.pin = Some("other-config".into());
         assert_eq!(invalid_at(&receipt), "/entries/0/payload/pin");
     }
+
+    /// The first line of the worked example, its boot mode line, with its
+    /// line end.
+    const BOOT_MODE: &[u8] = b"  4.94 Boot mode: NETWORK (02) order f1\r\n";
+
+    /// The example with `chunks` as the console output of its cold boot,
+    /// received 0.1 s apart from 6.1 s up to the send, which comes after
+    /// the chunk of the number `send`, and at 7.7 s from then on, with
+    /// observations made from them.
+    fn with_chunks(chunks: &[&[u8]], send: usize) -> Receipt {
+        let mut receipt = example();
+        let (mut bytes, mut index, mut sent) = (Vec::new(), Vec::new(), 0);
+        for (number, chunk) in chunks.iter().enumerate() {
+            let at = if number <= send {
+                6_100_000_000 + number as u64 * 100_000_000
+            } else {
+                7_700_000_000
+            };
+            index.push([bytes.len() as u64, at]);
+            bytes.extend_from_slice(chunk);
+            if number == send {
+                sent = bytes.len() as u64;
+            }
+        }
+        let length = bytes.len() as u64;
+        let cold_boot = &mut receipt.entries[0].cold_boots[0];
+        for event in &mut cold_boot.events {
+            event.received = match event.event {
+                EventKind::Send { .. } => sent,
+                _ if event.received > 0 => length,
+                _ => 0,
+            };
+        }
+        cold_boot.serial = Serial {
+            length,
+            bytes_base64: Base64(bytes),
+            index,
+        };
+        let seen = observed(&receipt);
+        receipt.entries[0].cold_boots[0].observations = seen;
+        receipt
+    }
+
+    /// The observations that the record of the cold boot of `receipt`
+    /// gives.
+    fn observed(receipt: &Receipt) -> Observations {
+        let board = Board::parse(&receipt.inputs.board_description.text).unwrap();
+        let plan = RunPlan::parse(&receipt.inputs.run_plan.text).unwrap();
+        let entry = &plan.entries[0];
+        let cold_boot = &receipt.entries[0].cold_boots[0];
+        let serial = &cold_boot.serial;
+        let sends = crate::verdict::sends(&cold_boot.events);
+        observe::observe(&ColdBootInputs {
+            board: &board,
+            entry,
+            tftp: &receipt.inputs.instance.parameters.tftp,
+            payload: entry.files(&[]).unwrap(),
+            transcript: &serial.bytes_base64.0,
+            index: &serial.index,
+            sends: &sends,
+        })
+        .unwrap()
+    }
+
+    /// `receipt` with each chunk of the console output of its cold boot
+    /// changed by `change`, and its length, its index and the bytes received
+    /// before each event made to agree with the changed bytes.
+    fn rewritten(receipt: &Receipt, change: impl Fn(&[u8]) -> Vec<u8>) -> Receipt {
+        let mut receipt = receipt.clone();
+        let cold_boot = &mut receipt.entries[0].cold_boots[0];
+        let serial = &cold_boot.serial;
+        let (mut bytes, mut index, mut ends) = (Vec::new(), Vec::new(), vec![(0, 0)]);
+        for (at_ns, chunk) in lines::chunks(&serial.bytes_base64.0, &serial.index).unwrap() {
+            index.push([bytes.len() as u64, at_ns]);
+            bytes.extend(change(chunk));
+            let end = ends.last().map_or(0, |(end, _)| *end) + chunk.len() as u64;
+            ends.push((end, bytes.len() as u64));
+        }
+        for event in &mut cold_boot.events {
+            let moved = ends.iter().find(|(end, _)| *end == event.received);
+            event.received = moved.unwrap().1;
+        }
+        let length = bytes.len() as u64;
+        cold_boot.serial = Serial {
+            length,
+            bytes_base64: Base64(bytes),
+            index,
+        };
+        receipt
+    }
+
+    /// The offset of the first `line` in `bytes`.
+    fn offset(bytes: &[u8], line: &[u8]) -> u64 {
+        bytes.windows(line.len()).position(|w| w == line).unwrap() as u64
+    }
+
+    #[test]
+    fn a_receipt_keeps_bytes_that_are_not_utf8() {
+        // A line of every byte value but LF, and one of sequences that are
+        // not UTF-8, before READY.
+        let every: Vec<u8> = (0..=u8::MAX).filter(|byte| *byte != b'\n').collect();
+        let every = [&every[..], b"\r\n"].concat();
+        let broken = b"\xc3( \xe2\x82 \xf0\x9f\x92 \xed\xa0\x80 \xc0\xaf \xff\r\n";
+        let chunks: [&[u8]; 5] = [BOOT_MODE, &every, broken, b"READY\r\n", b"STATS seq=1\r\n"];
+        let bytes = chunks.concat();
+        assert!(std::str::from_utf8(&bytes).is_err());
+        let receipt = with_chunks(&chunks, 3);
+        let recorded = &receipt.entries[0].cold_boots[0].observations;
+        assert_eq!(
+            recorded.steps[0].response_line,
+            Some(offset(&bytes, b"STATS"))
+        );
+        // Read back from its rendering, the receipt holds the bytes as they
+        // arrived, and they give the recorded observations again.
+        let read = Receipt::parse(receipt.render().as_bytes()).unwrap();
+        assert_eq!(read, receipt);
+        assert_eq!(read.entries[0].cold_boots[0].serial.bytes_base64.0, bytes);
+        assert_eq!(observed(&read), *recorded);
+        // Bytes decoded as UTF-8, with each sequence that is not UTF-8
+        // written as U+FFFD, are others: in place of the bytes as read, they
+        // break the recorded length.
+        let lossy = |bytes: &[u8]| String::from_utf8_lossy(bytes).into_owned().into_bytes();
+        let mut decoded = receipt.clone();
+        decoded.entries[0].cold_boots[0].serial.bytes_base64 = Base64(lossy(&bytes));
+        assert_ne!(lossy(&bytes), bytes);
+        let at = "/entries/0/cold_boots/0/serial/length";
+        assert_eq!(invalid_at(&decoded), at);
+        // With the length, the index and the events made to agree, the
+        // receipt is read, but its lines have moved: the observations that
+        // its bytes give are not those it records.
+        let decoded = Receipt::parse(rewritten(&receipt, lossy).render().as_bytes()).unwrap();
+        let moved = observed(&decoded);
+        assert_ne!(moved, *recorded);
+        let bytes = &decoded.entries[0].cold_boots[0].serial.bytes_base64.0;
+        assert_eq!(moved.steps[0].response_line, Some(offset(bytes, b"STATS")));
+    }
+
+    #[test]
+    fn a_receipt_keeps_cr_and_lf_as_read() {
+        // Lines ended by CR LF, by CR CR LF and by LF alone, an empty line,
+        // lone CR bytes inside a line, and a CR and its LF that arrived in
+        // two chunks.
+        let chunks: [&[u8]; 6] = [
+            BOOT_MODE,
+            b"progress 1\rprogress 2\r\r\n",
+            b"\n",
+            b"READY\r",
+            b"\n",
+            b"STATS seq=1\n",
+        ];
+        let bytes = chunks.concat();
+        let receipt = with_chunks(&chunks, 4);
+        let recorded = &receipt.entries[0].cold_boots[0].observations;
+        let ready = recorded.markers.iter().find(|m| m.name == "ready");
+        assert_eq!(ready.map(|m| m.line), Some(offset(&bytes, b"READY")));
+        assert_eq!(
+            recorded.steps[0].response_line,
+            Some(offset(&bytes, b"STATS"))
+        );
+        // Read back from its rendering, the receipt holds every CR and LF
+        // where it arrived, and they give the recorded observations again.
+        let read = Receipt::parse(receipt.render().as_bytes()).unwrap();
+        assert_eq!(read, receipt);
+        assert_eq!(read.entries[0].cold_boots[0].serial.bytes_base64.0, bytes);
+        assert_eq!(observed(&read), *recorded);
+        // Line ends normalised to LF, in place of the bytes as read, break
+        // the recorded length.
+        let normalised = |bytes: &[u8]| -> Vec<u8> {
+            let text = String::from_utf8(bytes.to_vec()).unwrap();
+            text.replace("\r\n", "\n").into_bytes()
+        };
+        let mut changed = receipt.clone();
+        let serial = &mut changed.entries[0].cold_boots[0].serial;
+        serial.bytes_base64 = Base64(normalised(&bytes));
+        assert_eq!(
+            invalid_at(&changed),
+            "/entries/0/cold_boots/0/serial/length"
+        );
+        // With the length, the index and the events made to agree, the
+        // receipt is read, but its lines have moved: the observations that
+        // its bytes give are not those it records.
+        let changed = Receipt::parse(rewritten(&receipt, normalised).render().as_bytes()).unwrap();
+        let moved = observed(&changed);
+        assert_ne!(moved, *recorded);
+        let bytes = &changed.entries[0].cold_boots[0].serial.bytes_base64.0;
+        let ready = moved.markers.iter().find(|m| m.name == "ready");
+        assert_eq!(ready.map(|m| m.line), Some(offset(bytes, b"READY")));
+    }
 }

@@ -142,8 +142,10 @@ and the commit rules.
 No design file or model exists yet, and the electronic and mechanical design
 tools have not been chosen; the formats of the design files follow that
 choice. The bench tool, written in Rust, is under `tools/`, with the
-[formats](docs/bench/formats.md) of the files it reads and writes under
-`docs/bench/`. When work on the design starts, the repository will keep:
+[formats](docs/bench/formats.md) of the files it reads and writes, the
+[requirements](docs/bench/requirements.md) of its rules and their
+[contract](docs/bench/contract.md) under `docs/bench/`. When work on the
+design starts, the repository will keep:
 
 - the editable design sources of each electrical module (schematics and board
   layouts) and the parametric models and assembly sources of each part, in the

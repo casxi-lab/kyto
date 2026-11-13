@@ -239,10 +239,15 @@ change that adds it.
 - **Tests.** The rules that decide a verdict, check an image digest and power
   a board off after a failure need written requirements and a contract,
   contract tests with negative cases, and fuzz tests on untrusted input such
-  as console transcripts; so far they have unit tests with negative cases,
-  and the rest is planned. The rest of the tool is tested on the host against
-  simulated devices, on which the tests run the example run plan through the
-  command. A bench self-test shows only that a bench works.
+  as console transcripts. Their [requirements](docs/bench/requirements.md)
+  and [contract](docs/bench/contract.md) are written: the contract names the
+  rules, the functions that apply them and the tests of each requirement, a
+  negative one among them, and a test of the `tools` workspace checks it
+  against the code and the tests. No fuzz test exists yet, which the
+  contract lists as an open obligation. The rest of the tool is tested on
+  the host against simulated devices, on which the tests run the example
+  run plan through the command. A bench self-test shows only that a bench
+  works.
 - **Bench hardware.** Adapter boards, fixtures and other bench parts keep
   their design files under `bench/` and follow the rules for design files and
   records above.
@@ -292,6 +297,11 @@ document or comment here uses them. A document states the technical content:
   will hold it and marked planned;
 - a limit that waits for other work states the condition that lifts it;
 - a decision is stated as the rule it made and where the rule applies.
+
+Requirement ids such as `VERD-R01`, `PROV-R01` and `POWER-R01` are labels of
+the requirements of the bench tool in
+[its requirements](docs/bench/requirements.md), not plan numbers, and
+documents, comments and tests may use them.
 
 ## License
 

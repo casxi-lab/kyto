@@ -129,7 +129,7 @@ impl Judging<'_> {
         })
     }
 
-    /// `boot.network` and `boot.fallback`.
+    /// `boot.network` and `boot.fallback` (VERD-R05).
     fn boot_mode(&mut self) {
         let board = self.c.board;
         let (network, modes) = (&board.boot_mode.network, &self.seen.boot_modes);
@@ -142,7 +142,7 @@ impl Judging<'_> {
         self.fail("boot.fallback", &marker, failure);
     }
 
-    /// `boot.end`.
+    /// `boot.end` (VERD-R06).
     fn boot_end(&mut self) {
         let (entry, events, lines) = (self.c.entry, self.c.events, self.lines);
         let on = events
@@ -164,7 +164,7 @@ impl Judging<'_> {
         self.fail("boot.end", subject, failure);
     }
 
-    /// `console.byte_limit`.
+    /// `console.byte_limit` (VERD-R11).
     fn capture_limit(&mut self) {
         let limits = [EndReason::ByteLimit, EndReason::ChunkLimit];
         let end = self.end();
@@ -174,7 +174,7 @@ impl Judging<'_> {
     }
 
     /// `marker.count`, `marker.order`, `marker.forbidden` and
-    /// `marker.before_first_send`.
+    /// `marker.before_first_send` (VERD-R08).
     fn markers(&mut self) {
         let (entry, seen, lines) = (self.c.entry, self.seen, self.lines);
         let first = |name: &str| seen.markers.iter().find(|marker| marker.name == name);
@@ -213,7 +213,7 @@ impl Judging<'_> {
         }
     }
 
-    /// `step.declared_none`, or `step.response` for each step.
+    /// `step.declared_none`, or `step.response` for each step (VERD-R09).
     fn steps(&mut self) {
         let (entry, events, lines, sent) = (self.c.entry, self.c.events, self.lines, self.sent);
         if entry.steps.is_none() {
@@ -234,7 +234,7 @@ impl Judging<'_> {
         }
     }
 
-    /// `firmware.version`.
+    /// `firmware.version` (VERD-R07).
     fn firmware(&mut self) {
         let seen = self.seen;
         for (name, groups) in &self.c.entry.firmware {
@@ -255,7 +255,7 @@ impl Judging<'_> {
         }
     }
 
-    /// `segment.digest`.
+    /// `segment.digest` (VERD-R10).
     fn segments(&mut self) {
         let seen = self.seen;
         for segment in &self.c.entry.segments {
@@ -267,7 +267,7 @@ impl Judging<'_> {
         }
     }
 
-    /// `tftp.server`, `tftp.prefix` and `tftp.unplanned_file`.
+    /// `tftp.server`, `tftp.prefix` and `tftp.unplanned_file` (VERD-R11).
     fn transfers(&mut self) {
         let (servers, reads) = (&self.seen.tftp.servers, &self.seen.tftp.reads);
         let other = servers.iter().find(|server| !server.instance);
@@ -286,7 +286,7 @@ impl Judging<'_> {
         self.fail("tftp.unplanned_file", "reads", failure);
     }
 
-    /// `identity.disagree`.
+    /// `identity.disagree` (VERD-R11).
     fn identity(&mut self) {
         let identity = &self.seen.identity;
         let split = identity.iter().find(|field| field.values.len() > 1);

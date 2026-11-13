@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn refused_properties_are_found_in_scanned_text_files() {
-        let scanned = LinePattern::new_ignoring_ascii_case(r"\.txt$").unwrap();
+        let scanned = LinePattern::new(r"(?i)\.txt$").unwrap();
         let properties = ["program_pubkey", "revoke_devkey"].map(String::from);
         let config = b"# program_pubkey=1 is a comment\r\n[all]\r\n  Program_PubKey\t = 1\r\n";
         let extra = b"revoke_devkey=1";
@@ -402,7 +402,7 @@ mod tests {
 
     #[test]
     fn lines_end_at_a_cr_as_well_as_at_an_lf() {
-        let scanned = LinePattern::new_ignoring_ascii_case(".").unwrap();
+        let scanned = LinePattern::new("(?i).").unwrap();
         let properties = ["program_pubkey", "revoke_devkey"].map(String::from);
         let find = |bytes: &[u8]| {
             let file = name("config.txt");

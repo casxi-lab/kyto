@@ -37,14 +37,21 @@ pub enum PatternError {
 }
 
 impl LinePattern {
-    /// Compiles `source`.
+    /// Compiles `source`. A pattern that ignores the case of ASCII letters
+    /// starts with `(?i)`.
     pub fn new(source: &str) -> Result<Self, PatternError> {
-        Self::build(source, false)
-    }
-
-    /// Compiles `source` so that it ignores the case of ASCII letters.
-    pub fn new_ignoring_ascii_case(source: &str) -> Result<Self, PatternError> {
-        Self::build(source, true)
+        let regex = RegexBuilder::new(source)
+            .unicode(false)
+            .size_limit(SIZE_LIMIT)
+            .build()
+            .map_err(|error| PatternError::Invalid {
+                pattern: source.to_string(),
+                reason: error.to_string(),
+            })?;
+        Ok(Self {
+            source: source.to_string(),
+            regex,
+        })
     }
 
     /// Compiles `source` and checks that it has every group in `groups` and
@@ -61,22 +68,6 @@ impl LinePattern {
             pattern.check_example(example)?;
         }
         Ok(pattern)
-    }
-
-    fn build(source: &str, ignore_ascii_case: bool) -> Result<Self, PatternError> {
-        let regex = RegexBuilder::new(source)
-            .unicode(false)
-            .case_insensitive(ignore_ascii_case)
-            .size_limit(SIZE_LIMIT)
-            .build()
-            .map_err(|error| PatternError::Invalid {
-                pattern: source.to_string(),
-                reason: error.to_string(),
-            })?;
-        Ok(Self {
-            source: source.to_string(),
-            regex,
-        })
     }
 
     /// The source text of the pattern.
@@ -230,7 +221,7 @@ mod tests {
 
     #[test]
     fn case_insensitive_patterns_fold_ascii_letters_only() {
-        let txt = LinePattern::new_ignoring_ascii_case(r"\.txt$").unwrap();
+        let txt = pattern(r"(?i)\.txt$");
         assert!(txt.is_match(b"config.txt"));
         assert!(txt.is_match(b"CONFIG.TXT"));
         assert!(!txt.is_match(b"config.txt.bak"));

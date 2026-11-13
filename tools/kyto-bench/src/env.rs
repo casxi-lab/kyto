@@ -15,7 +15,7 @@ use std::rc::Rc;
 
 use serde::Deserialize;
 
-use kyto_bench_core::board::{Board, EMBEDDED};
+use kyto_bench_core::board::EMBEDDED;
 use kyto_bench_core::instance::{Instance, Role};
 
 use crate::device::{Clock, Console, Delivery, MeterConfirm, PowerConfirm, PowerSwitch};
@@ -40,9 +40,9 @@ pub struct Bench {
 /// What a run takes from its surroundings.
 pub trait Env {
     /// The bench that the kinds of the instance's `[devices]` and its
-    /// `[local]` settings describe, for `board`; `base` is the directory of
-    /// the instance configuration. The error says why there is none.
-    fn open_bench(&self, instance: &Instance, base: &Path, board: &Board) -> Result<Bench, String>;
+    /// `[local]` settings describe; `base` is the directory of the instance
+    /// configuration. The error says why there is none.
+    fn open_bench(&self, instance: &Instance, base: &Path) -> Result<Bench, String>;
 
     /// The revision of the tool.
     fn tool(&self) -> ToolRevision {
@@ -52,6 +52,12 @@ pub trait Env {
     /// The texts of the board descriptions that a run can use.
     fn boards(&self) -> &[&'static str] {
         &EMBEDDED
+    }
+
+    /// The nonce of a receipt: 128 bits from the operating system's
+    /// generator, as [`nonce`] gives them.
+    fn nonce(&self) -> Result<String, String> {
+        nonce()
     }
 }
 
@@ -67,7 +73,7 @@ struct ReplaySettings {
 }
 
 impl Env for HostEnv {
-    fn open_bench(&self, instance: &Instance, base: &Path, board: &Board) -> Result<Bench, String> {
+    fn open_bench(&self, instance: &Instance, base: &Path) -> Result<Bench, String> {
         let mut recordings = Vec::new();
         for role in Role::ALL {
             let (kind, local) = (&instance.devices().device(role).kind, instance.local(role));
@@ -93,7 +99,7 @@ impl Env for HostEnv {
                 recordings.push(read.map_err(|error| format!("cannot read {path}: {error}"))?);
             }
         }
-        Ok(simulated(&SimWorld::new(), sim::replay(recordings), board))
+        Ok(simulated(&SimWorld::new(), sim::replay(recordings)))
     }
 }
 
@@ -104,16 +110,15 @@ pub fn is_simulated(instance: &Instance) -> bool {
         .all(|role| instance.devices().device(*role).kind == SIMULATED)
 }
 
-/// The bench of a simulated device of each role on `world`, for `board`,
-/// whose console plays what `script` gives.
-pub fn simulated(world: &SimWorld, script: ScriptProvider, board: &Board) -> Bench {
-    let triggers = board.write_triggers.iter().map(|t| t.trigger.clone());
+/// The bench of a simulated device of each role on `world`, whose console
+/// plays what `script` gives.
+pub fn simulated(world: &SimWorld, script: ScriptProvider) -> Bench {
     Bench {
         clock: Rc::new(world.clone()),
         power: Box::new(SimRelay::new(world)),
         confirm: Box::new(MeterConfirm(SimSupplyMeter::new(world))),
         console: Box::new(SimConsole::new(world, script)),
-        delivery: Box::new(SimTftp::new(world, triggers.collect())),
+        delivery: Box::new(SimTftp::new(world)),
         relay: None,
     }
 }
@@ -128,8 +133,6 @@ pub fn nonce() -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use kyto_bench_core::board::RASPBERRY_PI_5;
-
     use super::*;
     use crate::device::{Nanos, PowerState, Received};
 
@@ -166,11 +169,10 @@ mod tests {
 
     #[test]
     fn the_host_bench_replays_the_files_of_its_console_settings() {
-        let board = Board::parse(RASPBERRY_PI_5).unwrap();
         let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples");
         let replay = "[local.console]\nreplay = [\"captures/echo.bin\"]\n";
         let mut bench = HostEnv
-            .open_bench(&instance(SIMULATED, replay), &base, &board)
+            .open_bench(&instance(SIMULATED, replay), &base)
             .unwrap();
         assert!(is_simulated(&instance(SIMULATED, "")));
         assert_eq!(bench.relay, None);
@@ -197,7 +199,7 @@ mod tests {
             ),
         ];
         for (instance, error) in refused {
-            let opened = HostEnv.open_bench(&instance, &base, &board);
+            let opened = HostEnv.open_bench(&instance, &base);
             assert!(opened.err().unwrap().starts_with(error), "{error}");
         }
         assert!(!is_simulated(&instance("relay", "")));

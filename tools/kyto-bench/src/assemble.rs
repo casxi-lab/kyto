@@ -6,7 +6,6 @@
 use kyto_bench_core::digest::Sha256;
 use kyto_bench_core::evidence;
 use kyto_bench_core::instance::PinnedFile;
-use kyto_bench_core::names::PayloadName;
 use kyto_bench_core::plan::Entry;
 use kyto_bench_core::receipt::{
     self, Base64, BoardText, ColdBootRecord, EntryRecord, HardwareRevision, InstanceRecord,
@@ -91,16 +90,6 @@ pub fn start(inputs: &Inputs, nonce: String, tool: ToolRevision) -> Receipt {
     }
 }
 
-/// The digests of the copies of `files` that `copy` gives, by payload name,
-/// leaving out the files whose copy was not read.
-pub fn digests(
-    files: &[PayloadFile],
-    copy: fn(&PayloadFile) -> &Option<Sha256>,
-) -> Vec<(PayloadName, Sha256)> {
-    let digest = |file: &PayloadFile| Some((file.name.clone(), copy(file).clone()?));
-    files.iter().filter_map(digest).collect()
-}
-
 /// `receipt`, refused by `refusal` before any power command: it has no
 /// verdict.
 pub fn refused(mut receipt: Receipt, refusal: Refusal) -> Receipt {
@@ -143,21 +132,6 @@ pub fn cold_boot(
         verdict: verdict::cold_boot(&checks),
         checks,
     }
-}
-
-/// Judges entry `index` of `receipt`, that of `entry` in the plan, from its
-/// record: its checks and its verdict.
-pub fn close_entry(receipt: &mut Receipt, index: usize, entry: &Entry, payload: &[PinnedFile]) {
-    let parameters = &receipt.inputs.instance.parameters;
-    let start = if index == 0 {
-        &receipt.start.events[..]
-    } else {
-        &[]
-    };
-    let record = &mut receipt.entries[index];
-    let files = &record.payload.files;
-    record.checks = verdict::entry_checks(parameters, start, &record.events, payload, files);
-    record.verdict = verdict::entry(record, entry.cold_boots);
 }
 
 /// `receipt` of a run that was not refused, with the verdict of the run.

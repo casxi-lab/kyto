@@ -11,8 +11,10 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use serde::Deserialize;
+
 use kyto_bench::cli;
-use kyto_bench::device::{Delivery, Nanos, PowerState};
+use kyto_bench::device::{Console, Delivery, DeviceError, Nanos, PowerState, Received};
 use kyto_bench::env::{self, Bench, Env};
 use kyto_bench::sim::{Files, Responder, Script, ScriptProvider, SimTftp, SimWorld};
 use kyto_bench_core::board::{Board, RASPBERRY_PI_5};
@@ -22,7 +24,9 @@ use kyto_bench_core::names::{GenerationName, PayloadName};
 use kyto_bench_core::plan::RunPlan;
 use kyto_bench_core::power;
 use kyto_bench_core::public::PublicReceipt;
-use kyto_bench_core::receipt::{Command, Event, EventKind, Outcome, Receipt, Verdict};
+use kyto_bench_core::receipt::{
+    Base64, Command, EndReason, Event, EventKind, Outcome, Receipt, Verdict,
+};
 use kyto_bench_core::rejudge::rejudge;
 
 const STATS: &[u8] = b"STATS seq=1\r\n";
@@ -48,10 +52,10 @@ fn scratch(name: &str) -> PathBuf {
 
 /// The example console output that the board plays when it is served
 /// `files`: that of the echo entry when its kernel is served, else that of
-/// the firmware-only entry. The echo entry's STATS line is the board's
-/// answer to its step. `cut` leaves out the last line of the power-on of
-/// that number.
-fn script(cut: Option<u32>) -> ScriptProvider {
+/// the firmware-only entry. The echo entry's STATS line is left out: the
+/// board sends `answer` in its place as the answer to the step. `cut` leaves
+/// out the last line of the power-on of that number.
+fn script(cut: Option<u32>, answer: &'static [u8]) -> ScriptProvider {
     let (firmware, echo) = (
         example("captures/firmware-only.bin"),
         example("captures/echo.bin"),
@@ -77,17 +81,50 @@ fn script(cut: Option<u32>) -> ScriptProvider {
             responders: vec![Responder {
                 trigger: b"?\r".to_vec(),
                 delay: Nanos::from_millis(2),
-                bytes: STATS.to_vec(),
+                bytes: answer.to_vec(),
             }],
         }
     })
 }
 
-/// Surroundings whose bench is a simulated device of each role on `world`.
+/// A console that never reports its deadline: it gives an empty chunk
+/// instead, as a serial port can after a read that timed out. It counts the
+/// calls of `receive`, so that a run that keeps reading stops.
+struct Deaf(Box<dyn Console>, u32);
+
+impl Console for Deaf {
+    fn open(&mut self, deadline: Nanos) -> Result<Nanos, DeviceError> {
+        self.0.open(deadline)
+    }
+
+    fn receive(&mut self, deadline: Nanos) -> Result<Received, DeviceError> {
+        self.1 += 1;
+        assert!(self.1 < 1000, "the run reads on past its deadline");
+        Ok(match self.0.receive(deadline)? {
+            Received::Deadline { at } => Received::Bytes {
+                at,
+                bytes: Vec::new(),
+            },
+            received => received,
+        })
+    }
+
+    fn send(&mut self, bytes: &[u8]) -> Result<Nanos, DeviceError> {
+        self.0.send(bytes)
+    }
+
+    fn close(&mut self) -> Result<(), DeviceError> {
+        self.0.close()
+    }
+}
+
+/// Surroundings whose bench is a simulated device of each role on `world`,
+/// with a [`Deaf`] console when `deaf` is set.
 struct TestEnv {
     world: SimWorld,
     script: RefCell<Option<ScriptProvider>>,
     boards: Vec<&'static str>,
+    deaf: bool,
 }
 
 impl TestEnv {
@@ -98,27 +135,32 @@ impl TestEnv {
             world,
             script,
             boards,
+            deaf: false,
         }
     }
 
     /// The board plays the example console output.
     fn example() -> Self {
-        Self::new(script(None))
+        Self::new(script(None, STATS))
     }
 
     /// Whether the delivery device holds generation `number` with `file`.
     fn staged(&self, number: u32, file: &str) -> bool {
         let generation = GenerationName::new(number).unwrap();
-        let mut tftp = SimTftp::new(&self.world, Vec::new());
+        let mut tftp = SimTftp::new(&self.world);
         let name = PayloadName::parse(file).unwrap();
         tftp.read_staged(&generation, &name).is_ok()
     }
 }
 
 impl Env for TestEnv {
-    fn open_bench(&self, _: &Instance, _: &Path, board: &Board) -> Result<Bench, String> {
+    fn open_bench(&self, _: &Instance, _: &Path) -> Result<Bench, String> {
         let script = self.script.borrow_mut().take().ok_or("the bench is open")?;
-        Ok(env::simulated(&self.world, script, board))
+        let mut bench = env::simulated(&self.world, script);
+        if self.deaf {
+            bench.console = Box::new(Deaf(bench.console, 0));
+        }
+        Ok(bench)
     }
 
     fn boards(&self) -> &[&'static str] {
@@ -231,8 +273,10 @@ fn power(command: Command) -> impl Fn(&EventKind) -> bool {
 /// The times of a cold boot's events, each as (time, bytes received
 /// before): the console ready, the power on and its confirmation, the
 /// first send, the end, the power off and its confirmation, the console
-/// closed.
+/// closed; and the positions among the events of the console ready, the
+/// power on, the reading that confirmed it, the end and the power off.
 struct Times {
+    order: [usize; 5],
     ready: (u64, u64),
     on: (u64, u64),
     on_confirmed: (u64, u64),
@@ -256,12 +300,20 @@ fn times(receipt: &Receipt, events: &[Event]) -> Times {
         (at, events[index].received)
     };
     let at = |kind: fn(&EventKind) -> bool| position(events, kind).map(key);
+    let ready = position(events, |kind| matches!(kind, EventKind::ConsoleReady {})).unwrap();
+    let on_confirmed = confirmed(on).0;
+    let reading = |event: &Event| {
+        event.at_ns == on_confirmed && matches!(event.event, EventKind::Reading { .. })
+    };
+    let confirming = on + events[on..].iter().position(reading).unwrap();
+    let end = position(events, |kind| matches!(kind, EventKind::End { .. })).unwrap();
     Times {
-        ready: at(|kind| matches!(kind, EventKind::ConsoleReady {})).unwrap(),
+        order: [ready, on, confirming, end, off],
+        ready: key(ready),
         on: key(on),
         on_confirmed: confirmed(on),
         send: at(|kind| matches!(kind, EventKind::Send { .. })),
-        end: at(|kind| matches!(kind, EventKind::End { .. })).unwrap(),
+        end: key(end),
         off: key(off),
         off_confirmed: confirmed(off),
         closed: at(|kind| matches!(kind, EventKind::ConsoleClosed {})).unwrap(),
@@ -314,9 +366,12 @@ fn a_two_entry_plan_runs_to_pass_on_simulated_devices() {
         firmware.payload.files[3].source_sha256,
         echo.payload.files[3].source_sha256
     );
-    // Each cold boot keeps the order of the board, the off interval from
-    // the last off confirmation, and is switched off and confirmed off.
+    // Each cold boot keeps the order of the board, the off interval of the
+    // board from the last off confirmation, and is switched off and
+    // confirmed off.
     let confirmation = &receipt.inputs.instance.parameters.confirmation;
+    let board = Board::parse(&receipt.inputs.board_description.text).unwrap();
+    let interval = board.cold_boot.off_interval_ms * MS;
     let mut off_at = power::off_confirmed_at(confirmation, &receipt.start.events).unwrap();
     for record in &receipt.entries {
         let switch = position(&record.events, |k| matches!(k, EventKind::Switch { .. }));
@@ -327,13 +382,14 @@ fn a_two_entry_plan_runs_to_pass_on_simulated_devices() {
         );
         for cold_boot in &record.cold_boots {
             let t = times(&receipt, &cold_boot.events);
-            assert!(switched <= t.on.0);
+            assert!(switched <= t.ready.0);
             assert!(
-                t.on.0 - off_at >= 5000 * MS,
-                "the off interval on the bench clock"
+                t.ready.0 >= off_at + interval,
+                "the off interval on the bench clock before the console opens"
             );
-            assert!(t.ready <= t.on && t.on < t.on_confirmed && t.end <= t.off);
-            assert!(t.off < t.off_confirmed && t.off_confirmed <= t.closed);
+            assert!(t.order.is_sorted_by(|a, b| a < b), "{:?}", t.order);
+            assert!(t.ready <= t.on && t.on < t.on_confirmed && t.on_confirmed <= t.end);
+            assert!(t.end <= t.off && t.off < t.off_confirmed && t.off_confirmed <= t.closed);
             if let Some(send) = t.send {
                 assert!(t.on_confirmed < send && send < t.end);
             }
@@ -379,6 +435,22 @@ fn a_two_entry_plan_runs_to_pass_on_simulated_devices() {
     );
     let stream = "/entries/1/cold_boots/0/serial/bytes_base64";
     assert!(public.replacements.iter().all(|r| r.field == stream));
+    // Each replacement covers the place of its value, and the public stream
+    // shows none of the values.
+    let shown = public.receipt.pointer(stream).unwrap().clone();
+    let shown = Base64::deserialize(shown).unwrap().0;
+    assert_eq!(shown.len(), echo_bytes.len());
+    for (value, replaced) in values.iter().zip(&public.replacements) {
+        assert_eq!(occurrences(&shown, value), 0, "{value}");
+        let at = echo_bytes
+            .windows(value.len())
+            .position(|w| w == value.as_bytes());
+        let (start, end) = (at.unwrap(), at.unwrap() + value.len());
+        assert!(
+            replaced.offset <= start && end <= replaced.offset + replaced.length,
+            "{value}"
+        );
+    }
     let withheld: Vec<&str> = public.withheld.iter().map(|w| w.rule.as_str()).collect();
     assert_eq!(withheld, ["nonce", "instance.tftp.server_address"]);
     let text = fs::read_to_string(ran.out.join("receipt.public.json")).unwrap();
@@ -401,7 +473,7 @@ fn rejudging_a_written_receipt_gives_the_recorded_verdicts() {
     let pass = run_example("rejudge-pass", &TestEnv::example());
     assert_eq!(pass.receipt().verdict, Some(Verdict::Pass));
     // The second cold boot of the first entry does not show its end marker.
-    let fail = run_example("rejudge-fail", &TestEnv::new(script(Some(2))));
+    let fail = run_example("rejudge-fail", &TestEnv::new(script(Some(2), STATS)));
     assert_eq!(fail.status, cli::FAIL);
     let receipt = fail.receipt();
     let verdicts: Vec<Verdict> = receipt.entries.iter().map(|e| e.verdict).collect();
@@ -842,4 +914,56 @@ fn the_flow_names_no_board() {
             assert!(!code.contains(literal), "{file} names {literal}");
         }
     }
+}
+
+#[test]
+fn a_response_without_its_line_feed_is_no_response() {
+    // The board answers the step of the echo entry with no line end after
+    // the answer, so its last line is never complete.
+    let answer = &STATS[..STATS.len() - 2];
+    let env = TestEnv::new(script(None, answer));
+    let ran = run_example("unterminated-response", &env);
+    assert_eq!(ran.status, cli::FAIL);
+    let receipt = ran.receipt();
+    assert_eq!(receipt.verdict, Some(Verdict::Fail));
+    let cold_boot = &receipt.entries[1].cold_boots[0];
+    assert!(cold_boot.serial.bytes_base64.0.ends_with(answer));
+    let end = cold_boot.events.iter().find_map(|event| match event.event {
+        EventKind::End { reason } => Some(reason),
+        _ => None,
+    });
+    assert_eq!(end, Some(EndReason::StepTimeout));
+    let failed: Vec<&str> = cold_boot
+        .checks
+        .iter()
+        .filter(|check| check.result == Outcome::Fail)
+        .map(|check| check.rule.as_str())
+        .collect();
+    assert_eq!(failed, ["step.response"]);
+}
+
+#[test]
+fn a_cold_boot_ends_at_its_deadline_whatever_the_console_reports() {
+    // The first cold boot never shows its end marker, and the console never
+    // reports a deadline.
+    let mut env = TestEnv::new(script(Some(1), STATS));
+    env.deaf = true;
+    let ran = run_example("deaf-console", &env);
+    assert_eq!(ran.status, cli::FAIL);
+    let receipt = ran.receipt();
+    let events = &receipt.entries[0].cold_boots[0].events;
+    let end = events.iter().find_map(|event| match event.event {
+        EventKind::End { reason } => Some(reason),
+        _ => None,
+    });
+    assert_eq!(end, Some(EndReason::BootTimeout));
+    let t = times(&receipt, events);
+    assert_eq!(
+        t.end.0,
+        t.on.0 + 60_000 * MS,
+        "the boot timeout of the plan"
+    );
+    assert!(t.end <= t.off && t.off < t.off_confirmed);
+    let verdicts: Vec<Verdict> = receipt.entries.iter().map(|e| e.verdict).collect();
+    assert_eq!(verdicts, [Verdict::Fail, Verdict::Pass]);
 }

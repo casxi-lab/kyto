@@ -1,0 +1,3 @@
+# Console output exactly as a board writes it, CR LF line endings included:
+# Git keeps and compares these files as bytes, never as text.
+*.bin binary

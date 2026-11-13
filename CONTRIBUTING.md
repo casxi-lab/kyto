@@ -243,11 +243,12 @@ change that adds it.
   and [contract](docs/bench/contract.md) are written: the contract names the
   rules, the functions that apply them and the tests of each requirement, a
   negative one among them, and a test of the `tools` workspace checks it
-  against the code and the tests. No fuzz test exists yet, which the
-  contract lists as an open obligation. The rest of the tool is tested on
-  the host against simulated devices, on which the tests run the example
-  run plan through the command. A bench self-test shows only that a bench
-  works.
+  against the code and the tests. No fuzz test exists yet; the contract
+  lists the fuzz tests with its other
+  [open obligations](docs/bench/contract.md#open-obligations). The rest of
+  the tool is tested on the host against simulated devices, on which the
+  tests run the example run plan through the command. A bench self-test
+  shows only that a bench works.
 - **Bench hardware.** Adapter boards, fixtures and other bench parts keep
   their design files under `bench/` and follow the rules for design files and
   records above.

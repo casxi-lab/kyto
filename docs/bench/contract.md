@@ -172,9 +172,9 @@ boot is not powered.
   failure, fault, refusal or error that follows. A `positive` test shows
   that a case that keeps the requirement passes.
 - The tests run on the host, on records built in code, on simulated devices
-  through the command line, or with the built binary on the example. They do
-  not sleep or read the system clock; every time in them is written in the
-  test or is a time of the simulated bench clock.
+  directly or through the command line, or with the built binary on the
+  example. They do not sleep or read the system clock; every time in them is
+  written in the test or is a time of the simulated bench clock.
 - Console output that a test reads holds documentation values only: no
   address, MAC address or serial number of a real board or bench.
 - `tools/kyto-bench/tests/contract.rs` reads the
@@ -325,14 +325,18 @@ it.
 
 ## Current deviations
 
-- **The variants assume the defaults of the device tree properties**
-  (`PROV-R06`). The variants of the
-  [Raspberry Pi 5 description](formats.md#the-raspberry-pi-5) assume the
-  defaults of `upstream_kernel`, `os_prefix`, `overlay_prefix` and
-  `device_tree`. A payload whose `config.txt` sets one of them makes the
-  firmware request other files, which `payload.variant_missing` does not
-  detect before power-on. A cold boot that reads a file outside the payload
-  in full, inside the path prefix, still fails `tftp.unplanned_file`.
+- **The variants list only the default file names** (`PROV-R06`). The
+  variants of the [Raspberry Pi 5 description](formats.md#the-raspberry-pi-5)
+  list files under the defaults of `upstream_kernel`, `os_prefix`,
+  `overlay_prefix` and `device_tree`, and `payload.variant_missing` compares
+  the payload with those names only. A payload whose `config.txt` sets one
+  of these properties is refused when it holds the files under the names
+  that it sets but not under the default names, and passes when it holds
+  the default names but not the files that the firmware then requests. The
+  board is served the payload's files alone, so the firmware's request for
+  a file that is not in the payload is a failed read, which no rule judges:
+  such a cold boot is judged by its markers, its end and its other checks
+  only.
 - **No test builds the tool twice** (`PROV-R08`). That every build asks Git
   again, so that `tool.clean` describes the tree at the build, rests on
   Cargo running a build script again on every build while a path that the

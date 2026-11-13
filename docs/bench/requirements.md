@@ -13,10 +13,10 @@ A requirement is named by the prefix of its group, `-R` and two digits:
 `POWER` for powering off and reporting. Each group is numbered from `R01`.
 
 Every requirement is shown so far by tests on the host: unit tests of
-`kyto-bench-core` on records built in code, runs of the command on
-simulated devices, and runs of the built binary on the example. The console
-output that they read was written for the examples, and no test is a run on
-a real bench.
+`kyto-bench-core` and `kyto-bench` on records and simulated devices built in
+code, runs of the command on simulated devices, and runs of the built binary
+on the example. The console output that they read was written for the
+examples, and no test is a run on a real bench.
 
 ## Verdicts
 
@@ -278,8 +278,10 @@ TFTP directory.
 `payload.variant_missing` refuses a payload that lacks a file of the variant
 whose value the identity record gives for the variant's field, ignoring
 ASCII case, or of any variant of a field that the record gives as unknown.
-The variants hold only under the defaults that the contract's
-[current deviations](contract.md#current-deviations) state.
+The variants list files under the default names of the device tree
+properties; the contract's
+[current deviations](contract.md#current-deviations) state what follows for
+a payload that changes them.
 
 **Evidence.** Unit tests of payloads with and without the files of the C1
 and D0 variants, with the stepping known, unknown and written in lower

@@ -1,6 +1,9 @@
 //! The `kyto-bench` binary on the example of `tools/examples/`, run as a
 //! person runs it: its simulated devices replay the example console output
-//! that the example instance configuration lists.
+//! that the example instance configuration lists. The binary is the one that
+//! Cargo builds for these tests, of the profile that they are built with:
+//! the test profile under `cargo test`, the release profile only under
+//! `cargo test --release`.
 
 // These tests run the binary of the tool, the one program that a test of
 // the tool starts.
@@ -59,7 +62,7 @@ fn receipt(out: &Path) -> Receipt {
 }
 
 #[test]
-fn the_example_runs_to_pass_with_the_release_binary() {
+fn the_example_runs_to_pass_with_the_built_binary() {
     let (dir, examples) = (scratch("example"), examples());
     let mut receipts = Vec::new();
     for run in ["first", "second"] {
@@ -93,7 +96,7 @@ fn the_example_runs_to_pass_with_the_release_binary() {
 }
 
 #[test]
-fn release_binary_refuses_an_unenabled_eeprom_payload() {
+fn the_built_binary_refuses_an_unenabled_eeprom_payload() {
     let dir = scratch("eeprom");
     let payloads = dir.join("payload");
     for entry in ["firmware-only", "echo"] {

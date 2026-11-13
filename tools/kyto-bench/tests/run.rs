@@ -518,6 +518,11 @@ fn a_two_entry_plan_runs_to_pass_on_simulated_devices() {
             switched >= off_at,
             "the payload is served while the supply is off"
         );
+        // The board's order: `publish`, then `wait_off_interval`.
+        assert!(
+            switched < off_at + interval,
+            "the payload is published and checked before the off interval"
+        );
         for cold_boot in &record.cold_boots {
             let t = times(&receipt, &cold_boot.events);
             assert!(switched <= t.ready.0);

@@ -445,13 +445,20 @@ each value. In short:
   board's MAC address and the TFTP server in the line that waits for the
   network link; the client, gateway and server addresses in the `NET` line;
   the address and MAC address in `ARP` lines; the MAC address and the server
-  in `TFTP_GET` lines; and the SD card identifier in the `CID:` line. These
+  in `TFTP_GET` lines; the SD card's identifier in the `CID:` line and its
+  card-specific data in the `CSD:` line; and the partition UUID of the root
+  file system, with the partition number of an MBR disk, in the
+  `root=PARTUUID=` argument of a kernel command line, such as the one that
+  the firmware shows after it reads `cmdline.txt` from an SD card. These
   forms cover static addressing, and each starts at the word that names its
-  line, such as `BOOTMODE:`. `0.0.0.0` is never a value to hide.
+  line or argument, such as `BOOTMODE:` or `root=PARTUUID=`. `0.0.0.0` is
+  never a value to hide.
 - **Example values.** The examples hold no value of a real board: the serial
-  number `fedc9876` is made up, the MAC addresses `00:00:5e:00:53:a1` and
-  `00:00:5e:00:53:a2` and the IPv4 addresses of `192.0.2.0/24` are reserved
-  for documentation, and `bench/` stands for the path prefix.
+  number `fedc9876`, the SD card's identifier and card-specific data and the
+  partition UUID `0a1b2c3d-02` are made up, the MAC addresses
+  `00:00:5e:00:53:a1` and `00:00:5e:00:53:a2` and the IPv4 addresses of
+  `192.0.2.0/24` are reserved for documentation, and `bench/` stands for the
+  path prefix.
 
 ## Identity records
 
@@ -1447,7 +1454,7 @@ its public version, with the receipt digest shortened here, starts like this:
 {
   "format": "kyto-bench public receipt",
   "format_version": 1,
-  "receipt_sha256": "a78c47f0...",
+  "receipt_sha256": "5e481066...",
   "placeholder": "#",
   "withheld": [
     {

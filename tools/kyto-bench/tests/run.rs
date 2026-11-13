@@ -1763,8 +1763,9 @@ fn a_recorded_fall_back_to_the_sd_card_fails() {
     assert_eq!(verdicts(&receipt), [(fail, vec![fail])]);
     assert_eq!(receipt.verdict, Some(fail));
     // The public version shows none of the values that the recording holds
-    // for the board's serial number, the MAC and IP addresses and the SD
-    // card identifier, nor the path prefix of the instance.
+    // for the board's serial number, the MAC and IP addresses, the SD card's
+    // identifier and card-specific data and the partition UUID of the root
+    // file system, nor the path prefix of the instance.
     let hidden = [
         "a1b2c3d4",
         "00:00:5e:00:53:b1",
@@ -1773,6 +1774,8 @@ fn a_recorded_fall_back_to_the_sd_card_fails() {
         "198.51.100.12",
         "198.51.100.13",
         "c1d0c1d0c1d0c1d0c1d0c1d0c1d0c1d0",
+        "c5d0c5d0c5d0c5d0c5d0c5d0c5d0c5d0",
+        "5ca1ab1e",
         "tftp-rt/",
     ];
     assert_hidden(&ran, &hidden);

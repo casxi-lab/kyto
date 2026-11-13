@@ -1235,7 +1235,7 @@ mod tests {
         let start = RASPBERRY_PI_5.find(block).unwrap();
         let end = start + RASPBERRY_PI_5[start..].find("\n\n").unwrap() + 2;
         let stripped = format!("{}{}", &RASPBERRY_PI_5[..start], &RASPBERRY_PI_5[end..]);
-        assert_eq!(Board::parse(&stripped).unwrap().sensitive.len(), 5);
+        assert_eq!(Board::parse(&stripped).unwrap().sensitive.len(), 7);
         let mut stripped_receipt = with_serial(NETWORK);
         let recorded = &mut stripped_receipt.inputs.board_description;
         (recorded.sha256, recorded.text) = (Sha256::of(stripped.as_bytes()), stripped);

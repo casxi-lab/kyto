@@ -98,9 +98,14 @@ pub fn judge(c: &ColdBoot<'_>) -> Result<(Observations, Vec<Check>), IndexError>
         EventKind::End { reason } => Some((event.at_ns, reason)),
         _ => None,
     });
-    let by_deadline = |name: &str| first(name).map(|m| m.at_ns <= deadline);
+    // Only a complete line of the end marker ends a cold boot.
+    let complete = |m: &MarkerSeen| line(m.line).is_some_and(|at| lines[at].terminated);
+    let ends = |name: &str| {
+        let ends = |m: &MarkerSeen| m.name == name && m.at_ns <= deadline && complete(m);
+        Some(seen.markers.iter().any(ends))
+    };
     let (subject, ended) = match &entry.end {
-        End::Marker(end) => (&end.marker[..], by_deadline(&end.marker)),
+        End::Marker(end) => (&end.marker[..], ends(&end.marker)),
         End::Timeout(_) => ("timeout", end.map(|(at_ns, _)| at_ns >= deadline)),
     };
     let failure = (ended != Some(true)).then(|| "not by the boot timeout".into());
@@ -554,6 +559,23 @@ firmware.bootloader = {{ hash = "1accd665", date = "2026/09/25" }}
         assert_eq!(late.result("boot.end", "ready"), Outcome::Pass);
         let missing = case(&lines_with(|lines| lines.truncate(8)));
         assert_eq!(missing.result("boot.end", "ready"), Outcome::Fail);
+        // An end marker in the unterminated last line ends nothing: the
+        // step is never armed, and the capture runs on to the boot timeout.
+        assert_eq!(case(&LINES[..9]).result("boot.end", "ready"), Outcome::Pass);
+        let mut cut = case(&LINES[..9]);
+        let length = cut.serial.len() - 2;
+        cut.serial.truncate(length);
+        cut.events
+            .retain(|e| !matches!(e.event, EventKind::Send { .. }));
+        for event in &mut cut.events {
+            event.received = event.received.min(length as u64);
+        }
+        let end = cut.at(|kind| matches!(kind, EventKind::End { .. }));
+        end.event = EventKind::End {
+            reason: EndReason::BootTimeout,
+        };
+        assert_eq!(cut.result("marker.count", "ready"), Outcome::Pass);
+        assert_eq!(cut.result("boot.end", "ready"), Outcome::Fail);
         // An entry that ends at the timeout captures until the deadline.
         let mut timeout = case(&LINES);
         let end = "end = { marker = \"ready\" }";

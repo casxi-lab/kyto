@@ -898,7 +898,7 @@ line patterns of the board description and of the entry. It reads a
 transcript the same way while it is received and when a record of it is read
 back, with each send placed after the bytes received before it; the
 unterminated last line of a capture is read when the capture ends, but not
-for [steps](#steps-and-the-end-of-a-cold-boot). A line is
+for [steps or the end](#steps-and-the-end-of-a-cold-boot). A line is
 named by its offset. From the lines, in order, it takes:
 
 - **Boot modes.** A line of the `[boot_mode]` form gives the mode that the
@@ -1269,7 +1269,7 @@ table says otherwise:
 | `device.error` | the role of the device | fault | one check for each `device_error` event, which it reports |
 | `boot.network` | `board.` and the board's `network_marker` | fail | no boot mode line is of the board's network mode |
 | `boot.fallback` | the same | fail | the last boot mode line is of another mode |
-| `boot.end` | the marker of `end`, or `timeout` | fail | with an end marker, its first line did not appear by the boot timeout, `boot_timeout_ms` after the power on; with `end = "timeout"`, the cold boot ended before the boot timeout |
+| `boot.end` | the marker of `end`, or `timeout` | fail | with an end marker, no complete line of it, ended by its LF, appeared by the boot timeout, `boot_timeout_ms` after the power on; with `end = "timeout"`, the cold boot ended before the boot timeout |
 | `console.byte_limit` | `console` | fail | the cold boot ended at the capture limit, its `end` reason `byte_limit` or `chunk_limit` |
 | `marker.count` | the marker | fail | for each `expect`, in order: the marker appeared another number of times |
 | `marker.order` | the markers of the `order`, separated by spaces | fail | for each `order`: one of the markers did not appear, or the first line of one does not start after the first line of the one before |

@@ -107,19 +107,23 @@ are built on are fixed; no other part has been chosen, and the screen size,
 the key count and the arrangement within each form are open. Nothing has been
 designed or modelled yet: there are no design files and no models, and nothing
 to build, order, print or assemble. The bench tool in `tools/` is partly
-written: its library reads [board descriptions, identity records, instance
+written: its command runs [run plans](docs/bench/formats.md#run-plans) on
+simulated devices and writes their receipts and the receipts' public
+versions. Its library reads [board descriptions, identity records, instance
 configurations and run plans](docs/bench/formats.md), with the Raspberry Pi 5
-description built in, checks payloads, reads what a cold boot shows, and
-writes and reads receipts and their public versions, and the tool has the
-interfaces of four kinds of device, each with one simulated device: power
-commands, a supply meter that also confirms power-on and power-off, the
-serial console, and payload delivery to the directory that the board reads
-over TFTP. It has no command that runs a bench, no driver for a real device,
-and no input injection or display capture yet, so no run makes a receipt.
-Apart from the bench tool, the board descriptions and the formats of run
-plans and receipts, none of the items above exists today. Until a power
-circuit exists, the development boards, a whole Raspberry Pi 5 board and a
-Compute Module 5 in its official IO board, run from a stable external supply.
+description built in, checks payloads, reads what a cold boot shows, judges
+cold boots, entries and runs, writes and reads receipts and their public
+versions, and derives the verdicts of a receipt again from what it records.
+The tool has the interfaces of four kinds of device, each with one simulated
+device: power commands, a supply meter that also confirms power-on and
+power-off, the serial console, and payload delivery to the directory that
+the board reads over TFTP. It has no driver for a real device and no input
+injection or display capture yet, so it cannot run a bench, and no receipt
+that it writes is evidence. Apart from the bench tool, the board descriptions
+and the formats of run plans and receipts, none of the items above exists
+today. Until a power circuit exists, the development boards, a whole
+Raspberry Pi 5 board and a Compute Module 5 in its official IO board, run
+from a stable external supply.
 
 The repository checks run from the repository root:
 
@@ -127,17 +131,19 @@ The repository checks run from the repository root:
 cargo xtask check
 ```
 
-The checks are a Rust program in `xtask/`; rustup installs the toolchain
-pinned in `rust-toolchain.toml` on first use. [Contributing](CONTRIBUTING.md)
-describes the steps of the check, how files will be organized and the commit
-rules.
+The checks are a Rust program in `xtask/`, which checks the bench tool in
+`tools/` too; rustup installs the toolchain pinned in `rust-toolchain.toml`
+on first use. [Contributing](CONTRIBUTING.md) describes the steps of the
+check, how to run the bench tool on its example, how files will be organized
+and the commit rules.
 
 ## How the files will be organized
 
-No design file or model exists yet, the bench tool under `tools/` cannot run
-a bench yet, and the electronic and mechanical design tools have not been
-chosen; the formats of the design files follow that choice. When work starts,
-the repository will keep:
+No design file or model exists yet, and the electronic and mechanical design
+tools have not been chosen; the formats of the design files follow that
+choice. The bench tool, written in Rust, is under `tools/`, with the
+[formats](docs/bench/formats.md) of the files it reads and writes under
+`docs/bench/`. When work on the design starts, the repository will keep:
 
 - the editable design sources of each electrical module (schematics and board
   layouts) and the parametric models and assembly sources of each part, in the
@@ -148,7 +154,6 @@ the repository will keep:
 - measurement, mockup, print and fit-test records, each stating the revision
   and the board or part it was taken on, with nominal and measured values
   kept apart;
-- the bench tool, written in Rust, under `tools/`;
 - the design files of the bench hardware under `bench/`.
 
 Electrical results, design rule checks, power-flow results, dimension checks,

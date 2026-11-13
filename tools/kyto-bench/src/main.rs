@@ -1,9 +1,11 @@
-//! The `kyto-bench` command. This build has no subcommand yet: it prints its
-//! usage and exits with status 2.
+//! The `kyto-bench` command, whose command line [`kyto_bench::cli`]
+//! describes.
 
 use std::process::ExitCode;
 
+use kyto_bench::cli;
+use kyto_bench::env::HostEnv;
+
 fn main() -> ExitCode {
-    eprintln!("usage: kyto-bench <command>\n\nThis build of kyto-bench has no command yet.");
-    ExitCode::from(2)
+    ExitCode::from(cli::run(std::env::args_os(), &HostEnv))
 }

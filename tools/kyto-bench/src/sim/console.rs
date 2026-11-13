@@ -262,8 +262,12 @@ impl Console for SimConsole {
 
 #[cfg(test)]
 mod tests {
+    use kyto_bench_core::board::{Board, RASPBERRY_PI_5};
+    use kyto_bench_core::write::WriteEnables;
+
     use super::*;
     use crate::device::{Clock, Delivery, PowerState, PowerSwitch};
+    use crate::gate::WriteGate;
     use crate::sim::{SimRelay, SimTftp};
 
     fn ms(count: u64) -> Nanos {
@@ -465,9 +469,11 @@ mod tests {
         relay.command(PowerState::On).unwrap();
         assert_eq!(console.receive(ms(1)), Ok(bytes(Nanos(0), b"1:\n")));
         relay.command(PowerState::Off).unwrap();
-        let mut tftp = SimTftp::new(&world, Vec::new());
+        let mut tftp = SimTftp::new(&world);
         let file = (PayloadName::parse("config.txt").unwrap(), b"x".to_vec());
-        let generation = tftp.stage(&[file], &[]).unwrap();
+        let board = Board::parse(RASPBERRY_PI_5).unwrap();
+        let gate = WriteGate::new(&WriteEnables::default(), &board);
+        let generation = gate.stage(&mut tftp, &[file]).unwrap();
         tftp.switch_to(&generation).unwrap();
         relay.command(PowerState::On).unwrap();
         assert_eq!(

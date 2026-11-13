@@ -11,11 +11,10 @@
 use std::fmt;
 
 use kyto_bench_core::names::{GenerationName, PayloadName};
-use kyto_bench_core::write::WriteTrigger;
 
 pub use kyto_bench_core::roles::{Quantity, Role};
 
-use crate::gate::{self, WritePermit, WriteRefused};
+use crate::gate::{Checked, WriteRefused};
 
 /// A time of the bench clock: nanoseconds since its origin.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -131,34 +130,14 @@ pub enum Received {
 /// reads. Each payload is staged as a new generation, read back, and then
 /// made the served one in one step.
 ///
-/// A device implements [`Delivery::write_generation`] and keeps the provided
-/// [`Delivery::stage`], so that the write gate checks every payload before
-/// the device writes it.
+/// A payload is staged only through [`crate::gate::WriteGate::stage`], which
+/// checks its files and hands them to [`Delivery::write_generation`] as
+/// [`Checked`] files, which no other code can make.
 pub trait Delivery {
-    /// The board's write triggers, which [`Delivery::stage`] checks every
-    /// payload file against.
-    fn write_triggers(&self) -> &[WriteTrigger];
-    /// Stages `files` as a complete new generation that the board is not
-    /// served yet and returns its name. Before anything is written, it
-    /// checks that every file that lets the firmware write has a permit of
-    /// its class ([`crate::gate::check_staging`]); then the device writes
-    /// the generation ([`Delivery::write_generation`]).
-    fn stage(
-        &mut self,
-        files: &[(PayloadName, Vec<u8>)],
-        permits: &[WritePermit<'_>],
-    ) -> Result<GenerationName, StageError> {
-        let names = files.iter().map(|(name, _)| name);
-        gate::check_staging(names, self.write_triggers(), permits).map_err(StageError::Refused)?;
-        self.write_generation(files).map_err(StageError::Device)
-    }
-    /// Writes `files`, which [`Delivery::stage`] has checked, as a complete
-    /// new generation and returns its name, the next free one; never
-    /// touches an existing generation. Only `stage` calls it.
-    fn write_generation(
-        &mut self,
-        files: &[(PayloadName, Vec<u8>)],
-    ) -> Result<GenerationName, DeviceError>;
+    /// Writes `files`, which the write gate has checked, as a complete new
+    /// generation that the board is not served yet and returns its name,
+    /// the next free one; never touches an existing generation.
+    fn write_generation(&mut self, files: Checked<'_>) -> Result<GenerationName, DeviceError>;
     /// A staged file, read back from where the TFTP server reads files.
     fn read_staged(
         &mut self,
@@ -176,7 +155,7 @@ pub trait Delivery {
     fn read_served(&mut self, name: &PayloadName) -> Result<Vec<u8>, DeviceError>;
 }
 
-/// Why [`Delivery::stage`] wrote nothing.
+/// Why [`crate::gate::WriteGate::stage`] wrote nothing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StageError {
     /// The write gate refused a file of the payload.

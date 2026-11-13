@@ -63,22 +63,40 @@ pub struct Check {
     pub detail: Option<String>,
 }
 
+impl Check {
+    /// A check of `rule` on `subject` that passed when `detail` is `None`
+    /// and has `result` and `detail` otherwise.
+    pub fn new(rule: &str, subject: &str, result: Outcome, detail: Option<String>) -> Self {
+        let result = detail.as_ref().map_or(Outcome::Pass, |_| result);
+        let (rule, subject) = (rule.into(), subject.into());
+        Self {
+            rule,
+            subject,
+            result,
+            detail,
+        }
+    }
+}
+
 /// Why a run was refused before any power command: the rule, the index of
-/// the entry it concerns, if any, and what was found.
+/// the entry it concerns, if any, the payload file it found, and what it
+/// found.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Refusal {
     pub rule: String,
     pub entry: Option<usize>,
+    pub subject: String,
     pub detail: String,
 }
 
 impl Refusal {
-    pub(crate) fn new(rule: &str, entry: usize, detail: String) -> Self {
-        let (rule, entry) = (rule.to_string(), Some(entry));
+    pub(crate) fn new(rule: &str, entry: usize, subject: &PayloadName, detail: String) -> Self {
+        let (rule, entry, subject) = (rule.to_string(), Some(entry), subject.to_string());
         Self {
             rule,
             entry,
+            subject,
             detail,
         }
     }
@@ -1214,6 +1232,7 @@ steps = [{ after = "ready", send = "?\r", expect = '^STATS seq=1', timeout_ms = 
         receipt.refusal = Some(Refusal::new(
             "payload.staged_digest",
             0,
+            &PayloadName::parse("config.txt").unwrap(),
             "the staged copy of config.txt was not read".into(),
         ));
         receipt.verdict = None;

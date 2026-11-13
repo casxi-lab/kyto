@@ -1,0 +1,20 @@
+ÿ
+  1.08 RPi: BOOTSYS release VERSION:1accd665 DATE: 2026/09/25 TIME: 15:59:09
+  1.11 EEPROM ID 0xef4015
+  4.37 RPi: BOOTLOADER release VERSION:1accd665 DATE: 2026/09/25 TIME: 15:59:09
+  4.37 MFG_VER: 2
+  4.37 BOOTMODE: 0x06 partition 0 build-ts BUILD_TIMESTAMP=1790351949 serial 1234abcd boardrev d04171 stc 4378801
+  4.94 Boot mode: NETWORK (02) order f1
+  5.51 NETWORK: 00:00:5e:00:53:01 wait for link TFTP: 192.0.2.10
+ 16.03 Read config.txt bytes       79 hnd 0x0
+ 18.10 Read bcm2712-rpi-5-b.dtb bytes       50 hnd 0x0
+ 18.14 Read /overlays/bcm2712d0.dtbo bytes       53 hnd 0x0
+ 18.33 MESS:00:00:18.331117:0: Loaded overlay 'bcm2712d0'
+ 18.50 Read kernel.img bytes       62 hnd 0x0
+NOTICE:  BL31: v2.6(release):v2.6-241-g36761b276
+
+ 26.96 MESS:00:00:26.964387:0: Starting OS 26964 ms
+Example echo payload
+BUILD id=0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c
+READY
+STATS seq=1

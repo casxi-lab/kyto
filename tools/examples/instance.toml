@@ -1,0 +1,64 @@
+# An example instance configuration of a bench whose devices are all
+# simulated, for trying the example run plan without a bench. Its values are
+# documentation values, and its salt is published, so no bench may use it.
+# The simulated console replays the files of [local.console] in turn, one
+# for each power-on, and answers nothing that it is sent.
+format = "kyto-bench instance"
+format_version = 1
+board = "raspberry-pi-5"
+
+[tftp]
+server_address = "192.0.2.10"
+path_prefix = ""
+
+[confirmation]
+quantity = "supply_voltage"
+on_at_least_micro = 4750000
+off_at_most_micro = 500000
+consecutive = 1
+poll_ms = 100
+on_timeout_ms = 3000
+off_timeout_ms = 3000
+
+[console]
+ready_timeout_ms = 2000
+
+[identity]
+format = "kyto-bench board identity"
+format_version = 1
+board = "raspberry-pi-5"
+revision_code = { value = "d04171", read = "firmware_log" }
+pcb_version = { value = "4", read = "visual" }
+soc_stepping = { value = "D0", read = "firmware_log_presence" }
+memory.vendor = { value = "unknown", read = "visual" }
+memory.part = { value = "unknown", read = "visual" }
+ethernet_phy = { value = "unknown", read = "visual" }
+spi_flash.jedec_id = { value = "ef4015", read = "firmware_log" }
+spi_flash.part = { value = "unknown", read = "visual" }
+eeprom_version = { value = "2026/09/25", read = "firmware_version" }
+manufacturing_version = { value = "unknown", read = "firmware_log" }
+min_boot_version = { value = "unknown", read = "software" }
+boot_files = { value = ["bcm2712-rpi-5-b.dtb", "overlays/bcm2712d0.dtbo"], read = "tftp_reads" }
+
+[devices]
+power = { kind = "simulated", model = "simulated" }
+power_confirmation = { kind = "simulated", model = "simulated" }
+console = { kind = "simulated", model = "simulated" }
+delivery = { kind = "simulated", model = "simulated" }
+
+[[devices.connections]]
+from = "console"
+to = "board debug UART"
+
+[local]
+salt = "d5bedecc5ee387d76097a2fa96272358"
+
+# Paths relative to this file: three cold boots of the first entry of the
+# example run plan, then one of the second.
+[local.console]
+replay = [
+  "captures/firmware-only.bin",
+  "captures/firmware-only.bin",
+  "captures/firmware-only.bin",
+  "captures/echo.bin",
+]

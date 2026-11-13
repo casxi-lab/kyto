@@ -6,22 +6,60 @@ This page describes the documents of the kyto bench tool in
 [identity records](#identity-records),
 [instance configurations](#instance-configurations) and
 [run plans](#run-plans); those it writes, [receipts](#receipts), the records
-of runs, and their [public versions](#public-versions); and the
-[rules common to them](#common-rules). The library of the tool,
+of runs, and their [public versions](#public-versions); the
+[rules common to them](#common-rules); and how the verdicts of a receipt are
+[derived again from it](#re-deriving-verdicts). The library of the tool,
 `kyto-bench-core`, reads and checks the first four, checks payloads, reads
-what a cold boot shows, renders receipts and reads them back strictly, and
-makes and checks public versions. The tests of the tool read the
-Raspberry Pi 5 description, the identity record template, the example run
-plan and example documents, and run from the repository root with:
+what a cold boot shows, judges cold boots, entries and runs, renders
+receipts and reads them back strictly, re-derives their verdicts, and makes
+and checks public versions.
+
+The command of the tool, `kyto-bench`, has one subcommand, `run`. It reads a
+run plan and an instance configuration, checks the payload of every entry,
+runs the plan on the bench that the configuration describes, and writes the
+receipt of the run, `receipt.json`, and its public version,
+`receipt.public.json`, into a new directory. The tool has devices of one
+kind so far, [`simulated`](#local-settings), so it runs plans on simulated
+devices only. From the repository root, this command runs the example run
+plan on the simulated devices of the example instance configuration,
+[`tools/examples/instance.toml`](../../tools/examples/instance.toml), whose
+console replays the example console output in
+[`tools/examples/captures/`](../../tools/examples/captures):
+
+```sh
+cargo run --locked --release --manifest-path tools/Cargo.toml -- run \
+  --plan tools/examples/run-plan.toml \
+  --instance tools/examples/instance.toml \
+  --payload-root tools/examples/payload \
+  --out tools/target/example-run
+```
+
+It prints its result and the path of the receipt,
+`PASS: tools/target/example-run/receipt.json`. `--payload-root` is the
+directory that holds the `payload_dir` of every entry, and `--out` a
+directory that does not exist yet, which the command creates, so another
+run needs another one. The exit status gives the result:
+
+| Status | Result |
+| --- | --- |
+| 0 | The run is `"PASS"` |
+| 1 | The run is `"FAIL"` |
+| 2 | A usage or input error: the command line is not valid, the run plan or the instance configuration cannot be read, a document does not pass its checks, the bench cannot be opened or the output directory cannot be created; or the receipt cannot be written, and the error gives the result of the run. No receipt is left: a receipt that cannot be written whole is removed |
+| 3 | The run is `"BENCH FAULT"` |
+| 4 | The run was [refused](#refused-runs) before any power command; the receipt says why |
+| 5 | The receipt was written, but not its public version: the [leak check](#the-leak-check) refused it, and the error names the rule and the field of each value found, or it cannot be written, and the error says why. The receipt gives the verdict or the refusal |
+| 101 | The run stopped on an error of the tool itself, a panic. It switched the supply off once more and says on standard error whether readings confirmed it; no receipt is left, and the output directory is removed |
+
+A message or result that cannot be written, as when nothing reads standard
+output or standard error any more, changes no exit status.
+
+The tests of the tool read the Raspberry Pi 5 description, the identity
+record template and the examples under `tools/examples/`, run the example run
+plan through the command, and run from the repository root with:
 
 ```sh
 cargo test --locked --manifest-path tools/Cargo.toml
 ```
-
-The rules that decide the checks of a cold boot and the verdicts, the flow of
-a run, the re-derivation of verdicts from a receipt and the command line are
-not defined yet. The `kyto-bench` command has no subcommand, so no command
-reads a document, runs a plan or writes a receipt yet.
 
 ## Common rules
 
@@ -34,6 +72,20 @@ and writes version 1 of each format, the only version so far, and a document
 is checked against exactly the version it declares. Until a bench keeps the
 first record of a run made with a version of a format, that version may
 still change; from then on, any change to the format gives it a new version.
+
+A run reads the run plan and the instance configuration once, into memory,
+and each source file of a payload once for each entry whose payload lists
+it, and uses those bytes for everything. The SHA-256 that a receipt records
+for the run plan, the instance configuration and each source file of an
+entry's payload is that of the bytes read, and the same bytes are parsed as
+the document, or checked and staged as the entry's payload file, so a
+digest and what the run used cannot differ, even when the file changes
+during the run. Nothing is normalized in
+between: line endings, a byte order mark and a final newline count as they
+are written. A run plan or an instance configuration that is not UTF-8 is an
+input error. The board description is not read from a file: a run uses the
+description built into the tool whose `id` the run plan's `board` names, and
+records its text with the SHA-256 of that text.
 
 Documents are read strictly, at every level except inside the tables of
 [local settings](#local-settings), whose keys belong to device drivers. A key
@@ -54,12 +106,15 @@ These forms of values recur in every format:
 - **Payload names** name a file of a boot payload relative to the directory
   that the board reads it from, such as `overlays/bcm2712d0.dtbo`: segments
   separated by `/`, each made of ASCII letters, digits, `.`, `_` and `-` and
-  neither `.` nor `..`, with no empty segment and no leading `/`, at most 255
-  bytes. A TFTP directory on a case-insensitive file system serves two names
-  that differ only in ASCII case as one file, and no directory holds a file
-  and a directory of the same name, so the names in one list differ ignoring
-  ASCII case, and none is, ignoring ASCII case, a directory of another, as
-  `overlays` is of `overlays/a.dtbo`. A file name is a payload name of one
+  not ending with `.`, so neither `.` nor `..`, with no empty segment and no
+  leading `/`, at most 255 bytes. A TFTP directory on a case-insensitive file
+  system serves two names that differ only in ASCII case as one file, and no
+  directory holds a file and a directory of the same name, so the names in
+  one list differ ignoring ASCII case, and none is, ignoring ASCII case, a
+  directory of another, as `overlays` is of `overlays/a.dtbo`. Such file
+  systems, FAT among them, also drop a trailing `.` from a name, so that
+  `pieeprom.upd.` would be served as the write trigger `pieeprom.upd`; that is
+  why no segment ends with `.`. A file name is a payload name of one
   segment.
 - **SHA-256 digests** are 64 lowercase hexadecimal digits.
 - **Release dates** are written `YYYY/MM/DD`, as the Raspberry Pi 5
@@ -266,21 +321,25 @@ still.
 ### Write triggers and refused properties
 
 The writes that a payload can let the firmware make fall into three classes:
-`firmware`, `eeprom` and `storage`. The tool has no class, permit or command
-for any other kind of write, such as a write to one-time-programmable memory
+`firmware`, `eeprom` and `storage`. The tool has no class or command for
+any other kind of write, such as a write to one-time-programmable memory
 or secure-boot provisioning.
 
 `[[write_triggers]]` each give `class`, `files`, at least one file name, and
 `source`. A payload file is a trigger of the class when its file name, the
 last segment of its payload name, is one of `files` ignoring ASCII case. A
-delivery device of the tool checks every payload file against the write
-triggers before it writes anything: a trigger is staged only with a permit of
-its class, and only the write gate of a run plan entry that enables the class
-gives one; only the tool itself builds a write gate. Every class is off
-unless a [run plan](#run-plans) entry enables it in `[entries.writes]`; no
-command runs a plan yet, so nothing enables a write. An entry's enable is
-needed for a write, but it does not authorize one: whoever runs a plan that
-enables a write decides that outside the tool.
+delivery device of the tool writes only payload files that the write gate of
+a run plan entry has checked against the write triggers and the refused
+properties of the board description: a trigger is staged only through the
+gate of an entry that enables its class, and a file that sets a refused
+property is never staged; only the tool itself builds a write gate. Every
+class is off
+unless a [run plan](#run-plans) entry enables it in `[entries.writes]`, and
+a run refuses a payload with a trigger of a class that its entry does not
+enable before anything is staged or powered, under the rule
+`write.not_enabled` of the [payload checks](#payload-checks). An entry's
+enable is needed for a write, but it does not authorize one: whoever runs a
+plan that enables a write decides that outside the tool.
 
 `[refused_properties]` lists settings that no payload file may contain,
 whatever writes are enabled: `files`, a line pattern over payload names that
@@ -539,8 +598,11 @@ salt = "9c1f5e0a7b3d48e2a6c0f4b8d2e71a35"
 line of text, is the model of the device. `connections` lists the connections
 between devices and the board, each `{ from, to }` with two lines of text;
 the key is required, and the list can be empty. `[devices]` holds no address,
-relay channel or local path. The tool has no driver that a kind selects yet,
-so it checks only the form of `kind`.
+relay channel or local path. Reading a configuration checks only the form of
+`kind`. A run opens the device of each role with the driver of its kind, and
+a kind that the tool has no driver for is an input error. The tool has one
+kind so far, `simulated`, for every role, whose devices the
+[local settings](#local-settings) describe.
 
 The bench hardware revision is the SHA-256 of the canonical JSON of the
 `[devices]` table as written. The canonical JSON of a TOML value is UTF-8
@@ -574,9 +636,9 @@ device, model or connection changes it.
 tables `[local.power]`, `[local.power_confirmation]`, `[local.console]` and
 `[local.delivery]`, each optional, and nothing else. Addresses, relay
 channels, port paths, directories and credentials go there, never into
-`[devices]`. The keys of each table belong to the driver of the role's kind;
-the tool has no such driver yet and reads the tables only for the values to
-hide.
+`[devices]`. The keys of each table belong to the driver of the role's kind,
+which reads them when a run opens the bench; reading a configuration reads
+them only for the [values to hide](#values-to-hide).
 
 `salt` is required: 32 lowercase hexadecimal digits, 128 random bits that a
 bench generates once for its configuration, for example with:
@@ -586,13 +648,27 @@ openssl rand -hex 16
 ```
 
 A missing salt, or one of another length or form, is an error, and so is a
-salt that kyto publishes, such as the one of the example above, unless every
-device of the configuration is of the kind `simulated`. A
-[receipt](#receipts) records the SHA-256 of the whole configuration file,
-and its [public version](#public-versions) shows every digest. The other
-values of a configuration are few and could be guessed from a template and
-tried one by one against that digest; with 128 random bits in the file, they
-cannot. The salt itself never enters a receipt.
+salt that kyto publishes, such as those of the example above and of the
+example configuration under `tools/examples/`, unless every device of the
+configuration is of the kind `simulated`. A [receipt](#receipts) records the
+SHA-256 of the whole configuration file, and its
+[public version](#public-versions) shows every digest. The other values of a
+configuration are few and could be guessed from a template and tried one by
+one against that digest; with 128 random bits in the file, they cannot. The
+salt itself never enters a receipt.
+
+The devices of the kind `simulated` share a simulated clock, which is the
+bench clock of a run on them, so a run waits for nothing in real time and
+its times are the same in every run. The power device switches a simulated
+supply, which the confirmation device reads as 5100000 µV while it is on
+and 0 µV while it is off. The delivery device keeps the staged payloads in
+memory. The console replays recorded console output: `[local.console]` has
+one key, `replay`, a list of files given as paths relative to the instance
+configuration, and the n-th power-on of a run replays the n-th file, its
+k-th line k ms after the supply comes on; after the last file, the board
+writes nothing. The console answers nothing that it is sent, so the
+response of a step must already be in the file. The other roles take no
+settings, so their tables are absent or empty.
 
 ### Values to hide
 
@@ -630,19 +706,22 @@ booted and when a cold boot ends; the lines that must and must not appear;
 the bytes sent to the board and the lines that must answer them; the
 firmware versions, values and segments of the transcript; and the writes
 that the entry enables. Whoever writes a plan keeps it with the record it is
-for. A plan holds no value of a bench, such as an address, a path prefix or a
-relay channel, not even in a comment: a receipt records the plan's text as it
-is, and a [public version](#public-versions) never rewrites it. The leak
-check refuses the public version of a receipt whose plan holds a value to
-hide of at least 4 bytes, such as an address or a path prefix; a relay
-number shorter than that is not searched for, so nothing finds one in a
-plan, and it is for whoever writes the plan to keep it out. Payload files
-hold no value of a bench either: a public version shows the SHA-256 of every
-payload file, and that of a file made from a template with a value of the
-bench, such as a server address on a kernel command line, would let the
-value be found by trying candidates against it. Nothing checks the contents
-of payload files for such values. The library reads and checks plans and
-reads cold boots as their entries say; no command runs a plan yet.
+for. A plan holds no value of a bench, such as an address, a path prefix or
+a relay channel, not even in a comment: a receipt records the plan's text as
+it is, and a [public version](#public-versions) never rewrites it.
+`kyto-bench run` refuses a plan that holds a
+[value to hide](#values-to-hide) of the instance configuration, ignoring
+ASCII case, as an input error before it runs anything, and the leak check
+refuses the public version of a receipt whose plan holds a value to hide of
+at least 4 bytes, such as an address or a path prefix; a relay number
+shorter than that is not searched for, so nothing finds one in a plan, and
+it is for whoever writes the plan to keep it out. Payload files hold no
+value of a bench either: a public version shows the SHA-256 of every payload
+file, and that of a file made from a template with a value of the bench,
+such as a server address on a kernel command line, would let the value be
+found by trying candidates against it. Nothing checks the contents of
+payload files for such values. The library reads and checks plans and reads
+cold boots as their entries say, and `kyto-bench run` runs them.
 
 A plan is UTF-8 text; bytes that are not UTF-8 are not read as a plan. The
 library keeps the text that it reads a plan from without changing a byte:
@@ -658,9 +737,10 @@ stand-in files under `tools/examples/payload/`, from which no board boots,
 and the payload digests of the plan are theirs. The digest of the segment
 `banner` is that of the two lines `Example echo payload` and
 `BUILD id=0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c`, each ended by CR LF,
-which come between the start of the operating system and `READY` in the
-console output that the tests of the library build for this entry. Its
-second entry, with the digests shortened here:
+which come between the start of the operating system and `READY` in
+[`tools/examples/captures/echo.bin`](../../tools/examples/captures/echo.bin),
+the example console output of this entry. Its second entry, with the digests
+shortened here:
 
 ```toml
 [[entries]]
@@ -725,8 +805,8 @@ no example.
 The `reference` of a plan or an entry is text supplied by whoever wrote the
 plan, such as the record the plan is for. The tool does not interpret it and
 keeps it as written, and a receipt records it unchanged. It is at most 1024
-bytes and has no C0 control character (U+0000 to U+001F) and no DEL
-(U+007F).
+bytes and, like a line of text, has no control character: none of C0
+(U+0000 to U+001F), DEL (U+007F) or C1 (U+0080 to U+009F).
 
 ### Markers of an entry
 
@@ -748,12 +828,19 @@ hour, of the send. Steps run in order:
 - an armed step is sent once the chunk that holds its trigger line has been
   read;
 - its response is the first line that starts after the last byte received
-  before the send and matches `expect`; it must be complete within
-  `timeout_ms` of the send.
+  before the send and matches `expect`; it must be complete, ended by its
+  LF, within `timeout_ms` of the send.
 
-`end = { marker = "<marker>" }` ends a cold boot once the marker has appeared
-and every step has its response. `end = "timeout"` captures until the boot
-timeout.
+Only complete lines arm and answer steps and end a cold boot at its marker:
+the unterminated last line of a capture does none of these.
+
+`end = { marker = "<marker>" }` ends a cold boot once a complete line of the
+marker has appeared and every step has its response. `end = "timeout"`
+captures until the boot timeout. A run ends a cold boot at the boot timeout,
+or when the `timeout_ms` of the step that waits for its response has passed,
+once its bench clock reaches that time, whatever the console reports: a
+console that reports nothing by then does not keep the cold boot going, and
+one that reports a deadline earlier does not end it.
 
 ### Checks of a run plan
 
@@ -769,12 +856,28 @@ instance configuration:
 
 ### Payload checks
 
-These checks of an entry's payload come before the board is powered. A
-payload that fails one refuses the run, as [refused runs](#refused-runs)
-describe, under the name of the rule and with the entry and the first file
-found that fails it. The library makes each check on its own; the order in
-which a run makes them belongs to the flow of a run, which is not defined
-yet:
+These checks of an entry's payload come before the board is powered. They
+are made in a fixed order, and the first that fails refuses the run, as
+[refused runs](#refused-runs) describe, under the name of its rule and with
+its entry and file, so a run is refused under one rule only:
+
+1. for each entry, in the order of the plan, and for each file of its
+   payload, in increasing order of the bytes of the payload names (so
+   `B.txt` comes before `a.txt`): `payload.source_digest`,
+   `write.not_enabled` and `write.refused_property`; then, for the entry,
+   `payload.variant_missing`;
+2. once these pass for every entry, for each entry in the order of the plan,
+   its payload is staged and, for each file in the same order of names,
+   `payload.staged_digest`.
+
+The checks of the first step need no device: `kyto-bench run` makes them
+before it opens the bench, from the source files as it read them, and stages
+a payload, through the write gate of its entry, only once they have passed.
+A source file that cannot be read has no digest and fails
+`payload.source_digest`, and a file that cannot be staged or read back fails
+`payload.staged_digest`.
+
+The rules are:
 
 - `payload.source_digest`: the SHA-256 of every source file equals that of
   the payload;
@@ -788,7 +891,9 @@ yet:
 - `payload.variant_missing`: the payload has every file of the
   [variant](#variants) whose value the identity record gives for the
   variant's field, ignoring ASCII case, and every file of every variant of a
-  field whose value is unknown; names are compared ignoring ASCII case.
+  field whose value is unknown; names are compared ignoring ASCII case. The
+  file of a refusal is the first missing file of the first variant, in the
+  order of the board description, that misses one.
 
 Once the board is served the entry's payload, `payload.served_digest`
 compares the SHA-256 of every file of the copy that the board is served, read
@@ -801,7 +906,8 @@ The library reads the transcript of a cold boot in [lines](#lines), with the
 line patterns of the board description and of the entry. It reads a
 transcript the same way while it is received and when a record of it is read
 back, with each send placed after the bytes received before it; the
-unterminated last line of a capture is read when the capture ends. A line is
+unterminated last line of a capture is read when the capture ends, but not
+for [steps or the end](#steps-and-the-end-of-a-cold-boot). A line is
 named by its offset. From the lines, in order, it takes:
 
 - **Boot modes.** A line of the `[boot_mode]` form gives the mode that the
@@ -891,7 +997,7 @@ like this:
 | `nonce` | 128 random bits, as 32 lowercase hexadecimal digits |
 | `tool` | `commit`, the commit of the tool as 40 lowercase hexadecimal digits, or `null` when it is unknown; and `clean`, whether the tool's working tree had no changes, or `null` when it is unknown |
 | `evidence` | Whether the receipt is [eligible as evidence](#evidence) |
-| `bench` | `hardware_revision`, with `kind`, `"devices-sha256"`, and `value`, the [bench hardware revision](#devices); and `simulated`, whether the devices of the bench are simulated |
+| `bench` | `hardware_revision`, with `kind`, `"devices-sha256"`, and `value`, the [bench hardware revision](#devices); and `simulated`, whether any device of the bench is of the kind `simulated` |
 | `inputs` | The [inputs of judgement](#inputs-of-judgement) |
 | `reference` | The [reference](#references) of the run plan, or `null` when it has none |
 | `refusal` | `null`, or why the run was [refused](#refused-runs) |
@@ -911,8 +1017,8 @@ receipt, each once and in this order, with `detail` saying what was found:
 - `evidence.simulated`: `bench.simulated` is `true`.
 
 `eligible` is `true` exactly when `reasons` is empty: only a receipt of a run
-on real devices, made by a tool of a known commit without changes, is
-eligible as evidence.
+whose every device is real, made by a tool of a known commit without
+changes, is eligible as evidence.
 
 ### Inputs of judgement
 
@@ -966,7 +1072,7 @@ The record of an entry has these keys:
 | `index` | The position of the entry in the plan, from 0 |
 | `name`, `reference` | The `name` and `reference` of the plan's entry; `reference` is `null` when it has none |
 | `payload` | `pin`, the `payload_pin` of the entry, or `null`; `generation`, the generation that holds its staged payload, or `null`; and `files` |
-| `events` | The events of the entry outside its cold boots, such as the switch to its generation |
+| `events` | The events of the entry outside its cold boots: the switch to its generation and the failures of devices then, and, when a fault ended the run before readings confirmed the last power off, the power off that the run sent once more and its readings |
 | `checks` | The [checks](#checks) of the entry |
 | `cold_boots` | The record of each cold boot that was run, at most the `cold_boots` of the plan's entry |
 | `verdict` | `"PASS"`, `"FAIL"`, `"BENCH FAULT"` or `"NOT RUN"`; only an entry is ever `"NOT RUN"`, and an entry that was not run has no cold boot |
@@ -1137,35 +1243,117 @@ this, shown with less indentation:
 ### Checks
 
 `checks` list the rules evaluated on each subject, passing ones included, in
-the order in which they are evaluated, each as
+the order that this section gives, each as
 `{ rule, subject, result, detail }`. `result` is `"pass"`, `"fail"` or
 `"fault"`, and `detail`, which says what was found, is present exactly when
-the result is not `"pass"`.
+the result is not `"pass"`. A detail names lines by their offsets and copies
+no value of the console output or of the bench. A fault is a fault of the
+bench; a failure is one of the board or its payload.
 
-The checks of an entry are those of `payload.served_digest`: one for each
-file of its payload, in the order of the payload, with the payload name as
-`subject`. The result is `"fault"` when the copy that the board is served has
-another SHA-256 than the payload gives, or was not read, as in
-`the served copy of config.txt was not read`. The rules of the checks of a
-cold boot, their subjects and their order come with the rules that decide
-verdicts, which are not defined yet.
+The checks of an entry are, in this order:
+
+- for the first entry, when `start.events` is not empty,
+  `power.off_unconfirmed` on the subject `start`: a fault unless readings
+  [confirm](#the-supply) the power off that `start.events` end with;
+- `device.error` for each `device_error` event, first of `start.events` for
+  the first entry, then of the entry's own events, each in the order of the
+  events: a fault on the subject of the device's role, with the device's
+  detail;
+- once a `switch` event shows that the board is served the entry's
+  generation, `payload.served_digest` for each file of its payload, in the
+  order of the payload, with the payload name as `subject`: a fault when the
+  copy that the board is served has another SHA-256 than the payload gives,
+  or was not read, as in `the served copy of config.txt was not read`.
+
+The checks of a cold boot are, in this order, each rule once unless the
+table says otherwise:
+
+| Rule | Subject | Result | It does not pass when |
+| --- | --- | --- | --- |
+| `console.not_ready` | `console` | fault | the cold boot has no `console_ready` event |
+| `power.on_unconfirmed` | `on` | fault | the cold boot has no power on, or readings do not [confirm](#the-supply) it |
+| `power.off_interval` | `on` | fault | only for a cold boot with a power on: the supply was not confirmed off before the cold boot, or an event of a step that follows `wait_off_interval` in the board's `cold_boot.order`, the console ready or the power on, came less than `off_interval_ms` after that confirmation |
+| `power.off_unconfirmed` | `off` | fault | the last power command of the cold boot is not a power off that readings confirm |
+| `power.order` | `events` | fault | an event is [out of order](#the-supply) |
+| `console.before_power_on` | `console` | fault | a chunk of the console output was received before the power on, or the cold boot has console output but no power on: output while the supply was confirmed off contradicts that confirmation |
+| `device.error` | the role of the device | fault | one check for each `device_error` event, which it reports |
+| `boot.network` | `board.` and the board's `network_marker` | fail | no boot mode line is of the board's network mode |
+| `boot.fallback` | the same | fail | the last boot mode line is of another mode |
+| `boot.end` | the marker of `end`, or `timeout` | fail | with an end marker, no complete line of it, ended by its LF, appeared by the boot timeout, `boot_timeout_ms` after the power on; with `end = "timeout"`, the cold boot ended before the boot timeout |
+| `console.byte_limit` | `console` | fail | the cold boot ended at the capture limit, its `end` reason `byte_limit` or `chunk_limit` |
+| `marker.count` | the marker | fail | for each `expect`, in order: the marker appeared another number of times |
+| `marker.order` | the markers of the `order`, separated by spaces | fail | for each `order`: one of the markers did not appear, or the first line of one does not start after the first line of the one before |
+| `marker.forbidden` | the index of the item in `forbid`, from `0` | fail | for each `forbid`: a line strictly between the first lines of `from` and `to` matches `line`; an end left out, or a `to` that did not appear, is the start or the end of the capture, and a `from` that did not appear leaves no line between |
+| `marker.before_first_send` | the marker | fail | for each of `before_first_send`: a byte was sent and the first line of the marker, its line ending included, did not end before the first byte sent |
+| `step.response` | the index of the step, from `0` | fail | for each step: it was not armed or not sent, or no response was complete within its `timeout_ms` of its send |
+| `step.declared_none` | `sends` | fail | instead of `step.response`, for an entry with `sends = false`: a byte was sent |
+| `firmware.version` | the name of the firmware version line | fail | for each `[entries.firmware.<name>]`, in the order of the names: no line of it appeared, or a line of it does not give one of the expected values |
+| `segment.digest` | the name of the segment | fail | for each segment: its two lines did not both appear, or the bytes between them have another SHA-256 |
+| `tftp.server` | `servers` | fail | a line names another TFTP server than the instance's |
+| `tftp.prefix` | `reads` | fail | the path of a file read in full is outside the path prefix |
+| `tftp.unplanned_file` | `reads` | fail | a file read in full inside the path prefix is not a file of the entry's payload, compared ignoring ASCII case |
+| `identity.disagree` | `identity` | fail | the lines of an identity field or part give different values |
+
+### The supply
+
+The readings that follow a power command, up to the next power command,
+confirm it when `consecutive` of them in a row are of the `quantity` of the
+confirmation parameters, each at or above `on_at_least_micro` for a power on
+or at or below `off_at_most_micro` for a power off, and all taken at or
+after the time of the command and within `on_timeout_ms` or `off_timeout_ms`
+of it. A reading of another quantity, or on the other side of the threshold,
+starts the count again.
+The supply was last confirmed off at the time of the reading that confirms
+the last power command of the events before, when that command is a power
+off; for the first cold boot of a run, those are `start.events`, and for any
+other, the events of the cold boot before it, in the same entry or the one
+before.
+
+The events of a cold boot are in order when neither their times nor the
+bytes received before them ever decrease, and when they keep these phases,
+in this order: the console ready; the power on and the readings after it;
+the sends; the end; the power off and the readings after it; the console
+closed. A device error can come in any phase.
+
+### Verdicts
+
+- A cold boot is `"BENCH FAULT"` when one of its checks is a fault, else
+  `"FAIL"` when one failed, else `"PASS"`.
+- An entry with no event, no check and no cold boot is `"NOT RUN"`. Any
+  other entry is `"BENCH FAULT"` when one of its checks is a fault or one of
+  its cold boots is `"BENCH FAULT"`, else `"FAIL"` when one of its cold boots
+  is `"FAIL"`, else `"PASS"` when it ran every cold boot of its plan entry;
+  an entry that stopped short of them without a failure or a fault is
+  `"BENCH FAULT"`.
+- A run is `"BENCH FAULT"` when one of its entries is `"BENCH FAULT"` or
+  `"NOT RUN"`, which only a fault leaves; else `"FAIL"` when one is
+  `"FAIL"`; else `"PASS"`. A refused run has no verdict.
+
+A cold boot that does not pass is the last of its entry: an entry fails at
+its first failed cold boot, and the next entry follows. A fault ends the
+run, and every entry after the one that holds it is `"NOT RUN"`. When
+readings did not confirm the last power off before the fault ended the run,
+the run switches the supply off once more and records that command, its
+readings and any failure of a device in the `events` of the entry that holds
+the fault, and its error output says whether readings confirmed that power
+off.
 
 ### Refused runs
 
 A run whose payload the [payload checks](#payload-checks) refuse is refused
 before any power command, and its receipt shows it:
 
-- `refusal` is `{ rule, entry, detail }`: the rule, the index of the entry
-  that it concerns, and what was found, as in
-  `the staged copy of config.txt was not read`;
+- `refusal` is `{ rule, entry, subject, detail }`: the rule, the index of
+  the entry that it concerns, the payload name of the file that it found,
+  and what was found, as in `the staged copy of config.txt was not read`;
 - `verdict` is `null`, since a refused run is not judged;
 - `start.events` is empty, and every entry is `"NOT RUN"`, with no event, no
   check and no cold boot.
 
 The rules that refuse a run are `payload.source_digest`,
 `payload.staged_digest`, `write.not_enabled`, `write.refused_property` and
-`payload.variant_missing`, and each names its entry. Every receipt has
-exactly one of `refusal` and `verdict`.
+`payload.variant_missing`, and each names its entry and its file. Every
+receipt has exactly one of `refusal` and `verdict`.
 
 ### Reading a receipt
 
@@ -1205,9 +1393,10 @@ The library reads a receipt strictly:
    - each check has `detail` exactly when it did not pass.
 
 Reading a receipt does not check the rule names of checks and refusals
-against the lists above, the order and times of events, or whether the
-observations, checks and verdicts follow from the record: re-deriving
-verdicts from a receipt is not defined yet.
+against the lists above, so that the rules can be refined without a new
+version of the format, nor the order and times of events, nor whether the
+observations, checks and verdicts follow from the record:
+[re-deriving verdicts](#re-deriving-verdicts) does.
 
 ## Public versions
 
@@ -1449,3 +1638,92 @@ The digests of payload files, in the run plan, the pinned sets and the
 records of entries and boot files, are shown in full and have no secret
 either. They reveal nothing as long as payload files hold no value of the
 bench, as [run plans](#run-plans) require.
+
+## Re-deriving verdicts
+
+A receipt holds every input of the checks and verdicts of its run: the run
+plan and the board description as read, the instance parameters, the
+digests of every payload file, every event and the console output of every
+cold boot. The library function `kyto_bench_core::rejudge::rejudge` takes a
+receipt that has been [read](#reading-a-receipt) and makes its judgement
+again from these alone, without a payload, an instance configuration, a
+device or a clock:
+
+1. It reads the recorded run plan and board description again.
+2. It makes [`evidence`](#evidence) again from `tool` and `bench.simulated`.
+3. It makes the [payload checks](#payload-checks) again, in their order,
+   from the recorded digests: the source digests from `source_sha256`, the
+   write triggers from the payload names and the entry's `writes`, the
+   variants from the recorded identity record, and the staged digests from
+   `staged_sha256`. Whether a file sets a refused property shows only in
+   its bytes, which a receipt does not hold, so a refusal under
+   `write.refused_property` is taken as the receipt records it, at its
+   place in the order: a check that comes before it and fails gives its own
+   refusal instead. The first check that fails gives the refusal, and a
+   refused run has no verdict.
+4. For a run that was not refused, for each entry in order, it makes the
+   [checks of the entry](#checks); for each of its cold boots,
+   [what the cold boot shows](#how-a-cold-boot-is-read), from its console
+   output and the `send` events among its events, its checks, with the time
+   at which [the supply](#the-supply) was last confirmed off before it, and
+   its verdict; then the [verdicts](#verdicts) of the entry and of the run.
+
+It fails, naming the place in the receipt, when a recorded text cannot be
+read, when an index does not describe its bytes, when a cold boot follows
+one of its entry that did not pass, and when an entry that is not
+`"NOT RUN"` follows one that is `"BENCH FAULT"`. Otherwise it gives the
+receipt with its evidence, refusal, observations, checks and verdicts made
+again and everything else as recorded. `kyto-bench run` makes the checks and
+verdicts of a receipt with the same functions, so a receipt that the tool
+wrote is given back unchanged; one that is not was not made by the rules of
+this version from what it records. In Rust, with the library as a
+dependency:
+
+```rust
+use kyto_bench_core::receipt::Receipt;
+use kyto_bench_core::rejudge::rejudge;
+
+fn rederives_to_itself(path: &str) -> Result<bool, Box<dyn std::error::Error>> {
+    let receipt = Receipt::parse(&std::fs::read(path)?)?;
+    Ok(rejudge(&receipt)? == receipt)
+}
+```
+
+For example, take the cold boot of the receipt in
+[entries and cold boots](#entries-and-cold-boots), with its plan entry: the
+marker `ready`, `end = { marker = "ready" }`, `boot_timeout_ms = 60000`, the
+step `{ after = "ready", send = "?\r", expect = '^STATS seq=1', timeout_ms = 1000 }`
+and the payload `config.txt`, `bcm2712-rpi-5-b.dtb` and
+`overlays/bcm2712d0.dtbo`, the files that the D0 stepping of the board of
+the [example configuration](#instance-configurations) needs. The run powered
+the board off at 0 s and read 0 µV at 0.1 s, and the board is served the
+generation that holds the payload, whose copies all have the digests of the
+plan. Re-deriving gives:
+
+- no refusal: every source and staged digest is that of the plan, no file is
+  a write trigger, and the payload has the files of the variant;
+- the checks of the entry: `power.off_unconfirmed` on `start` passes, since
+  0 µV is at most 500000 µV and one reading in a row confirms the off within
+  3000 ms, and `payload.served_digest` passes for each of the three files;
+- the observations of the cold boot as its record shows them, and these
+  checks, each passing: `console.not_ready`, since the console was ready at
+  5.1 s; `power.on_unconfirmed`, since 5100000 µV at 5.2 s confirms the power
+  on at 5.1 s; `power.off_interval`, since the console was ready and the
+  supply switched on 5000 ms after the off was confirmed at 0.1 s;
+  `power.off_unconfirmed`, since 0 µV at 7.8 s confirms the power off at
+  7.7 s; `power.order`, since the console ready, the power on, the reading,
+  the send, the end, the power off, the reading and the console closed come
+  in this order, at times and after byte counts that never decrease;
+  `console.before_power_on`, since the first chunk came at 6.1 s, after the
+  power on at 5.1 s;
+  `boot.network` and `boot.fallback` on `board.network_boot`, since line 0
+  is the only boot mode line and is of the network mode; `boot.end` on
+  `ready`, whose line 41 came at 7.6 s, within 60000 ms of the power on;
+  `console.byte_limit`, since the cold boot ended at its end condition;
+  `step.response` on `0`, since line 41 armed the step, event 3 sent it at
+  7.6 s and the response, line 48, was complete at 7.7 s, within 1000 ms;
+  and `tftp.server`, `tftp.prefix`, `tftp.unplanned_file` and
+  `identity.disagree`, since no line names a server, reads a file or gives
+  an identity value;
+- the verdicts: the cold boot is `"PASS"`, the entry, which ran its one cold
+  boot, `"PASS"`, and the run `"PASS"`.

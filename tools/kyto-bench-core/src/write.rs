@@ -50,6 +50,12 @@ impl WriteEnables {
             WriteClass::Storage => self.storage,
         }
     }
+
+    /// The classes that are enabled, in the order of [`WriteClass::ALL`].
+    pub fn classes(&self) -> Vec<WriteClass> {
+        let all = WriteClass::ALL.into_iter();
+        all.filter(|class| self.enabled(*class)).collect()
+    }
 }
 
 /// Payload files whose presence lets the firmware write `class`. A payload
@@ -290,12 +296,7 @@ mod tests {
     fn every_class_is_off_unless_enabled() {
         let none = enables(&[]).unwrap();
         assert_eq!(none, WriteEnables::default());
-        let classes = |enables: &WriteEnables| -> Vec<WriteClass> {
-            WriteClass::ALL
-                .into_iter()
-                .filter(|class| enables.enabled(*class))
-                .collect()
-        };
+        let classes = WriteEnables::classes;
         assert!(classes(&none).is_empty());
         let eeprom = enables(&[("eeprom", true)]).unwrap();
         assert_eq!(classes(&eeprom), [WriteClass::Eeprom]);

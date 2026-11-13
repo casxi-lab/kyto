@@ -225,8 +225,9 @@ impl<'a> Matcher<'a> {
             && steps.iter().all(|step| step.response_line.is_some())
     }
 
-    /// Ends the transcript, reads its unterminated last line, if any, and
-    /// returns what the cold boot showed.
+    /// Ends the transcript, reads its unterminated last line, if any, which
+    /// neither arms nor answers a step, and returns what the cold boot
+    /// showed.
     pub fn finish(mut self) -> Observations {
         if let Some(line) = std::mem::take(&mut self.splitter).finish() {
             self.line(&line, line.offset + line.content.len() as u64);
@@ -359,7 +360,10 @@ impl<'a> Matcher<'a> {
                 );
             }
         }
-        self.step(line);
+        // A complete line only, as while the capture is received.
+        if line.terminated {
+            self.step(line);
+        }
     }
 
     /// Takes a line as the response of the step that waits for one, then as
@@ -1125,8 +1129,9 @@ mod tests {
         );
     }
 
-    /// The board's behaviour is data: the code that reads transcripts and
-    /// checks payloads names nothing of the Raspberry Pi 5.
+    /// The board's behaviour is data: the code that reads transcripts,
+    /// checks payloads, judges cold boots and re-derives receipts names
+    /// nothing of the Raspberry Pi 5.
     #[test]
     fn observation_and_payload_code_name_no_board() {
         let literals = [
@@ -1141,6 +1146,9 @@ mod tests {
         for (file, text) in [
             ("observe.rs", include_str!("observe.rs")),
             ("payload.rs", include_str!("payload.rs")),
+            ("power.rs", include_str!("power.rs")),
+            ("verdict.rs", include_str!("verdict.rs")),
+            ("rejudge.rs", include_str!("rejudge.rs")),
         ] {
             let code = &text[..text.find("#[cfg(test)]").unwrap_or(text.len())];
             for literal in literals {

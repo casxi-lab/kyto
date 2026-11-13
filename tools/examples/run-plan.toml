@@ -35,8 +35,8 @@ version = "v2.6(release):v2.6-241-g36761b276"
 
 # One cold boot of another kernel that answers a request once it is ready.
 # The segment covers the lines between the start of the operating system and
-# READY; its digest is that of the two lines that the library's tests put
-# there. The named value is the payload's build id.
+# READY; its digest is that of the two lines there in the example console
+# output of this entry, echo.bin. The named value is the payload's build id.
 [[entries]]
 name = "echo"
 payload_dir = "echo"

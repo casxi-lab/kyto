@@ -3,9 +3,9 @@
 use std::collections::BTreeMap;
 
 use kyto_bench_core::names::{self, GenerationName, PayloadName};
-use kyto_bench_core::write::WriteTrigger;
 
 use crate::device::{Delivery, DeviceError, Role};
+use crate::gate::Checked;
 
 use super::console::Files;
 use super::world::SimWorld;
@@ -15,7 +15,6 @@ use super::world::SimWorld;
 /// touches an existing one, and the board is served through the pointer.
 pub struct SimTftp {
     world: SimWorld,
-    triggers: Vec<WriteTrigger>,
 }
 
 /// Faults of the TFTP directory.
@@ -46,13 +45,10 @@ impl TftpState {
 }
 
 impl SimTftp {
-    /// The TFTP directory of `world`, for a board whose write triggers are
-    /// `triggers`.
-    pub fn new(world: &SimWorld, triggers: Vec<WriteTrigger>) -> Self {
-        Self {
-            world: world.clone(),
-            triggers,
-        }
+    /// The TFTP directory of `world`.
+    pub fn new(world: &SimWorld) -> Self {
+        let world = world.clone();
+        Self { world }
     }
 }
 
@@ -69,14 +65,8 @@ fn corrupt(bytes: &mut Vec<u8>) {
 }
 
 impl Delivery for SimTftp {
-    fn write_triggers(&self) -> &[WriteTrigger] {
-        &self.triggers
-    }
-
-    fn write_generation(
-        &mut self,
-        files: &[(PayloadName, Vec<u8>)],
-    ) -> Result<GenerationName, DeviceError> {
+    fn write_generation(&mut self, files: Checked<'_>) -> Result<GenerationName, DeviceError> {
+        let files = files.files();
         let mut world = self.world.borrow_mut();
         if world.knobs.tftp.stage_fails {
             return Err(delivery_error(
@@ -176,42 +166,46 @@ mod tests {
         GenerationName::new(number).unwrap()
     }
 
-    /// The TFTP directory of a world, for the Raspberry Pi 5.
-    fn pi5_tftp() -> (SimWorld, SimTftp) {
-        let board = Board::parse(board::RASPBERRY_PI_5).unwrap();
-        let triggers = board
-            .write_triggers
-            .iter()
-            .map(|trigger| trigger.trigger.clone())
-            .collect();
+    /// The TFTP directory of a world.
+    fn sim_tftp() -> (SimWorld, SimTftp) {
         let world = SimWorld::new();
-        let tftp = SimTftp::new(&world, triggers);
+        let tftp = SimTftp::new(&world);
         (world, tftp)
     }
 
-    fn eeprom_gate() -> WriteGate {
-        WriteGate::new(&WriteEnables {
-            eeprom: true,
-            ..WriteEnables::default()
-        })
+    /// Stages `files` through the gate of an entry on the Raspberry Pi 5
+    /// that enables `enables`.
+    fn stage_with(
+        enables: &WriteEnables,
+        tftp: &mut SimTftp,
+        files: &[(PayloadName, Vec<u8>)],
+    ) -> Result<GenerationName, StageError> {
+        let board = Board::parse(board::RASPBERRY_PI_5).unwrap();
+        WriteGate::new(enables, &board).stage(tftp, files)
+    }
+
+    /// Stages `files` through the gate of an entry on the Raspberry Pi 5
+    /// that enables no write.
+    fn stage(
+        tftp: &mut SimTftp,
+        files: &[(PayloadName, Vec<u8>)],
+    ) -> Result<GenerationName, StageError> {
+        stage_with(&WriteEnables::default(), tftp, files)
     }
 
     #[test]
     fn stage_refuses_a_trigger_file_without_a_permit() {
-        let (world, mut tftp) = pi5_tftp();
+        let (world, mut tftp) = sim_tftp();
         let payload = files(&[("config.txt", b"x"), ("PIEEPROM.UPD", b"image")]);
-        let firmware = WriteGate::new(&WriteEnables {
+        // No write enabled, and every class but the one of the trigger file.
+        let other_classes = WriteEnables {
             firmware: true,
             storage: true,
             ..WriteEnables::default()
-        });
-        let other_classes = [
-            firmware.permit(WriteClass::Firmware).unwrap(),
-            firmware.permit(WriteClass::Storage).unwrap(),
-        ];
-        for permits in [&[][..], &other_classes[..]] {
+        };
+        for enables in [WriteEnables::default(), other_classes] {
             assert_eq!(
-                tftp.stage(&payload, permits),
+                stage_with(&enables, &mut tftp, &payload),
                 Err(StageError::Refused(WriteRefused::Unpermitted(vec![
                     Unpermitted {
                         file: name("PIEEPROM.UPD"),
@@ -227,34 +221,20 @@ mod tests {
             tftp.read_staged(&generation(1), &name("config.txt"))
                 .is_err()
         );
-        let staged = tftp.stage(&payload[..1], &[]).unwrap();
-        assert_eq!(staged, generation(1));
-    }
-
-    #[test]
-    fn stage_accepts_a_trigger_file_with_a_permit_of_its_class() {
-        let (_, mut tftp) = pi5_tftp();
-        let payload = files(&[("config.txt", b"x"), ("pieeprom.upd", b"image")]);
-        let gate = eeprom_gate();
-        let permits = [gate.permit(WriteClass::Eeprom).unwrap()];
-        let staged = tftp.stage(&payload, &permits).unwrap();
-        assert_eq!(
-            tftp.read_staged(&staged, &name("pieeprom.upd")),
-            Ok(b"image".to_vec())
-        );
+        assert_eq!(stage(&mut tftp, &payload[..1]), Ok(generation(1)));
     }
 
     #[test]
     fn sim_tftp_stages_a_whole_new_generation_and_never_overwrites() {
-        let (_, mut tftp) = pi5_tftp();
+        let (_, mut tftp) = sim_tftp();
         let first = files(&[("config.txt", b"one"), ("overlays/a.dtbo", b"")]);
         let second = files(&[("config.txt", b"two")]);
-        assert_eq!(tftp.stage(&first, &[]), Ok(generation(1)));
+        assert_eq!(stage(&mut tftp, &first), Ok(generation(1)));
         assert_eq!(tftp.switch_to(&generation(1)), Ok(None));
         // The same payload again, and another one, each get a new name;
         // the served generation and its files stay as they were.
-        assert_eq!(tftp.stage(&first, &[]), Ok(generation(2)));
-        assert_eq!(tftp.stage(&second, &[]), Ok(generation(3)));
+        assert_eq!(stage(&mut tftp, &first), Ok(generation(2)));
+        assert_eq!(stage(&mut tftp, &second), Ok(generation(3)));
         for (file, bytes) in &first {
             assert_eq!(tftp.read_staged(&generation(1), file), Ok(bytes.clone()));
             assert_eq!(tftp.read_staged(&generation(2), file), Ok(bytes.clone()));
@@ -275,21 +255,21 @@ mod tests {
         let same = files(&[("config.txt", b"a"), ("CONFIG.TXT", b"b")]);
         let directory = files(&[("Overlays", b"a"), ("overlays/a.dtbo", b"b")]);
         for clash in [same, directory] {
-            let error = tftp.stage(&clash, &[]).unwrap_err();
+            let error = stage(&mut tftp, &clash).unwrap_err();
             assert!(
                 matches!(&error, StageError::Device(error) if error.role == Role::Delivery),
                 "{error}"
             );
         }
-        assert_eq!(tftp.stage(&second, &[]), Ok(generation(4)));
+        assert_eq!(stage(&mut tftp, &second), Ok(generation(4)));
     }
 
     #[test]
     fn read_served_reads_through_the_current_pointer() {
-        let (_, mut tftp) = pi5_tftp();
+        let (_, mut tftp) = sim_tftp();
         assert!(tftp.read_served(&name("config.txt")).is_err());
-        tftp.stage(&files(&[("config.txt", b"one")]), &[]).unwrap();
-        tftp.stage(&files(&[("config.txt", b"two")]), &[]).unwrap();
+        stage(&mut tftp, &files(&[("config.txt", b"one")])).unwrap();
+        stage(&mut tftp, &files(&[("config.txt", b"two")])).unwrap();
         // Staging serves nothing.
         assert!(tftp.read_served(&name("config.txt")).is_err());
         assert_eq!(tftp.switch_to(&generation(2)), Ok(None));
@@ -303,11 +283,11 @@ mod tests {
 
     #[test]
     fn tftp_knobs_fail_or_change_their_step() {
-        let (world, mut tftp) = pi5_tftp();
+        let (world, mut tftp) = sim_tftp();
         let payload = files(&[("config.txt", b"one"), ("empty", b"")]);
         world.knobs().tftp.stage_fails = true;
         assert!(matches!(
-            tftp.stage(&payload, &[]),
+            stage(&mut tftp, &payload),
             Err(StageError::Device(_))
         ));
         assert!(world.borrow().tftp.generations.is_empty());
@@ -315,7 +295,7 @@ mod tests {
             corrupts_staged: true,
             ..TftpKnobs::default()
         };
-        let staged = tftp.stage(&payload, &[]).unwrap();
+        let staged = stage(&mut tftp, &payload).unwrap();
         assert_eq!(
             tftp.read_staged(&staged, &name("config.txt")),
             Ok(b"nne".to_vec())
@@ -331,7 +311,7 @@ mod tests {
             corrupts_served: true,
             ..TftpKnobs::default()
         };
-        let clean = tftp.stage(&payload, &[]).unwrap();
+        let clean = stage(&mut tftp, &payload).unwrap();
         assert_eq!(
             tftp.read_staged(&clean, &name("config.txt")),
             Ok(b"one".to_vec())

@@ -725,8 +725,8 @@ no example.
 The `reference` of a plan or an entry is text supplied by whoever wrote the
 plan, such as the record the plan is for. The tool does not interpret it and
 keeps it as written, and a receipt records it unchanged. It is at most 1024
-bytes and has no C0 control character (U+0000 to U+001F) and no DEL
-(U+007F).
+bytes and, like a line of text, has no control character: none of C0
+(U+0000 to U+001F), DEL (U+007F) or C1 (U+0080 to U+009F).
 
 ### Markers of an entry
 

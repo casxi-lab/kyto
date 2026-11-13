@@ -216,10 +216,10 @@ fn default_capture_bytes() -> u64 {
     DEFAULT_CAPTURE_BYTES
 }
 
-/// Whether `text` can be a reference: at most 1024 bytes, without C0 control
-/// characters or DEL.
+/// Whether `text` can be a reference: at most 1024 bytes, without control
+/// characters, as lines of text have none.
 fn is_reference(text: &str) -> bool {
-    text.len() <= MAX_REFERENCE && !text.bytes().any(|byte| byte < 0x20 || byte == 0x7f)
+    text.len() <= MAX_REFERENCE && !text.chars().any(char::is_control)
 }
 
 const REFERENCE: &str = "a reference is at most 1024 bytes without control characters";
@@ -804,6 +804,8 @@ mod tests {
             "a\\nb".into(),
             "a\\u007fb".into(),
             "a\\u0000b".into(),
+            "a\\u0080b".into(),
+            "a\\u009fb".into(),
         ] {
             assert_eq!(invalid_at(&reference(&value), &[]), "reference");
         }
@@ -997,9 +999,16 @@ mod tests {
     }
 
     #[test]
-    fn a_reference_has_no_control_character_below_space() {
-        let text = edited("reference = \"example\"", "reference = \"a\\u001fb\"");
-        assert_eq!(invalid_at(&text, &[]), "reference");
+    fn a_reference_has_no_control_character() {
+        for control in ["\\u001f", "\\u0085"] {
+            let text = edited(
+                "reference = \"example\"",
+                &format!("reference = \"a{control}b\""),
+            );
+            assert_eq!(invalid_at(&text, &[]), "reference");
+        }
+        let text = edited("reference = \"example\"", "reference = \"a\\u00a0b\"");
+        assert!(RunPlan::parse(&text).is_ok());
     }
 
     #[test]

@@ -302,6 +302,21 @@ mod tests {
     }
 
     #[test]
+    fn a_reading_at_a_threshold_or_at_the_deadline_confirms_its_command() {
+        let mut conf = confirmation(1);
+        conf.off_timeout_ms = 2_000;
+        let volts = Quantity::SupplyVoltage;
+        let mut on = Confirming::new(&conf, Command::On, 1_000 * MS);
+        assert!(on.read(&conf, volts, conf.on_at_least_micro, 4_000 * MS));
+        // Each state has the timeout of its own.
+        let mut late = Confirming::new(&conf, Command::Off, 1_000 * MS);
+        assert_eq!(late.deadline(), 3_000 * MS);
+        let (micro, mut last) = (conf.off_at_most_micro, late);
+        assert!(!late.read(&conf, volts, micro, 3_000 * MS + 1));
+        assert!(last.read(&conf, volts, micro, 3_000 * MS));
+    }
+
+    #[test]
     fn a_command_is_confirmed_by_the_readings_before_the_next_command() {
         let conf = confirmation(1);
         let events = [
@@ -416,6 +431,15 @@ mod tests {
         events[0].at_ns = 0;
         let found = cold_boot_checks(&board, &confirmation(1), &events, Some(100 * MS));
         assert_eq!(result(&found, "power.off_interval", "on"), Outcome::Pass);
+        // With the console opened right after a wait that comes first, it
+        // counts as well.
+        let text = RASPBERRY_PI_5.replace(
+            order,
+            "order = [\"wait_off_interval\", \"open_console\", \"publish\", \"power_on\"]",
+        );
+        let board = Board::parse(&text).unwrap();
+        let found = cold_boot_checks(&board, &confirmation(1), &events, Some(100 * MS));
+        assert_eq!(result(&found, "power.off_interval", "on"), Outcome::Fault);
         assert_eq!(
             result(&checks(&events, Some(100 * MS)), "power.off_interval", "on"),
             Outcome::Fault

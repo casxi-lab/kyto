@@ -61,7 +61,11 @@ mod tests {
         for clean in [Some(false), None] {
             let changed = eligibility(&tool(commit.clone(), clean), false);
             assert_eq!(rules(&changed), ["evidence.tree_changed"]);
+            assert!(!changed.eligible);
         }
+        let unknown = eligibility(&tool(None, Some(true)), false);
+        assert!(!unknown.eligible);
+        assert_eq!(rules(&unknown), ["evidence.commit_unknown"]);
         let every = eligibility(&tool(None, None), true);
         assert!(!every.eligible);
         assert_eq!(rules(&every), EVIDENCE_RULES);

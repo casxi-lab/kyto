@@ -140,6 +140,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn each_result_has_the_exit_status_of_its_own() {
+        assert_eq!([PASS, FAIL, INPUT_ERROR], [0, 1, 2]);
+        assert_eq!([BENCH_FAULT, REFUSED, PUBLIC_REFUSED], [3, 4, 5]);
+    }
+
+    #[test]
     fn the_command_line_has_the_run_command_only() {
         command().debug_assert();
         let command = command();

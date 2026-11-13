@@ -331,12 +331,14 @@ mod tests {
             (refusal.rule.as_str(), refusal.subject.as_str()),
             ("payload.source_digest", "bcm2712-rpi-5-b.dtb")
         );
-        // Of another entry or a file not in the payload, it is not taken.
+        // Of another entry or a file not in the payload, it is not taken:
+        // the copies that were not staged refuse the run instead.
+        let staged = |receipt: &Receipt| rejudge(receipt).unwrap().refusal.unwrap().rule;
         let mut elsewhere = refused(worked(), Some(property("cmdline.txt")));
-        assert_ne!(rejudge(&elsewhere).unwrap().refusal, elsewhere.refusal);
+        assert_eq!(staged(&elsewhere), "payload.staged_digest");
         elsewhere.refusal.as_mut().unwrap().subject = "config.txt".into();
         elsewhere.refusal.as_mut().unwrap().entry = Some(1);
-        assert_ne!(rejudge(&elsewhere).unwrap().refusal, elsewhere.refusal);
+        assert_eq!(staged(&elsewhere), "payload.staged_digest");
     }
 
     /// `cold_boot` with every time later by `by` nanoseconds.
@@ -428,5 +430,21 @@ mod tests {
         receipt.entries[0].cold_boots.pop();
         let again = rejudge(&receipt).unwrap();
         assert_eq!(again.entries[0].verdict, Verdict::BenchFault);
+        // A second cold boot after one that failed: its end marker came
+        // after the boot timeout.
+        let mut receipt = worked_with(|plan| {
+            let plan = plan.replace("cold_boots = 1", "cold_boots = 2");
+            plan.replace("boot_timeout_ms = 60000", "boot_timeout_ms = 2000")
+        });
+        let mut second = later(receipt.entries[0].cold_boots[0].clone(), 10_000_000_000);
+        second.index = 1;
+        receipt.entries[0].cold_boots.push(second);
+        assert_eq!(
+            rejudge(&receipt),
+            Err(invalid(at, "a cold boot follows one that did not pass"))
+        );
+        receipt.entries[0].cold_boots.pop();
+        let again = rejudge(&receipt).unwrap();
+        assert_eq!(again.entries[0].verdict, Verdict::Fail);
     }
 }

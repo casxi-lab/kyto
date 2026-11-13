@@ -772,6 +772,9 @@ fn the_switch_happens_only_while_off_is_confirmed() {
         before = entry.cold_boots.iter().flat_map(|c| &c.events).collect();
         let first_on = position(&entry.cold_boots[0].events, power(Command::On)).unwrap();
         assert!(entry.events[switch].at_ns <= entry.cold_boots[0].events[first_on].at_ns);
+        // The payload is published once, for the first cold boot.
+        let switched = |e: &&Event| matches!(e.event, EventKind::Switch { .. });
+        assert_eq!(entry.events.iter().filter(switched).count(), 1);
     }
 }
 
@@ -862,6 +865,30 @@ fn residual_voltage_above_the_off_threshold_is_not_off() {
     assert_eq!(power::off_confirmed_at(confirmation, &first.events), None);
     let sent: Vec<PowerState> = env.world.power_commands().iter().map(|c| c.1).collect();
     assert_eq!(sent, [PowerState::Off; 2], "nothing is switched on");
+}
+
+#[test]
+fn an_unconfirmed_power_on_ends_at_its_timeout_and_is_switched_off() {
+    // Relay contacts that never close: a reading every 100 ms up to the 3 s
+    // timeout of the example configuration, then the power off of the cold
+    // boot, which readings confirm, so the entry sends no second one.
+    let env = TestEnv::example();
+    env.world.knobs().relay.stuck = true;
+    let receipt = run_example("on-timeout", &env).receipt();
+    let first = &receipt.entries[0];
+    let events = &first.cold_boots[0].events;
+    let on = position(events, power(Command::On)).unwrap();
+    let off = position(events, power(Command::Off)).expect("the cold boot powers off");
+    let sent = events[on].at_ns;
+    let reading = |event: &&Event| matches!(event.event, EventKind::Reading { .. });
+    let readings = events[on..off].iter().filter(reading);
+    let after: Vec<u64> = readings.map(|e| e.at_ns - sent).collect();
+    let polls: Vec<u64> = (1..=30).map(|poll| poll * 100 * MS).collect();
+    assert_eq!(after, polls);
+    assert_eq!(events[off].at_ns, sent + 3_000 * MS);
+    let confirmation = &receipt.inputs.instance.parameters.confirmation;
+    assert!(power::off_confirmed_at(confirmation, events).is_some());
+    assert!(first.events.iter().all(|e| power::command(e).is_none()));
 }
 
 #[test]
@@ -961,6 +988,26 @@ fn an_output_file_that_cannot_be_written_has_a_status_of_its_own() {
         if receipt {
             assert_eq!(ran.receipt().verdict, Some(Verdict::Pass));
         }
+    }
+}
+
+#[test]
+fn an_output_file_that_is_already_there_is_kept_as_it_was() {
+    let dir = scratch("output-new");
+    let receipt = run_example_in(&dir, &TestEnv::example()).receipt();
+    let instance = Instance::parse(&String::from_utf8(example("instance.toml")).unwrap()).unwrap();
+    let hidden = instance.deidentify_values();
+    for file in [output::PUBLIC, output::RECEIPT] {
+        let out = dir.join(file);
+        output::create(&out).unwrap();
+        fs::write(out.join(file), b"kept").unwrap();
+        // A receipt that is there fails the write; a public version that is
+        // there is one that was not written.
+        match output::write(&out, &receipt, &hidden) {
+            Ok(why) => assert_eq!((file, why.len()), (output::PUBLIC, 1)),
+            Err(_) => assert_eq!(file, output::RECEIPT),
+        }
+        assert_eq!(fs::read(out.join(file)).unwrap(), b"kept", "{file}");
     }
 }
 

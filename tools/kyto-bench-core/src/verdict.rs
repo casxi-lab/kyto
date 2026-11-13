@@ -794,6 +794,7 @@ firmware.bootloader = {{ hash = "1accd665", date = "2026/09/25" }}
         assert_eq!(entry(&record(pass(), &[V::Pass; 3]), 3), V::Pass);
         // An entry passes only when every planned cold boot ran and passed.
         assert_eq!(entry(&record(pass(), &[V::Pass; 2]), 3), V::BenchFault);
+        assert_eq!(entry(&record(pass(), &[V::Pass; 4]), 3), V::BenchFault);
         assert_eq!(entry(&record(pass(), &[V::Pass, V::Fail]), 3), V::Fail);
         assert_eq!(entry(&record(pass(), &[V::BenchFault]), 3), V::BenchFault);
         assert_eq!(entry(&record(vec![check(O::Fault)], &[]), 3), V::BenchFault);

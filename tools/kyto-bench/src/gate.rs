@@ -2,9 +2,18 @@
 //! firmware, EEPROM contents or storage media are staged only with a permit
 //! of their class, and only the gate of a run plan entry that enables the
 //! class gives one; a file that sets a refused property is never staged.
-//! Only this crate builds a gate, so no code outside it can make a permit,
-//! and a permit borrows the gate that gave it, so it cannot outlive that
-//! gate. A delivery device writes only [`Checked`] files, which only
+//! Only this crate builds a gate, so no code outside it can make a permit:
+//!
+//! ```compile_fail
+//! use kyto_bench_core::board::{Board, RASPBERRY_PI_5};
+//! use kyto_bench_core::write::WriteEnables;
+//!
+//! let board = Board::parse(RASPBERRY_PI_5).unwrap();
+//! let gate = kyto_bench::gate::WriteGate::new(&WriteEnables::default(), &board);
+//! ```
+//!
+//! A permit borrows the gate that gave it, so it cannot outlive that gate.
+//! A delivery device writes only [`Checked`] files, which only
 //! [`WriteGate::stage`] makes, from the write triggers and refused
 //! properties of the gate's board description, so no caller chooses what
 //! the files are checked against, and no other code can make them:

@@ -882,7 +882,7 @@ like this:
 | --- | --- |
 | `format`, `format_version` | `"kyto-bench receipt"`, `1` |
 | `nonce` | 128 random bits, as 32 lowercase hexadecimal digits |
-| `tool` | `commit`, the commit of the tool as 40 lowercase hexadecimal digits, or `null` when it is unknown; and `clean`, whether the tool's working tree had no changes |
+| `tool` | `commit`, the commit of the tool as 40 lowercase hexadecimal digits, or `null` when it is unknown; and `clean`, whether the tool's working tree had no changes, or `null` when it is unknown |
 | `evidence` | Whether the receipt is [eligible as evidence](#evidence) |
 | `bench` | `hardware_revision`, with `kind`, `"devices-sha256"`, and `value`, the [bench hardware revision](#devices); and `simulated`, whether the devices of the bench are simulated |
 | `inputs` | The [inputs of judgement](#inputs-of-judgement) |
@@ -899,7 +899,8 @@ like this:
 receipt, each once and in this order, with `detail` saying what was found:
 
 - `evidence.commit_unknown`: `tool.commit` is `null`;
-- `evidence.tree_changed`: `tool.clean` is `false`;
+- `evidence.tree_changed`: `tool.clean` is not `true`, since the tree had
+  changes or whether it had is unknown;
 - `evidence.simulated`: `bench.simulated` is `true`.
 
 `eligible` is `true` exactly when `reasons` is empty: only a receipt of a run

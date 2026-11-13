@@ -119,13 +119,13 @@ pub struct Receipt {
     pub verdict: Option<Verdict>,
 }
 
-/// The tool's commit, `None` when unknown, and whether its working tree was
-/// clean.
+/// The tool's commit and whether its working tree was clean, each `None`
+/// when unknown.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Tool {
     pub commit: Option<String>,
-    pub clean: bool,
+    pub clean: Option<bool>,
 }
 
 /// Whether the receipt can be evidence, and the reasons it cannot.
@@ -538,7 +538,11 @@ impl Receipt {
             .map_err(fails("/inputs/instance/parameters"))?;
         let pins = &parameters.pins;
         plan.check(&read, pins).map_err(fails(plan_at))?;
-        let applies = [tool.commit.is_none(), !tool.clean, self.bench.simulated];
+        let applies = [
+            tool.commit.is_none(),
+            tool.clean != Some(true),
+            self.bench.simulated,
+        ];
         let due = EVIDENCE_RULES
             .iter()
             .zip(applies)
@@ -846,7 +850,7 @@ steps = [{ after = "ready", send = "?\r", expect = '^STATS seq=1', timeout_ms = 
             nonce: "f0e1d2c3b4a5968778695a4b3c2d1e0f".into(),
             tool: Tool {
                 commit: Some("0123456789abcdef0123456789abcdef01234567".into()),
-                clean: true,
+                clean: Some(true),
             },
             evidence: Evidence {
                 eligible: false,
@@ -1150,7 +1154,7 @@ steps = [{ after = "ready", send = "?\r", expect = '^STATS seq=1', timeout_ms = 
         assert_eq!(invalid_at(&receipt), "/evidence/reasons");
         // An unknown commit and a changed tree are reasons, in order.
         let mut receipt = example();
-        (receipt.tool.commit, receipt.tool.clean) = (None, false);
+        (receipt.tool.commit, receipt.tool.clean) = (None, Some(false));
         assert_eq!(invalid_at(&receipt), "/evidence/reasons");
         let reason = |rule: &str| Reason {
             rule: rule.into(),
@@ -1181,6 +1185,21 @@ steps = [{ after = "ready", send = "?\r", expect = '^STATS seq=1', timeout_ms = 
             Receipt::parse(receipt.render().as_bytes()),
             Ok(receipt.clone())
         );
+        // A clean flag that the build could not tell is not a clean tree.
+        let mut unknown = receipt.clone();
+        unknown.tool.clean = None;
+        assert_eq!(invalid_at(&unknown), "/evidence/reasons");
+        unknown.evidence = Evidence {
+            eligible: false,
+            reasons: vec![reason("evidence.tree_changed")],
+        };
+        assert_eq!(
+            Receipt::parse(unknown.render().as_bytes()),
+            Ok(unknown.clone())
+        );
+        assert!(unknown.render().contains("\"clean\": null\n"));
+        unknown.evidence.reasons.clear();
+        assert_eq!(invalid_at(&unknown), "/evidence/eligible");
         receipt.tool.commit = Some("0123456789ABCDEF0123456789abcdef01234567".into());
         assert_eq!(invalid_at(&receipt), "/tool/commit");
         let mut receipt = example();

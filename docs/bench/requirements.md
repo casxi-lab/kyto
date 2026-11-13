@@ -78,9 +78,12 @@ did not pass, or an entry that is not `NOT RUN` follows one that is
 **Evidence.** Runs on simulated devices in which the second of three cold
 boots of the first entry fails and the second entry runs and passes, and in
 which a power on or a power command is not confirmed or fails and the
-second entry is `NOT RUN`; tests in which re-deriving refuses receipts that
-go on after a failure or a fault. The failures and faults come from
-simulated devices and the example console output.
+second entry is `NOT RUN`; runs of a plan of three entries in which the
+second cold boot of the first entry fails, after which the other two
+entries run, or its power on is not confirmed, after which both are
+`NOT RUN`; and tests in which re-deriving refuses receipts that go on after
+a failure or a fault. The failures and faults come from simulated devices
+and the example console output.
 
 ### VERD-R05
 
@@ -90,7 +93,12 @@ boot mode line of the cold boot is of the board's network mode, and
 as a line of the SD card mode after the network one.
 
 **Evidence.** A unit test on console lines built in code: the network boot
-mode line left out, and a line of the SD card mode after it.
+mode line left out, and a line of the SD card mode after it; and runs on
+simulated devices that replay two console recordings of a Raspberry Pi 5:
+a cold boot cut before its network boot mode line, in an entry that ends at
+its boot timeout, which fails `boot.network` alone, and a boot that falls
+back to the SD card after its TFTP requests go unanswered, which fails
+`boot.fallback` alone.
 
 ### VERD-R06
 
@@ -113,8 +121,12 @@ line of it appeared or a line of it does not give every value that the
 entry expects. The expected values come from the run plan alone.
 
 **Evidence.** A unit test in which the bootloader line gives another hash
-or is missing, and runs on simulated devices in which the bootloader and
-BL31 lines give the expected values.
+or is missing; a unit test in which the run plan expects another hash or
+date of the bootloader or another BL31 version, or the console output gives
+another BL31 version, no BL31 line, no bootloader line or a second
+bootloader line of another release, each of which fails that version alone;
+and runs on simulated devices in which the bootloader and BL31 lines give
+the expected values.
 
 ### VERD-R08
 
@@ -127,9 +139,10 @@ when a byte was sent before the first line of the marker, its line ending
 included, had ended.
 
 **Evidence.** Unit tests on console lines built in code: a marker that
-appears twice, markers swapped or missing, forbidden lines anywhere and
-between bounds, and a send one byte too early; and runs on simulated devices
-whose check lists, failing ones included, are fixed.
+appears twice, never, or fewer times than the minimum of its entry, markers
+swapped or missing, forbidden lines anywhere and between bounds, and a send
+one byte too early; and runs on simulated devices whose check lists,
+failing ones included, are fixed.
 
 ### VERD-R09
 
@@ -207,8 +220,11 @@ entry, the file and what was found.
 that was not read, with the details they give; a run on simulated devices
 whose plan gives another digest for a payload file, refused under
 `payload.source_digest` with its entry, file and detail before the bench is
-opened, so that nothing is staged and no power command is sent; and a test
-that re-deriving gives the same refusal from the recorded digests.
+opened, so that nothing is staged and no power command is sent; a run on
+simulated devices whose staged copy differs while its source files keep
+their digests, which is refused under `payload.staged_digest` only after
+the copy was staged; and a test that re-deriving gives the same refusal
+from the recorded digests.
 
 ### PROV-R02
 
@@ -301,8 +317,11 @@ list exactly the reasons that apply.
 
 **Evidence.** A unit test of each reason alone and of all three, a test in
 which reading refuses evidence that leaves a reason out or calls the
-receipt eligible, and runs of the built binary on simulated devices, whose
-receipts are not eligible.
+receipt eligible, runs on simulated devices whose tool revision has an
+unknown commit, a working tree with changes or of unknown state, or both,
+whose receipts list each reason that applies and whose receipts and public
+versions are not eligible, and runs of the built binary on simulated
+devices, whose receipts are not eligible.
 
 ### PROV-R08
 
@@ -352,10 +371,11 @@ begin once `off_interval_ms` has passed since that confirmation.
 
 **Evidence.** Runs on simulated devices: the commands and readings of a
 passing run, the off interval and the switch of every entry, a cold boot
-that fails at its boot timeout and one whose power on is not confirmed,
-each switched off and confirmed off, and a supply that is never confirmed
-off, after which no cold boot starts; and a test of the off interval
-across entries in a re-derived receipt.
+that fails at its boot timeout, one that fails because the network boot
+marker of the board is missing while its end marker comes, and one whose
+power on is not confirmed, each switched off and confirmed off, and a
+supply that is never confirmed off, after which no cold boot starts; and a
+test of the off interval across entries in a re-derived receipt.
 
 ### POWER-R03
 
@@ -371,7 +391,10 @@ such a cold boot do not make it `FAIL`.
 **Evidence.** Unit tests of each fault and of a cold boot whose console
 output came while the supply was off, which is `BENCH FAULT` while its end
 marker passes; and runs on simulated devices whose power on is not
-confirmed or whose power device fails.
+confirmed, which is `BENCH FAULT` with the exit status 3 and no verdict
+`FAIL` although checks of the board fail, whose power off after a passing
+cold boot is not confirmed, which is `BENCH FAULT` with the exit status 3
+and leaves the next entry `NOT RUN`, or whose power device fails.
 
 ### POWER-R04
 

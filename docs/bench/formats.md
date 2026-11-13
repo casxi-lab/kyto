@@ -403,7 +403,10 @@ each value. In short:
   its hash, date and time (`bootloader`), the same for BOOTSYS (`bootsys`),
   the manufacturing version of the bootloader image that is read, which is
   not that of the board (`bootloader_image_mfg`, the `MFG_VER` line), and the
-  BL31 version and build lines (`bl31`, `bl31_built`).
+  BL31 version and build lines (`bl31`, `bl31_built`). In the boot of a
+  Raspberry Pi 5 recorded for the tests, which falls back to its SD card,
+  the BL31 lines follow the `os_start` line, so an entry that expects `bl31`
+  and ends at `os_start` can end before them.
 - **Identity.** The ways of reading the ten fields are listed under
   [the ten fields](#the-ten-fields).
 - **Variants.** A board of the stepping C1 needs `bcm2712-rpi-5-b.dtb`; one

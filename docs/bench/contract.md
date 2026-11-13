@@ -231,8 +231,8 @@ it.
 | [VERD-R04](requirements.md#verd-r04) | `rejudging_a_written_receipt_gives_the_recorded_verdicts` | `tools/kyto-bench/tests/run.rs` | negative |
 | [VERD-R04](requirements.md#verd-r04) | `a_fault_that_leaves_the_supply_unconfirmed_switches_it_off_again` | `tools/kyto-bench/tests/run.rs` | negative |
 | [VERD-R04](requirements.md#verd-r04) | `nothing_runs_after_a_bench_fault_and_no_cold_boot_after_a_failure` | `tools/kyto-bench-core/src/rejudge.rs` | negative |
-| [VERD-R04](requirements.md#verd-r04) | `a_failed_cold_boot_ends_its_entry_and_the_next_entry_runs` | `tools/kyto-bench/tests/run.rs` | negative |
-| [VERD-R04](requirements.md#verd-r04) | `a_bench_fault_ends_the_run_and_the_rest_is_not_run` | `tools/kyto-bench/tests/run.rs` | negative |
+| [VERD-R04](requirements.md#verd-r04) | `a_failed_cold_boot_ends_its_entry_and_the_next_entry_runs` | `tools/kyto-bench/tests/run.rs` | positive |
+| [VERD-R04](requirements.md#verd-r04) | `a_bench_fault_ends_the_run_and_the_rest_is_not_run` | `tools/kyto-bench/tests/run.rs` | positive |
 | [VERD-R05](requirements.md#verd-r05) | `a_boot_that_is_not_from_the_network_fails` | `tools/kyto-bench-core/src/verdict.rs` | negative |
 | [VERD-R05](requirements.md#verd-r05) | `a_recorded_boot_without_the_network_marker_fails` | `tools/kyto-bench/tests/run.rs` | negative |
 | [VERD-R05](requirements.md#verd-r05) | `a_recorded_fall_back_to_the_sd_card_fails` | `tools/kyto-bench/tests/run.rs` | negative |
@@ -267,6 +267,7 @@ it.
 | [PROV-R01](requirements.md#prov-r01) | `source_and_staged_digests_must_equal_the_plan` | `tools/kyto-bench-core/src/payload.rs` | negative |
 | [PROV-R01](requirements.md#prov-r01) | `a_source_file_of_another_digest_refuses_the_run_before_the_bench_opens` | `tools/kyto-bench/tests/run.rs` | negative |
 | [PROV-R01](requirements.md#prov-r01) | `a_refusal_is_rederived_from_the_recorded_digests_in_order` | `tools/kyto-bench-core/src/rejudge.rs` | negative |
+| [PROV-R01](requirements.md#prov-r01) | `staging_is_checked_before_any_power_command` | `tools/kyto-bench/tests/run.rs` | positive |
 | [PROV-R02](requirements.md#prov-r02) | `source_and_staged_digests_must_equal_the_plan` | `tools/kyto-bench-core/src/payload.rs` | negative |
 | [PROV-R02](requirements.md#prov-r02) | `staging_is_checked_before_any_power_command` | `tools/kyto-bench/tests/run.rs` | negative |
 | [PROV-R03](requirements.md#prov-r03) | `served_digests_give_one_check_per_file` | `tools/kyto-bench-core/src/payload.rs` | negative |

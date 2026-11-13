@@ -1,0 +1,110 @@
+# A board that exists only for tests. Its console lines, the order of its
+# cold boot and its off interval differ from those of the Raspberry Pi 5, so
+# tests that read it show that a board's behaviour comes from its
+# description. It cites no document, lists no write trigger and has one
+# variant field.
+format = "kyto-bench board description"
+format_version = 1
+id = "synthetic-board"
+name = "Synthetic test board"
+
+[console]
+baud = 9600
+data_bits = 8
+parity = "even"
+stop_bits = 2
+
+[cold_boot]
+order = ["wait_off_interval", "publish", "open_console", "power_on"]
+off_interval_ms = 2000
+
+[[markers]]
+name = "rom"
+line = '^syn rom v[0-9]+$'
+example = 'syn rom v3'
+
+[[markers]]
+name = "net"
+line = '^syn boot via net code=7$'
+example = 'syn boot via net code=7'
+
+[[markers]]
+name = "disk"
+line = '^syn boot via disk code=1$'
+example = 'syn boot via disk code=1'
+
+[[markers]]
+name = "handoff"
+line = '^syn handoff$'
+example = 'syn handoff'
+
+[boot_mode]
+line = '^syn boot via (?P<mode>[a-z]+) code=(?P<code>[0-9]+)$'
+example = ['syn boot via net code=7', 'syn boot via disk code=1']
+network = "net"
+network_marker = "net"
+
+[tftp]
+servers = [
+  { line = '^syn server (?P<server>[0-9.]+)$', example = 'syn server 192.0.2.80' },
+]
+read = { line = '^syn got (?P<path>[^ ]+) size (?P<bytes>[0-9]+)$', example = 'syn got bench/board-a.dtb size 1024' }
+read_failed = { line = '^syn miss (?P<path>[^ ]+)$', example = 'syn miss bench/absent.bin' }
+
+[[firmware_versions]]
+name = "rom"
+line = '^syn rom v(?P<version>[0-9]+)$'
+example = 'syn rom v3'
+
+[identity.revision_code]
+read = [{ from = "firmware_log", line = '^syn rev (?P<value>[0-9a-f]+)$', example = 'syn rev 0a1b' }]
+
+[identity.pcb_version]
+read = [{ from = "visual", how = "The number printed beside the board name" }]
+
+[identity.soc_stepping]
+read = [
+  { from = "firmware_log_presence", line = '^syn chip b$', value = "B", example = 'syn chip b' },
+  { from = "visual", how = "The letter at the end of the chip marking" },
+]
+
+[identity.memory]
+read = [{ from = "visual", how = "The marking on the memory package" }]
+
+[identity.ethernet_phy]
+read = [{ from = "visual", how = "The marking on the network chip" }]
+
+[identity.spi_flash]
+read = [
+  { from = "firmware_log", part = "jedec_id", line = '^syn flash id (?P<value>[0-9a-f]+)$', example = 'syn flash id 1f2e3d' },
+  { from = "visual", part = "part", how = "The marking on the flash package" },
+]
+
+[identity.eeprom_version]
+read = [{ from = "firmware_version", name = "rom", group = "version" }]
+
+[identity.manufacturing_version]
+read = [{ from = "software", how = "The number the board reports when asked" }]
+
+[identity.min_boot_version]
+read = [{ from = "software", how = "The number the board reports when asked" }]
+
+[identity.boot_files]
+read = [{ from = "tftp_reads", files = ["board-a.dtb", "board-b.dtb"] }]
+
+[[variants]]
+field = "soc_stepping"
+value = "A"
+payload = ["board-a.dtb"]
+
+[[variants]]
+field = "soc_stepping"
+value = "B"
+payload = ["board-b.dtb"]
+
+[min_bootloader]
+
+[[sensitive]]
+name = "serial"
+line = '^syn serial (?P<serial>[0-9a-f]{8})$'
+example = 'syn serial 00c0ffee'

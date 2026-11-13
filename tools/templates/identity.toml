@@ -1,0 +1,28 @@
+# The identity of one board under test, as a blank form. The record belongs
+# to the bench's instance configuration, where it is the [identity] table:
+# copy the lines below into that table. Each value gives the way it was read,
+# one of those that the board description lists for the field. Write
+# "unknown" for a value that cannot be read; never estimate one. The board's
+# serial number is not part of the record.
+format = "kyto-bench board identity"
+format_version = 1
+board = "raspberry-pi-5"
+
+revision_code         = { value = "unknown", read = "firmware_log" }
+# The PCB revision number as a string, such as "4".
+pcb_version           = { value = "unknown", read = "visual" }
+soc_stepping          = { value = "unknown", read = "visual" }
+memory.vendor         = { value = "unknown", read = "visual" }
+memory.part           = { value = "unknown", read = "visual" }
+ethernet_phy          = { value = "unknown", read = "visual" }
+spi_flash.jedec_id    = { value = "unknown", read = "firmware_log" }
+spi_flash.part        = { value = "unknown", read = "visual" }
+# The date of the bootloader release, written YYYY/MM/DD.
+eeprom_version        = { value = "unknown", read = "firmware_version" }
+# The board's manufacturing version, read in two ways: whole numbers of at
+# least 1, written without quotes, and equal when both are known.
+manufacturing_version = { value = "unknown", read = "firmware_log" }
+min_boot_version      = { value = "unknown", read = "software" }
+# The device tree files the board reads, as a list of payload names, such as
+# ["bcm2712-rpi-5-b.dtb"].
+boot_files            = { value = "unknown", read = "tftp_reads" }

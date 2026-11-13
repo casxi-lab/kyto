@@ -438,10 +438,10 @@ An instance configuration holds the settings of one bench: the board type,
 the parameters of the bench that the tool reads (`[tftp]`, `[confirmation]`,
 `[console]`), the identity record of the board in `[identity]`, payload
 digests that the bench pins in `[[pins]]`, the devices and their connections
-in `[devices]`, and this machine's settings of each device in `[local]`. A
-bench keeps its instance configuration outside this repository; kyto holds
-none. This example uses documentation values only, with an empty path
-prefix:
+in `[devices]`, and in `[local]` a random salt and this machine's settings of
+each device. A bench keeps its instance configuration outside this
+repository; kyto holds none. This example uses documentation values only,
+with an empty path prefix and a salt that no bench may use:
 
 ```toml
 format = "kyto-bench instance"
@@ -495,6 +495,9 @@ delivery = { kind = "simulated", model = "simulated" }
 [[devices.connections]]
 from = "console"
 to = "board debug UART"
+
+[local]
+salt = "9c1f5e0a7b3d48e2a6c0f4b8d2e71a35"
 ```
 
 | Key or table | Required | Content |
@@ -507,7 +510,7 @@ to = "board debug UART"
 | `[identity]` | yes | The [identity record](#identity-records) of the board on the bench; its `board` is the `board` of the configuration |
 | `[[pins]]` | no | Sets of payload digests that the bench pins, each with `name`, a name, and `files`, at least one `{ name, sha256 }` of a payload name and its SHA-256; the names of one set keep the rule for the names in one list of [payload names](#common-rules). A run plan entry takes its payload from a set by its name |
 | `[devices]` | yes | The [devices of the bench and their connections](#devices) |
-| `[local]` | no | This machine's [settings of each device](#local-settings) |
+| `[local]` | yes | The [salt and this machine's settings of each device](#local-settings) |
 
 ### Devices
 
@@ -554,13 +557,25 @@ device, model or connection changes it.
 
 ### Local settings
 
-`[local]` holds this machine's settings of each device in the tables
-`[local.power]`, `[local.power_confirmation]`, `[local.console]` and
+`[local]` holds `salt` and this machine's settings of each device in the
+tables `[local.power]`, `[local.power_confirmation]`, `[local.console]` and
 `[local.delivery]`, each optional, and nothing else. Addresses, relay
 channels, port paths, directories and credentials go there, never into
 `[devices]`. The keys of each table belong to the driver of the role's kind;
 the tool has no such driver yet and reads the tables only for the values to
 hide.
+
+`salt` is required: 32 lowercase hexadecimal digits, 128 random bits that a
+bench generates once for its configuration, for example with:
+
+```sh
+openssl rand -hex 16
+```
+
+A missing salt, or one of another length or form, is an error. The other
+values of a configuration are few and could be guessed from a template and
+tried one by one against a published SHA-256 of the file; with 128 random
+bits in the file, they cannot. The salt itself is never recorded.
 
 ### Values to hide
 
@@ -569,9 +584,10 @@ bench must not show, each with the name of its rule:
 
 - the TFTP server address, `instance.tftp.server_address`;
 - the path prefix when it is not empty, `instance.tftp.path_prefix`;
-- every string of at least 4 bytes in `[local]`, in arrays and nested tables
-  too, `instance.local.<role>.<key>`, with the keys of nested tables joined
-  by `.`.
+- the salt, `instance.local.salt`;
+- every string of at least 4 bytes in the tables of `[local]`, in arrays and
+  nested tables too, `instance.local.<role>.<key>`, with the keys of nested
+  tables joined by `.`.
 
 Shorter strings would be found in unrelated bytes, and numbers are not
 listed.

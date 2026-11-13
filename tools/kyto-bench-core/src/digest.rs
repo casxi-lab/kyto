@@ -30,11 +30,7 @@ impl Sha256 {
 
     /// Reads a written digest: exactly 64 lowercase hexadecimal digits.
     pub fn parse(text: &str) -> Result<Self, DigestError> {
-        let well_formed = text.len() == Self::LEN
-            && text
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
-        if well_formed {
+        if is_lower_hex(text, Self::LEN) {
             Ok(Self(text.to_string()))
         } else {
             Err(DigestError { len: text.len() })
@@ -50,6 +46,14 @@ impl Sha256 {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+}
+
+/// Whether `text` is `len` lowercase hexadecimal digits.
+pub(crate) fn is_lower_hex(text: &str, len: usize) -> bool {
+    text.len() == len
+        && text
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 impl fmt::Display for Sha256 {

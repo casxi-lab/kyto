@@ -10,7 +10,7 @@ use std::fmt;
 use serde::Deserialize;
 
 use crate::board::Board;
-use crate::digest::Sha256;
+use crate::digest::{Sha256, is_lower_hex};
 use crate::document::{Header, NOT_A_NAME, check, is_line_text, is_name};
 use crate::identity::{IdentityError, IdentityRecord};
 use crate::names::{self, PayloadName};
@@ -25,6 +25,9 @@ pub const FORMAT_VERSION: i64 = 1;
 /// The shortest instance value that is searched for in recorded data; a
 /// shorter value would match unrelated bytes.
 pub const MIN_SEARCHED_LEN: usize = 4;
+
+/// The number of hexadecimal digits of the salt in `[local]`: 128 bits.
+pub const SALT_DIGITS: usize = 32;
 
 const MAX_TIMEOUT_MS: u64 = 3_600_000;
 
@@ -142,7 +145,7 @@ pub struct Instance {
     board: String,
     parameters: Parameters,
     devices: Devices,
-    /// `[local]`, a table of each role's settings.
+    /// `[local]`: the salt and a table of each role's settings.
     local: toml::Table,
     hardware_revision: Sha256,
 }
@@ -238,10 +241,11 @@ impl Instance {
 
     /// The instance values that a public receipt must not show, with their
     /// rules: the TFTP server address (`instance.tftp.server_address`), the
-    /// path prefix unless empty (`instance.tftp.path_prefix`), and every
-    /// string of at least [`MIN_SEARCHED_LEN`] bytes in `[local]`, nested
-    /// ones too (`instance.local.<role>.<key>`, nested keys joined by `.`), in
-    /// the order of the roles and of the keys.
+    /// path prefix unless empty (`instance.tftp.path_prefix`), the salt
+    /// (`instance.local.salt`), and every string of at least
+    /// [`MIN_SEARCHED_LEN`] bytes in the tables of `[local]`, nested ones too
+    /// (`instance.local.<role>.<key>`, nested keys joined by `.`), in the
+    /// order of the roles and of the keys.
     pub fn deidentify_values(&self) -> Vec<InstanceValue> {
         let tftp = &self.parameters.tftp;
         let mut values = Vec::new();
@@ -251,6 +255,9 @@ impl Instance {
         ] {
             let value = toml::Value::from(value.as_str());
             collect(&format!("instance.tftp.{key}"), &value, &mut values);
+        }
+        if let Some(salt) = self.local.get("salt") {
+            collect("instance.local.salt", salt, &mut values);
         }
         for role in Role::ALL {
             for (key, value) in self.local(role).into_iter().flatten() {
@@ -326,7 +333,12 @@ impl RawInstance {
             names::check_distinct(pin.files.iter().map(|file| &file.name))
                 .map_err(|error| invalid(&at, error.to_string()))?;
         }
-        for (key, settings) in &self.local {
+        let salt = self.local.get("salt").and_then(toml::Value::as_str);
+        check! {
+            "local.salt" => salt.is_some_and(|salt| is_lower_hex(salt, SALT_DIGITS)),
+                "the salt is 32 lowercase hexadecimal digits, 128 random bits";
+        }
+        for (key, settings) in self.local.iter().filter(|(key, _)| *key != "salt") {
             if !Role::ALL.iter().any(|role| role.name() == key) || !settings.is_table() {
                 let message = format!("[local.{key}] is not the settings table of a role");
                 return Err(InstanceError::Syntax(message));
@@ -431,7 +443,6 @@ struct RawInstance {
     #[serde(default)]
     pins: Vec<Pin>,
     devices: toml::Value,
-    #[serde(default)]
     local: toml::Table,
 }
 
@@ -442,7 +453,7 @@ mod tests {
 
     /// An instance configuration of a bench with simulated devices, in
     /// documentation values: the TFTP server address 192.0.2.10, an empty
-    /// path prefix, and console captures named by relative paths.
+    /// path prefix, a salt, and console captures named by relative paths.
     const EXAMPLE: &str = r#"format = "kyto-bench instance"
 format_version = 1
 board = "raspberry-pi-5"
@@ -493,6 +504,9 @@ delivery = { kind = "simulated", model = "simulated" }
 [[devices.connections]]
 from = "console"
 to = "board debug UART"
+
+[local]
+salt = "0f1e2d3c4b5a69788796a5b4c3d2e1f0"
 
 [local.console]
 replay = ["captures/firmware-only.bin", "captures/echo.bin"]
@@ -660,6 +674,7 @@ B = { z = "", y = "q\"b\\c\n\t\u0001é/" }
             pairs,
             [
                 ("instance.tftp.server_address", "192.0.2.10"),
+                ("instance.local.salt", "0f1e2d3c4b5a69788796a5b4c3d2e1f0"),
                 (
                     "instance.local.console.replay",
                     "captures/firmware-only.bin"
@@ -682,6 +697,7 @@ B = { z = "", y = "q\"b\\c\n\t\u0001é/" }
             [
                 ("instance.tftp.server_address", "192.0.2.10"),
                 ("instance.tftp.path_prefix", "bench/"),
+                ("instance.local.salt", "0f1e2d3c4b5a69788796a5b4c3d2e1f0"),
                 ("instance.local.power.bus.name", "bus-a"),
                 ("instance.local.power.port", "/dev/example"),
                 (
@@ -811,6 +827,34 @@ B = { z = "", y = "q\"b\\c\n\t\u0001é/" }
         }
         let negative = edited("off_at_most_micro = 500000", "off_at_most_micro = -20000");
         assert!(Instance::parse(&negative).is_ok());
+    }
+
+    #[test]
+    fn an_instance_without_a_128_bit_salt_is_rejected() {
+        let salt = "salt = \"0f1e2d3c4b5a69788796a5b4c3d2e1f0\"";
+        let refused = [
+            edited(salt, ""),
+            edited(salt, "salt = \"0f1e2d3c4b5a69788796a5b4c3d2e1\""),
+            edited(salt, "salt = \"0f1e2d3c4b5a69788796a5b4c3d2e1f00\""),
+            edited(salt, "salt = \"0F1E2D3C4B5A69788796A5B4C3D2E1F0\""),
+            edited(salt, "salt = \"0f1e2d3c4b5a69788796a5b4c3d2e1fg\""),
+            edited(salt, "salt = 128"),
+            edited(
+                salt,
+                "salt = { value = \"0f1e2d3c4b5a69788796a5b4c3d2e1f0\" }",
+            ),
+        ];
+        for text in refused {
+            assert_eq!(at_of(&text), "local.salt", "{text}");
+        }
+        // [local] made only of the settings of the console, and no [local].
+        let start = EXAMPLE.find("[local]\n").unwrap();
+        let end = EXAMPLE.find("[local.console]\n").unwrap();
+        let without = format!("{}{}", &EXAMPLE[..start], &EXAMPLE[end..]);
+        assert_eq!(at_of(&without), "local.salt");
+        let no_local = &EXAMPLE[..start];
+        let error = Instance::parse(no_local).unwrap_err().to_string();
+        assert!(error.contains("missing field `local`"), "{error}");
     }
 
     #[test]

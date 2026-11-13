@@ -12,17 +12,50 @@ of runs, and their [public versions](#public-versions); the
 `kyto-bench-core`, reads and checks the first four, checks payloads, reads
 what a cold boot shows, judges cold boots, entries and runs, renders
 receipts and reads them back strictly, re-derives their verdicts, and makes
-and checks public versions. The tests of the tool read the
-Raspberry Pi 5 description, the identity record template, the example run
-plan and example documents, and run from the repository root with:
+and checks public versions.
+
+The command of the tool, `kyto-bench`, has one subcommand, `run`. It reads a
+run plan and an instance configuration, checks the payload of every entry,
+runs the plan on the bench that the configuration describes, and writes the
+receipt of the run, `receipt.json`, and its public version,
+`receipt.public.json`, into a new directory. The tool has devices of one
+kind so far, [`simulated`](#local-settings), so it runs plans on simulated
+devices only. From the repository root, this command runs the example run
+plan on the simulated devices of the example instance configuration,
+[`tools/examples/instance.toml`](../../tools/examples/instance.toml), whose
+console replays the example console output in
+[`tools/examples/captures/`](../../tools/examples/captures):
+
+```sh
+cargo run --locked --release --manifest-path tools/Cargo.toml -- run \
+  --plan tools/examples/run-plan.toml \
+  --instance tools/examples/instance.toml \
+  --payload-root tools/examples/payload \
+  --out tools/target/example-run
+```
+
+It prints its result and the path of the receipt,
+`PASS: tools/target/example-run/receipt.json`. `--payload-root` is the
+directory that holds the `payload_dir` of every entry, and `--out` a
+directory that does not exist yet, which the command creates, so another
+run needs another one. The exit status gives the result:
+
+| Status | Result |
+| --- | --- |
+| 0 | The run is `"PASS"` |
+| 1 | The run is `"FAIL"` |
+| 2 | A usage or input error: the command line is not valid, a file cannot be read, a document does not pass its checks, the bench cannot be opened or the output directory cannot be created, and no receipt is written; or a file of the output directory cannot be written |
+| 3 | The run is `"BENCH FAULT"` |
+| 4 | The run was [refused](#refused-runs) before any power command; the receipt says why |
+| 5 | The receipt was written, but the [leak check](#the-leak-check) refused its public version; the receipt gives the verdict or the refusal, and the error names the rule and the field of each value found |
+
+The tests of the tool read the Raspberry Pi 5 description, the identity
+record template and the examples under `tools/examples/`, run the example run
+plan through the command, and run from the repository root with:
 
 ```sh
 cargo test --locked --manifest-path tools/Cargo.toml
 ```
-
-The flow of a run and the command line are not defined yet. The
-`kyto-bench` command has no subcommand, so no command reads a document, runs
-a plan or writes a receipt yet.
 
 ## Common rules
 
@@ -35,6 +68,18 @@ and writes version 1 of each format, the only version so far, and a document
 is checked against exactly the version it declares. Until a bench keeps the
 first record of a run made with a version of a format, that version may
 still change; from then on, any change to the format gives it a new version.
+
+A run reads each file once, into memory, and uses those bytes for
+everything. The SHA-256 that a receipt records for the run plan, the
+instance configuration and each source file of a payload is that of the
+bytes read, and the same bytes are parsed as the document, or checked and
+staged as the payload file, so a digest and what the run used cannot
+differ, even when the file changes during the run. Nothing is normalized in
+between: line endings, a byte order mark and a final newline count as they
+are written. A run plan or an instance configuration that is not UTF-8 is an
+input error. The board description is not read from a file: a run uses the
+description built into the tool whose `id` the run plan's `board` names, and
+records its text with the SHA-256 of that text.
 
 Documents are read strictly, at every level except inside the tables of
 [local settings](#local-settings), whose keys belong to device drivers. A key
@@ -278,10 +323,12 @@ delivery device of the tool checks every payload file against the write
 triggers before it writes anything: a trigger is staged only with a permit of
 its class, and only the write gate of a run plan entry that enables the class
 gives one; only the tool itself builds a write gate. Every class is off
-unless a [run plan](#run-plans) entry enables it in `[entries.writes]`; no
-command runs a plan yet, so nothing enables a write. An entry's enable is
-needed for a write, but it does not authorize one: whoever runs a plan that
-enables a write decides that outside the tool.
+unless a [run plan](#run-plans) entry enables it in `[entries.writes]`, and
+a run refuses a payload with a trigger of a class that its entry does not
+enable before anything is staged or powered, under the rule
+`write.not_enabled` of the [payload checks](#payload-checks). An entry's
+enable is needed for a write, but it does not authorize one: whoever runs a
+plan that enables a write decides that outside the tool.
 
 `[refused_properties]` lists settings that no payload file may contain,
 whatever writes are enabled: `files`, a line pattern over payload names that
@@ -540,8 +587,11 @@ salt = "9c1f5e0a7b3d48e2a6c0f4b8d2e71a35"
 line of text, is the model of the device. `connections` lists the connections
 between devices and the board, each `{ from, to }` with two lines of text;
 the key is required, and the list can be empty. `[devices]` holds no address,
-relay channel or local path. The tool has no driver that a kind selects yet,
-so it checks only the form of `kind`.
+relay channel or local path. Reading a configuration checks only the form of
+`kind`. A run opens the device of each role with the driver of its kind, and
+a kind that the tool has no driver for is an input error. The tool has one
+kind so far, `simulated`, for every role, whose devices the
+[local settings](#local-settings) describe.
 
 The bench hardware revision is the SHA-256 of the canonical JSON of the
 `[devices]` table as written. The canonical JSON of a TOML value is UTF-8
@@ -575,9 +625,9 @@ device, model or connection changes it.
 tables `[local.power]`, `[local.power_confirmation]`, `[local.console]` and
 `[local.delivery]`, each optional, and nothing else. Addresses, relay
 channels, port paths, directories and credentials go there, never into
-`[devices]`. The keys of each table belong to the driver of the role's kind;
-the tool has no such driver yet and reads the tables only for the values to
-hide.
+`[devices]`. The keys of each table belong to the driver of the role's kind,
+which reads them when a run opens the bench; reading a configuration reads
+them only for the [values to hide](#values-to-hide).
 
 `salt` is required: 32 lowercase hexadecimal digits, 128 random bits that a
 bench generates once for its configuration, for example with:
@@ -587,13 +637,27 @@ openssl rand -hex 16
 ```
 
 A missing salt, or one of another length or form, is an error, and so is a
-salt that kyto publishes, such as the one of the example above, unless every
-device of the configuration is of the kind `simulated`. A
-[receipt](#receipts) records the SHA-256 of the whole configuration file,
-and its [public version](#public-versions) shows every digest. The other
-values of a configuration are few and could be guessed from a template and
-tried one by one against that digest; with 128 random bits in the file, they
-cannot. The salt itself never enters a receipt.
+salt that kyto publishes, such as those of the example above and of the
+example configuration under `tools/examples/`, unless every device of the
+configuration is of the kind `simulated`. A [receipt](#receipts) records the
+SHA-256 of the whole configuration file, and its
+[public version](#public-versions) shows every digest. The other values of a
+configuration are few and could be guessed from a template and tried one by
+one against that digest; with 128 random bits in the file, they cannot. The
+salt itself never enters a receipt.
+
+The devices of the kind `simulated` share a simulated clock, which is the
+bench clock of a run on them, so a run waits for nothing in real time and
+its times are the same in every run. The power device switches a simulated
+supply, which the confirmation device reads as 5100000 µV while it is on
+and 0 µV while it is off. The delivery device keeps the staged payloads in
+memory. The console replays recorded console output: `[local.console]` has
+one key, `replay`, a list of files given as paths relative to the instance
+configuration, and the n-th power-on of a run replays the n-th file, its
+k-th line k ms after the supply comes on; after the last file, the board
+writes nothing. The console answers nothing that it is sent, so the
+response of a step must already be in the file. The other roles take no
+settings, so their tables are absent or empty.
 
 ### Values to hide
 
@@ -631,19 +695,22 @@ booted and when a cold boot ends; the lines that must and must not appear;
 the bytes sent to the board and the lines that must answer them; the
 firmware versions, values and segments of the transcript; and the writes
 that the entry enables. Whoever writes a plan keeps it with the record it is
-for. A plan holds no value of a bench, such as an address, a path prefix or a
-relay channel, not even in a comment: a receipt records the plan's text as it
-is, and a [public version](#public-versions) never rewrites it. The leak
-check refuses the public version of a receipt whose plan holds a value to
-hide of at least 4 bytes, such as an address or a path prefix; a relay
-number shorter than that is not searched for, so nothing finds one in a
-plan, and it is for whoever writes the plan to keep it out. Payload files
-hold no value of a bench either: a public version shows the SHA-256 of every
-payload file, and that of a file made from a template with a value of the
-bench, such as a server address on a kernel command line, would let the
-value be found by trying candidates against it. Nothing checks the contents
-of payload files for such values. The library reads and checks plans and
-reads cold boots as their entries say; no command runs a plan yet.
+for. A plan holds no value of a bench, such as an address, a path prefix or
+a relay channel, not even in a comment: a receipt records the plan's text as
+it is, and a [public version](#public-versions) never rewrites it.
+`kyto-bench run` refuses a plan that holds a
+[value to hide](#values-to-hide) of the instance configuration, ignoring
+ASCII case, as an input error before it runs anything, and the leak check
+refuses the public version of a receipt whose plan holds a value to hide of
+at least 4 bytes, such as an address or a path prefix; a relay number
+shorter than that is not searched for, so nothing finds one in a plan, and
+it is for whoever writes the plan to keep it out. Payload files hold no
+value of a bench either: a public version shows the SHA-256 of every payload
+file, and that of a file made from a template with a value of the bench,
+such as a server address on a kernel command line, would let the value be
+found by trying candidates against it. Nothing checks the contents of
+payload files for such values. The library reads and checks plans and reads
+cold boots as their entries say, and `kyto-bench run` runs them.
 
 A plan is UTF-8 text; bytes that are not UTF-8 are not read as a plan. The
 library keeps the text that it reads a plan from without changing a byte:
@@ -659,9 +726,10 @@ stand-in files under `tools/examples/payload/`, from which no board boots,
 and the payload digests of the plan are theirs. The digest of the segment
 `banner` is that of the two lines `Example echo payload` and
 `BUILD id=0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c`, each ended by CR LF,
-which come between the start of the operating system and `READY` in the
-console output that the tests of the library build for this entry. Its
-second entry, with the digests shortened here:
+which come between the start of the operating system and `READY` in
+[`tools/examples/captures/echo.bin`](../../tools/examples/captures/echo.bin),
+the example console output of this entry. Its second entry, with the digests
+shortened here:
 
 ```toml
 [[entries]]
@@ -783,6 +851,13 @@ its entry and file, so a run is refused under one rule only:
 2. once these pass for every entry, for each entry in the order of the plan,
    its payload is staged and, for each file in the same order of names,
    `payload.staged_digest`.
+
+The checks of the first step need no device: `kyto-bench run` makes them
+before it opens the bench, from the source files as it read them, and stages
+a payload, through the write gate of its entry, only once they have passed.
+A source file that cannot be read has no digest and fails
+`payload.source_digest`, and a file that cannot be staged or read back fails
+`payload.staged_digest`.
 
 The rules are:
 
@@ -1566,13 +1641,26 @@ device or a clock:
    at which [the supply](#the-supply) was last confirmed off before it, and
    its verdict; then the [verdicts](#verdicts) of the entry and of the run.
 
-It fails, naming the place in the receipt, when an index does not describe
-its bytes, when a cold boot follows one of its entry that did not pass, and
-when an entry that is not `"NOT RUN"` follows one that is `"BENCH FAULT"`.
-Otherwise it gives the receipt with its evidence, refusal, observations,
-checks and verdicts made again and everything else as recorded. A receipt
-that the tool wrote is given back unchanged; one that is not was not made
-by the rules of this version from what it records.
+It fails, naming the place in the receipt, when a recorded text cannot be
+read, when an index does not describe its bytes, when a cold boot follows
+one of its entry that did not pass, and when an entry that is not
+`"NOT RUN"` follows one that is `"BENCH FAULT"`. Otherwise it gives the
+receipt with its evidence, refusal, observations, checks and verdicts made
+again and everything else as recorded. `kyto-bench run` makes the checks and
+verdicts of a receipt with the same functions, so a receipt that the tool
+wrote is given back unchanged; one that is not was not made by the rules of
+this version from what it records. In Rust, with the library as a
+dependency:
+
+```rust
+use kyto_bench_core::receipt::Receipt;
+use kyto_bench_core::rejudge::rejudge;
+
+fn rederives_to_itself(path: &str) -> Result<bool, Box<dyn std::error::Error>> {
+    let receipt = Receipt::parse(&std::fs::read(path)?)?;
+    Ok(rejudge(&receipt)? == receipt)
+}
+```
 
 For example, take the cold boot of the receipt in
 [entries and cold boots](#entries-and-cold-boots), with its plan entry: the

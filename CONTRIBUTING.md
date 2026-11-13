@@ -2,10 +2,9 @@
 
 kyto is newly initialized. It has no design files or models yet. Its Cargo
 workspaces are the repository tasks in `xtask/` and the bench tool in
-`tools/`, whose library reads [board descriptions, identity records,
-instance configurations and run plans](docs/bench/formats.md) and writes and
-reads receipts and their public versions, but which has no command that runs
-a bench yet. Before proposing a change, enable the commit message hook once
+`tools/`, which runs [run plans](docs/bench/formats.md#run-plans) on
+simulated devices and writes their receipts, but has no driver for a real
+device yet. Before proposing a change, enable the commit message hook once
 and run these commands from the repository root:
 
 ```sh
@@ -76,12 +75,13 @@ In the `tools` workspace, Clippy reads `tools/clippy.toml`, which bans
 sleeping and reading the system clock, since every time and wait of a run
 comes from the bench clock, and running an external program; only the build
 script of `kyto-bench`, which asks Git for the commit and whether the working
-tree is clean, runs one. `tools/kyto-bench-core/clippy.toml` repeats these
-bans, which a test of the workspace checks, and also bans the entry points
-of the standard library to files and links, the network, environment
-variables, process and system state, threads, standard input and output and
-the clock, so that the crate, in which unsafe code is forbidden, has no
-input or output. The tests of the bench tool alone run with:
+tree is clean, and the tests that run the `kyto-bench` binary run one.
+`tools/kyto-bench-core/clippy.toml` repeats these bans, which a test of the
+workspace checks, and also bans the entry points of the standard library to
+files and links, the network, environment variables, process and system
+state, threads, standard input and output and the clock, so that the crate,
+in which unsafe code is forbidden, has no input or output. The tests of the
+bench tool alone run with:
 
 ```sh
 cargo test --locked --manifest-path tools/Cargo.toml
@@ -161,33 +161,84 @@ parts.
 
 ## Hardware-in-the-loop bench
 
-The bench hardware does not exist yet, and the bench tool under `tools/`
-cannot run a bench yet. The rules below apply to the tool now and to the
-hardware from the first change that adds it.
+The bench hardware does not exist yet. The bench tool under `tools/` runs
+[run plans](docs/bench/formats.md#run-plans) on simulated devices and writes
+their [receipts](docs/bench/formats.md#receipts); it has no driver for a real
+device, so it cannot run a bench yet. From the repository root, this runs the
+example run plan on the simulated devices of the example instance
+configuration and writes the receipt and its public version into
+`tools/target/example-run`, a directory that must not exist yet:
+
+```sh
+cargo run --locked --release --manifest-path tools/Cargo.toml -- run \
+  --plan tools/examples/run-plan.toml \
+  --instance tools/examples/instance.toml \
+  --payload-root tools/examples/payload \
+  --out tools/target/example-run
+```
+
+Its exit status is 0 for `PASS`, 1 for `FAIL`, 2 for a usage or input error,
+with no receipt, 3 for `BENCH FAULT`, 4 for a run refused before any power
+command, and 5 when the public version of the receipt was refused.
+[The formats page](docs/bench/formats.md) describes the command, the files it
+reads and writes, and every rule of a verdict.
+
+The tool drives a bench through four device interfaces: power commands; a
+reading of the supply from a device of its own, which confirms power-on and
+power-off; the serial console, whose bytes are kept exactly as received; and
+payload delivery to the directory that the board reads over TFTP. Every
+time, wait and timeout of a run comes from a clock that the bench provides.
+Each interface has one simulated device, and the four share a simulated
+clock, so a run on them waits for nothing in real time and gives the same
+times in every run.
+
+The rules below apply to the tool now and to the hardware from the first
+change that adds it.
 
 - **Tool.** The bench tool is written in Rust and kept under `tools/`, in a
-  Cargo workspace with its own `Cargo.lock`. External dependencies come only
-  from crates.io and are pinned to exact versions. It drives a bench through
-  device interfaces and does not depend on any one bench or on the system
-  under test.
+  Cargo workspace with its own `Cargo.lock`: `kyto-bench-core`, a library
+  without input or output that reads and writes the formats and holds every
+  rule that decides a check or a verdict, and `kyto-bench`, the devices, the
+  flow of a run and the command. External dependencies come only from
+  crates.io and are pinned to exact versions. The tool does not depend on any
+  one bench or on the system under test: what it knows of a board is in the
+  board's [description](docs/bench/formats.md#board-descriptions), and what
+  it knows of a bench is in the bench's instance configuration.
 - **Instance configuration.** A bench's own configuration, such as addresses,
   relay channels, local paths and credentials, is kept outside this
-  repository. The repository holds templates and examples only.
-- **Safety.** Power-on and power-off are each confirmed by a signal that does
-  not rely on the relay's own reply. A run that fails powers the board off and
-  says that it did. Operations that write firmware, EEPROM contents or storage
-  media are off by default and run only when a run plan enables them
-  explicitly.
+  repository. The repository holds templates and examples only, such as the
+  [example instance configuration](tools/examples/instance.toml) of simulated
+  devices, whose salt is published, so that no bench may use it.
+- **Safety.** Power-on and power-off are each confirmed by readings of the
+  supply, never by the relay's own reply. A run switches the supply off and
+  waits for readings to confirm it before the first cold boot and after
+  every cold boot that started, one that failed or faulted too, and its
+  receipt records the commands and the readings; a run that stops on an
+  error of the tool switches the supply off and says whether readings
+  confirmed it. Operations that write firmware, EEPROM contents or storage
+  media are off by default: a run refuses a payload file that the board
+  description lists as letting the firmware make such a write, before
+  anything is staged or powered, unless its run plan entry enables that
+  class of write explicitly. An enable is needed for a write but does not
+  authorize one; that is decided outside the tool.
 - **Receipts.** A receipt records the tool revision, the bench hardware
-  revision, the image digest, the commands sent, the console transcript and
-  every observation, with a verdict. Receipts are written by the tool and
-  never edited by hand. When the tool or the bench hardware changes, results
-  that depend on it are taken again.
+  revision, the digest of every payload file, the commands sent, the console
+  transcript and every observation, with checks and verdicts. The tool writes
+  it with a [public version](docs/bench/formats.md#public-versions) that
+  hides the values that identify the board, the network or the bench.
+  Receipts are written by the tool and never edited by hand, and their
+  verdicts can be [derived again](docs/bench/formats.md#re-deriving-verdicts)
+  from what they record. A receipt of a run on simulated devices, or of a
+  tool whose commit is unknown or whose working tree had changes, is not
+  evidence. When the tool or the bench hardware changes, results that depend
+  on it are taken again.
 - **Tests.** The rules that decide a verdict, check an image digest and power
-  a board off after a failure have written requirements and a contract,
+  a board off after a failure need written requirements and a contract,
   contract tests with negative cases, and fuzz tests on untrusted input such
-  as console transcripts. The rest of the tool is tested on the host against
-  simulated devices. A bench self-test shows only that a bench works.
+  as console transcripts; so far they have unit tests with negative cases,
+  and the rest is planned. The rest of the tool is tested on the host against
+  simulated devices, on which the tests run the example run plan through the
+  command. A bench self-test shows only that a bench works.
 - **Bench hardware.** Adapter boards, fixtures and other bench parts keep
   their design files under `bench/` and follow the rules for design files and
   records above.

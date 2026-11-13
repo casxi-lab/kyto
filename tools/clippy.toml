@@ -17,7 +17,7 @@ disallowed-methods = [
 ]
 
 # The tool runs no external program; only the build script, which asks Git
-# for the commit, may.
+# for the commit, and the tests that run the tool's own binary may.
 disallowed-types = [
     { path = "std::process::Command", reason = "the tool runs no external program" },
 ]

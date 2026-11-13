@@ -6,6 +6,8 @@
 //! the same matcher the chunks and sends of a record, so a record gives the
 //! same observations as the run.
 
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 
 use crate::board::{Board, Method};
@@ -138,6 +140,10 @@ pub struct Matcher<'a> {
     network: bool,
     /// The offset after each line in `seen.markers`.
     marker_ends: Vec<u64>,
+    /// Whether the marker that ends the cold boot has appeared.
+    end_seen: bool,
+    /// Each value of `seen.identity` and `seen.values`, by field.
+    known: Known,
     /// The time of the send that waits for its response, and the bytes
     /// received before it.
     waiting: Option<(u64, u64)>,
@@ -162,6 +168,8 @@ impl<'a> Matcher<'a> {
             bytes: Vec::new(),
             network: false,
             marker_ends: Vec::new(),
+            end_seen: false,
+            known: BTreeSet::new(),
             waiting: None,
             seen: Observations::default(),
         }
@@ -210,13 +218,10 @@ impl<'a> Matcher<'a> {
     /// Whether the cold boot has ended: the entry ends at a marker, which has
     /// appeared, and every step has its response.
     pub fn ended(&self) -> bool {
-        let End::Marker(end) = &self.entry.end else {
-            return false;
-        };
         let steps = &self.seen.steps;
-        steps.len() == self.entry.steps.len()
+        self.end_seen
+            && steps.len() == self.entry.steps.len()
             && steps.iter().all(|step| step.response_line.is_some())
-            && self.seen.markers.iter().any(|seen| seen.name == end.marker)
     }
 
     /// Ends the transcript, reads its unterminated last line, if any, and
@@ -255,7 +260,7 @@ impl<'a> Matcher<'a> {
 
     /// Reads one line, which ends before the offset `after`.
     fn line(&mut self, line: &Line, after: u64) {
-        let (board, entry, seen) = (self.board, self.entry, &mut self.seen);
+        let (board, entry, seen, known) = (self.board, self.entry, &mut self.seen, &mut self.known);
         let (text, offset) = (&line.content[..], line.offset);
         if let Some(mode) = board.boot_mode.form.pattern.group(text, "mode") {
             self.network = mode == board.boot_mode.network.as_bytes();
@@ -271,6 +276,7 @@ impl<'a> Matcher<'a> {
             .map(|marker| format!("{BOARD_MARKER}{}", marker.name))
             .chain(entry_markers.map(|marker| marker.name.clone()));
         for name in names {
+            self.end_seen |= matches!(&entry.end, End::Marker(end) if end.marker == name);
             let at_ns = line.at_ns;
             seen.markers.push(MarkerSeen {
                 name,
@@ -306,7 +312,14 @@ impl<'a> Matcher<'a> {
             let Some(value) = value else { continue };
             for field in read.field.values() {
                 if read.part.is_none_or(|part| field.part == Some(part)) {
-                    agree(&mut seen.identity, field.to_string(), &value, offset);
+                    agree(
+                        &mut seen.identity,
+                        known,
+                        false,
+                        field.to_string(),
+                        &value,
+                        offset,
+                    );
                 }
             }
         }
@@ -333,7 +346,14 @@ impl<'a> Matcher<'a> {
         }
         for value in &entry.values {
             if let Some(found) = value.line.group(text, "value") {
-                agree(&mut seen.values, value.field.clone(), &lossy(found), offset);
+                agree(
+                    &mut seen.values,
+                    known,
+                    true,
+                    value.field.clone(),
+                    &lossy(found),
+                    offset,
+                );
             }
         }
         self.step(line);
@@ -375,8 +395,21 @@ impl<'a> Matcher<'a> {
     }
 }
 
-/// Adds `value`, given by the line at `line`, to the values of `field`.
-fn agree(list: &mut Vec<Agreement>, field: String, value: &str, line: u64) {
+/// The values of the fields of a list of agreements, `seen.identity`
+/// (false) or `seen.values` (true).
+type Known = BTreeSet<(bool, String, String)>;
+
+/// Adds `value`, given by the line at `line`, to the values of `field` in
+/// `list`, whose values `known` holds under `kind`.
+fn agree(
+    list: &mut Vec<Agreement>,
+    known: &mut Known,
+    kind: bool,
+    field: String,
+    value: &str,
+    line: u64,
+) {
+    let new = known.insert((kind, field.clone(), value.to_string()));
     let index = list.iter().position(|seen| seen.field == field);
     let index = index.unwrap_or_else(|| {
         let (values, lines) = (Vec::new(), Vec::new());
@@ -388,7 +421,7 @@ fn agree(list: &mut Vec<Agreement>, field: String, value: &str, line: u64) {
         list.len() - 1
     });
     let seen = &mut list[index];
-    if !seen.values.iter().any(|known| known == value) {
+    if new {
         seen.values.push(value.to_string());
     }
     if seen.lines.last() != Some(&line) {
@@ -924,6 +957,37 @@ mod tests {
             agreement(&seen.values, "build").map(|values| values.len()),
             Some(2)
         );
+    }
+
+    #[test]
+    fn many_distinct_values_are_each_kept_once_in_order() {
+        let (plan, tftp) = (plan(), tftp(""));
+        let mut entry = plan.entries[1].clone();
+        entry.end = crate::plan::End::Timeout(crate::plan::Timeout::Timeout);
+        let lines: Vec<String> = (0..20_000u32)
+            .map(|n| format!("BUILD id={:040x}", n / 2))
+            .collect();
+        let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let seen = run(&entry, &tftp, chunks(&lines), &[]).seen;
+        let build = seen
+            .values
+            .iter()
+            .find(|seen| seen.field == "build")
+            .unwrap();
+        assert_eq!((build.values.len(), build.lines.len()), (10_000, 20_000));
+        assert_eq!(build.values[9_999], format!("{:040x}", 9_999));
+        // A named value of the name of an identity field keeps its own values.
+        entry.values[0] = crate::plan::NamedValue {
+            field: "revision_code".into(),
+            line: crate::pattern::LinePattern::new("boardrev (?P<value>[0-9a-f]+)").unwrap(),
+        };
+        let seen = run(&entry, &tftp, chunks(&[FIRMWARE[4]]), &[]).seen;
+        for list in [&seen.identity, &seen.values] {
+            assert_eq!(
+                agreement(list, "revision_code"),
+                Some(vec!["d04171".into()])
+            );
+        }
     }
 
     #[test]

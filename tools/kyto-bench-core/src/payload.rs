@@ -14,59 +14,22 @@ use crate::names::PayloadName;
 use crate::receipt::{Check, Outcome, Refusal};
 use crate::write::{self, WriteClass, WriteEnables, WriteTrigger};
 
-/// Checks the digests of the source files, read before anything is staged,
-/// against the payload of entry `entry`: rule `payload.source_digest`.
-pub fn check_sources(
-    entry: usize,
-    payload: &[PinnedFile],
-    found: &[(PayloadName, Sha256)],
-) -> Result<(), Refusal> {
-    refuse_mismatch("payload.source_digest", "source", entry, payload, found)
-}
-
-/// Checks the digests of the staged copy, read back from where the board
-/// will read it, against the payload of entry `entry`: rule
-/// `payload.staged_digest`.
-pub fn check_staged(
-    entry: usize,
-    payload: &[PinnedFile],
-    found: &[(PayloadName, Sha256)],
-) -> Result<(), Refusal> {
-    refuse_mismatch("payload.staged_digest", "staged", entry, payload, found)
-}
-
-/// Checks the digests of the copy that the board is served, read through
-/// the current generation, against the payload: one check of rule
-/// `payload.served_digest` for each file, in the order of the payload, a
-/// fault when the digests differ.
-pub fn check_served(payload: &[PinnedFile], found: &[(PayloadName, Sha256)]) -> Vec<Check> {
-    let check = |file: &PinnedFile| {
-        let detail = mismatch("served", file, found);
-        let result = if detail.is_some() {
-            Outcome::Fault
-        } else {
-            Outcome::Pass
-        };
-        let (rule, subject) = ("payload.served_digest".into(), file.name.to_string());
-        Check {
-            rule,
-            subject,
-            result,
-            detail,
-        }
-    };
-    payload.iter().map(check).collect()
-}
-
-/// Checks the writes that the payload `files` of entry `entry` can let the
-/// firmware make: a write trigger of a class that the entry does not enable
-/// refuses the run (`write.not_enabled`), and so does a refused property in
-/// a file, whatever the entry enables (`write.refused_property`).
-pub fn check_writes(
+/// Checks the payload of entry `entry` before anything is staged, in this
+/// order: for each file of `payload`, in increasing order of the bytes of
+/// its name, `payload.source_digest` against the digests of the source files
+/// in `sources`, `write.not_enabled` against the board's write triggers and
+/// `enables`, and `write.refused_property`, the refused property that
+/// `refused` finds in the file, if any ([`refused_property`]); then
+/// `payload.variant_missing` for the identity record ([`check_variants`]).
+/// The first that fails refuses the run.
+pub fn check_entry(
     entry: usize,
     board: &Board,
     enables: &WriteEnables,
-    files: &[(PayloadName, &[u8])],
+    identity: &IdentityRecord,
+    payload: &[PinnedFile],
+    sources: &[(PayloadName, Sha256)],
+    refused: &dyn Fn(&PayloadName) -> Option<String>,
 ) -> Result<(), Refusal> {
     let permitted: Vec<WriteClass> = WriteClass::ALL
         .into_iter()
@@ -77,24 +40,68 @@ pub fn check_writes(
         .iter()
         .map(|trigger| trigger.trigger.clone())
         .collect();
-    let names = files.iter().map(|(name, _)| name);
-    if let Err(refused) = write::check_triggers(names, &triggers, &permitted) {
-        let detail = refused[0].to_string();
-        return Err(Refusal::new("write.not_enabled", entry, detail));
+    for file in by_name(payload) {
+        let name = &file.name;
+        let refusal = |rule, detail| Err(Refusal::new(rule, entry, name, detail));
+        if let Some(detail) = mismatch("source", file, sources) {
+            return refusal("payload.source_digest", detail);
+        }
+        if let Err(unpermitted) = write::check_triggers([name], &triggers, &permitted) {
+            return refusal("write.not_enabled", unpermitted[0].to_string());
+        }
+        if let Some(detail) = refused(name) {
+            return refusal("write.refused_property", detail);
+        }
     }
-    let Some(refused) = &board.refused_properties else {
-        return Ok(());
-    };
+    let names: Vec<PayloadName> = payload.iter().map(|file| file.name.clone()).collect();
+    check_variants(entry, board, identity, &names)
+}
+
+/// The first place in the payload file `name`, of `bytes`, that sets a
+/// refused property of the board, as a detail of `write.refused_property`.
+pub fn refused_property(board: &Board, name: &PayloadName, bytes: &[u8]) -> Option<String> {
+    let refused = board.refused_properties.as_ref()?;
     let properties: Vec<String> = refused.properties.iter().map(|p| p.name.clone()).collect();
-    let files = files.iter().map(|(name, bytes)| (name, *bytes));
-    match write::find_refused_properties(files, &refused.files.pattern, &properties).first() {
-        Some(hit) => Err(Refusal::new(
-            "write.refused_property",
+    let hits = write::find_refused_properties([(name, bytes)], &refused.files.pattern, &properties);
+    hits.first().map(ToString::to_string)
+}
+
+/// Checks the digests of the staged copy, read back from where the board
+/// will read it, against the payload of entry `entry`, file by file in
+/// increasing order of the bytes of their names: rule
+/// `payload.staged_digest`.
+pub fn check_staged(
+    entry: usize,
+    payload: &[PinnedFile],
+    found: &[(PayloadName, Sha256)],
+) -> Result<(), Refusal> {
+    let first = by_name(payload).find_map(|file| Some((file, mismatch("staged", file, found)?)));
+    match first {
+        Some((file, detail)) => Err(Refusal::new(
+            "payload.staged_digest",
             entry,
-            hit.to_string(),
+            &file.name,
+            detail,
         )),
         None => Ok(()),
     }
+}
+
+/// Checks the digests of the copy that the board is served, read through
+/// the current generation, against the payload: one check of rule
+/// `payload.served_digest` for each file, in the order of the payload, a
+/// fault when the digests differ.
+pub fn check_served(payload: &[PinnedFile], found: &[(PayloadName, Sha256)]) -> Vec<Check> {
+    let check = |file: &PinnedFile| {
+        let detail = mismatch("served", file, found);
+        Check::new(
+            "payload.served_digest",
+            file.name.as_str(),
+            Outcome::Fault,
+            detail,
+        )
+    };
+    payload.iter().map(check).collect()
 }
 
 /// Checks that the payload `names` of entry `entry` hold every file that
@@ -102,7 +109,8 @@ pub fn check_writes(
 /// variant whose value the record gives for the variant's field, ignoring
 /// ASCII case, or of every variant of a field the record gives as unknown.
 /// Names are compared ignoring ASCII case. A missing file refuses the run:
-/// rule `payload.variant_missing`.
+/// rule `payload.variant_missing`, with the first missing file of the first
+/// variant of the board that misses one.
 pub fn check_variants(
     entry: usize,
     board: &Board,
@@ -120,25 +128,17 @@ pub fn check_variants(
             |file: &&PayloadName| names.iter().any(|name| name.eq_ignore_ascii_case(file));
         if let Some(file) = variant.payload.iter().find(|file| !present(file)) {
             let detail = format!("{field} is {given}, and the variant {value} needs {file}");
-            return Err(Refusal::new("payload.variant_missing", entry, detail));
+            return Err(Refusal::new("payload.variant_missing", entry, file, detail));
         }
     }
     Ok(())
 }
 
-/// The first file of `payload` whose copy in `found` is missing or has
-/// another digest, as a refusal of `rule`.
-fn refuse_mismatch(
-    rule: &str,
-    copy: &str,
-    entry: usize,
-    payload: &[PinnedFile],
-    found: &[(PayloadName, Sha256)],
-) -> Result<(), Refusal> {
-    match payload.iter().find_map(|file| mismatch(copy, file, found)) {
-        Some(detail) => Err(Refusal::new(rule, entry, detail)),
-        None => Ok(()),
-    }
+/// The files of `payload` in increasing order of the bytes of their names.
+fn by_name(payload: &[PinnedFile]) -> impl Iterator<Item = &PinnedFile> {
+    let mut files: Vec<&PinnedFile> = payload.iter().collect();
+    files.sort_by(|a, b| a.name.as_str().cmp(b.name.as_str()));
+    files.into_iter()
 }
 
 /// How the `copy` of `file` in `found` differs from the payload, if it does.
@@ -199,15 +199,66 @@ mod tests {
         IdentityRecord::parse(&text).unwrap()
     }
 
+    /// The pinned files of `files`, each with the digest of its bytes.
+    fn pinned(files: &[(&str, &[u8])]) -> Vec<PinnedFile> {
+        let pin = |(text, bytes): &(&str, &[u8])| PinnedFile {
+            name: name(text),
+            sha256: Sha256::of(bytes),
+        };
+        files.iter().map(pin).collect()
+    }
+
+    /// Checks entry `entry` of `files`, whose sources are `sources`, as a
+    /// run checks them, with the refused properties found in the sources.
+    fn check(
+        entry: usize,
+        enables: &WriteEnables,
+        files: &[PinnedFile],
+        sources: &[(&str, &[u8])],
+    ) -> Result<(), Refusal> {
+        let board = pi5();
+        let found: Vec<_> = sources
+            .iter()
+            .map(|(text, bytes)| (name(text), Sha256::of(bytes)))
+            .collect();
+        let refused = |file: &PayloadName| {
+            let (_, bytes) = sources.iter().find(|(text, _)| *text == file.as_str())?;
+            refused_property(&board, file, bytes)
+        };
+        let identity = identity("unknown");
+        check_entry(entry, &board, enables, &identity, files, &found, &refused)
+    }
+
+    const VARIANTS: [(&str, &[u8]); 2] = [
+        ("bcm2712-rpi-5-b.dtb", b"dtb"),
+        ("overlays/bcm2712d0.dtbo", b"dtbo"),
+    ];
+
     #[test]
     fn source_and_staged_digests_must_equal_the_plan() {
         let payload = payload();
-        assert_eq!(check_sources(0, &payload, &found(None)), Ok(()));
+        let sources: Vec<(&str, &[u8])> = [
+            ("config.txt", &b"config.txt"[..]),
+            ("kernel.img", b"kernel.img"),
+        ]
+        .into_iter()
+        .chain(VARIANTS)
+        .collect();
+        let mut files = payload.clone();
+        files.extend(pinned(&VARIANTS));
+        let none = WriteEnables::default();
+        assert_eq!(check(0, &none, &files, &sources), Ok(()));
         assert_eq!(check_staged(0, &payload, &found(None)), Ok(()));
-        let refused = check_sources(2, &payload, &found(Some(b"other"))).unwrap_err();
+        let mut changed = sources.clone();
+        changed[1].1 = b"other";
+        let refused = check(2, &none, &files, &changed).unwrap_err();
         assert_eq!(
-            (refused.rule.as_str(), refused.entry),
-            ("payload.source_digest", Some(2))
+            (
+                refused.rule.as_str(),
+                refused.entry,
+                refused.subject.as_str()
+            ),
+            ("payload.source_digest", Some(2), "kernel.img")
         );
         let other = Sha256::of(b"other");
         let detail = format!(
@@ -215,13 +266,78 @@ mod tests {
             payload[1].sha256
         );
         assert_eq!(refused.detail, detail);
+        let refused = check(0, &none, &files, &sources[1..]).unwrap_err();
+        assert_eq!(refused.detail, "the source copy of config.txt was not read");
         let refused = check_staged(1, &payload, &found(Some(b""))).unwrap_err();
         assert_eq!(
-            (refused.rule.as_str(), refused.entry),
-            ("payload.staged_digest", Some(1))
+            (
+                refused.rule.as_str(),
+                refused.entry,
+                refused.subject.as_str()
+            ),
+            ("payload.staged_digest", Some(1), "kernel.img")
         );
         let refused = check_staged(1, &payload, &found(None)[..1]).unwrap_err();
         assert_eq!(refused.detail, "the staged copy of kernel.img was not read");
+    }
+
+    /// The checks of an entry go by file, in the order of the bytes of the
+    /// names, and by rule within a file; the variants come last.
+    #[test]
+    fn payload_checks_go_by_file_name_then_by_rule() {
+        let none = WriteEnables::default();
+        let first = |files: &[(&str, &[u8])], sources: &[(&str, &[u8])]| {
+            let refused = check(0, &none, &pinned(files), sources).unwrap_err();
+            (refused.rule, refused.subject)
+        };
+        let rule = |rule: &str, subject: &str| (rule.to_string(), subject.to_string());
+        // a.txt comes before recovery.bin, whatever the order of the plan.
+        let files: [(&str, &[u8]); 2] = [("recovery.bin", b"r"), ("a.txt", b"a")];
+        let sources: [(&str, &[u8]); 2] = [("recovery.bin", b"r"), ("a.txt", b"x")];
+        assert_eq!(
+            first(&files, &sources),
+            rule("payload.source_digest", "a.txt")
+        );
+        // Upper case letters come before lower case ones.
+        let files: [(&str, &[u8]); 2] = [("a.txt", b"a"), ("PIEEPROM.UPD", b"p")];
+        let sources: [(&str, &[u8]); 2] = [("a.txt", b"x"), ("PIEEPROM.UPD", b"p")];
+        assert_eq!(
+            first(&files, &sources),
+            rule("write.not_enabled", "PIEEPROM.UPD")
+        );
+        // Within a file, its source digest comes before its trigger.
+        let sources: [(&str, &[u8]); 2] = [("a.txt", b"x"), ("PIEEPROM.UPD", b"q")];
+        assert_eq!(
+            first(&files, &sources),
+            rule("payload.source_digest", "PIEEPROM.UPD")
+        );
+        // Every rule of a file comes before the next file.
+        let files: [(&str, &[u8]); 2] = [("kernel.img", b"k"), ("config.txt", b"program_pubkey=1")];
+        let sources: [(&str, &[u8]); 2] =
+            [("kernel.img", b"x"), ("config.txt", b"program_pubkey=1")];
+        assert_eq!(
+            first(&files, &sources),
+            rule("write.refused_property", "config.txt")
+        );
+        // Every file passes before the variants are checked.
+        let files: [(&str, &[u8]); 1] = [("config.txt", b"c")];
+        let refused = check(4, &none, &pinned(&files), &files).unwrap_err();
+        assert_eq!(
+            (
+                refused.rule.as_str(),
+                refused.entry,
+                refused.subject.as_str()
+            ),
+            ("payload.variant_missing", Some(4), "bcm2712-rpi-5-b.dtb")
+        );
+        assert_eq!(
+            first(&files, &[]),
+            rule("payload.source_digest", "config.txt")
+        );
+        // Staged copies are checked by name as well.
+        let files = pinned(&[("b", b"b"), ("A", b"a")]);
+        let refused = check_staged(0, &files, &[]).unwrap_err();
+        assert_eq!(refused.subject, "A");
     }
 
     #[test]
@@ -261,15 +377,22 @@ mod tests {
 
     #[test]
     fn a_trigger_needs_its_class_enabled() {
-        let board = pi5();
-        let files = [
-            (name("config.txt"), &b"uart_2ndstage=1\n"[..]),
-            (name("PIEEPROM.UPD"), b""),
-        ];
-        let refused = check_writes(1, &board, &WriteEnables::default(), &files).unwrap_err();
+        let sources: Vec<(&str, &[u8])> = [
+            ("config.txt", &b"uart_2ndstage=1\n"[..]),
+            ("PIEEPROM.UPD", b""),
+        ]
+        .into_iter()
+        .chain(VARIANTS)
+        .collect();
+        let files = pinned(&sources);
+        let refused = check(1, &WriteEnables::default(), &files, &sources).unwrap_err();
         assert_eq!(
-            (refused.rule.as_str(), refused.entry),
-            ("write.not_enabled", Some(1))
+            (
+                refused.rule.as_str(),
+                refused.entry,
+                refused.subject.as_str()
+            ),
+            ("write.not_enabled", Some(1), "PIEEPROM.UPD")
         );
         assert!(
             refused
@@ -282,32 +405,42 @@ mod tests {
             storage: true,
             ..WriteEnables::default()
         };
-        assert!(check_writes(1, &board, &storage, &files).is_err());
+        assert!(check(1, &storage, &files, &sources).is_err());
         let eeprom = WriteEnables {
             eeprom: true,
             ..WriteEnables::default()
         };
-        assert_eq!(check_writes(1, &board, &eeprom, &files), Ok(()));
+        assert_eq!(check(1, &eeprom, &files, &sources), Ok(()));
+        let without: Vec<_> = sources
+            .iter()
+            .copied()
+            .filter(|(text, _)| *text != "PIEEPROM.UPD")
+            .collect();
         assert_eq!(
-            check_writes(1, &board, &WriteEnables::default(), &files[..1]),
+            check(1, &WriteEnables::default(), &pinned(&without), &without),
             Ok(())
         );
     }
 
     #[test]
     fn a_refused_property_is_refused_even_when_writes_are_enabled() {
-        let board = pi5();
         let every = WriteEnables {
             firmware: true,
             eeprom: true,
             storage: true,
         };
-        let files = [(
-            name("config.txt"),
+        let sources: Vec<(&str, &[u8])> = [(
+            "config.txt",
             &b"uart_2ndstage=1\r\n  PROGRAM_PUBKEY = 1\n"[..],
-        )];
-        let refused = check_writes(0, &board, &every, &files).unwrap_err();
-        assert_eq!(refused.rule, "write.refused_property");
+        )]
+        .into_iter()
+        .chain(VARIANTS)
+        .collect();
+        let refused = check(0, &every, &pinned(&sources), &sources).unwrap_err();
+        assert_eq!(
+            (refused.rule.as_str(), refused.subject.as_str()),
+            ("write.refused_property", "config.txt")
+        );
         assert!(
             refused
                 .detail
@@ -315,8 +448,11 @@ mod tests {
             "{}",
             refused.detail
         );
-        let files = [(name("extra.cfg"), &b"# program_pubkey=1\n"[..])];
-        assert_eq!(check_writes(0, &board, &every, &files), Ok(()));
+        let sources: Vec<(&str, &[u8])> = [("extra.cfg", &b"# program_pubkey=1\n"[..])]
+            .into_iter()
+            .chain(VARIANTS)
+            .collect();
+        assert_eq!(check(0, &every, &pinned(&sources), &sources), Ok(()));
     }
 
     #[test]
@@ -338,8 +474,16 @@ mod tests {
         let refused = check_variants(3, &board, &identity("unknown"), std::slice::from_ref(&dtb))
             .unwrap_err();
         assert_eq!(
-            (refused.rule.as_str(), refused.entry),
-            ("payload.variant_missing", Some(3))
+            (
+                refused.rule.as_str(),
+                refused.entry,
+                refused.subject.as_str()
+            ),
+            (
+                "payload.variant_missing",
+                Some(3),
+                "overlays/bcm2712d0.dtbo"
+            )
         );
         assert_eq!(
             refused.detail,

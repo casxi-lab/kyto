@@ -1369,7 +1369,7 @@ mod tests {
             result: Outcome::Fail,
             detail: Some(text("d")),
         };
-        receipt.refusal = Some(Refusal::new("payload.staged_digest", 0, text("d")));
+        receipt.refusal = Some(Refusal::new("payload.staged_digest", 0, &name, text("d")));
         receipt.start.events = events.clone();
         receipt.inputs.instance.parameters.pins = vec![crate::instance::Pin {
             name: text("p"),
@@ -1509,6 +1509,7 @@ mod tests {
             ),
             ("/reference", "plain"),
             ("/refusal/rule", "plain"),
+            ("/refusal/subject", "plain"),
             ("/refusal/detail", "plain"),
             ("/entries/*/name", "plain"),
             ("/entries/*/reference", "plain"),

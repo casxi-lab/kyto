@@ -769,12 +769,21 @@ instance configuration:
 
 ### Payload checks
 
-These checks of an entry's payload come before the board is powered. A
-payload that fails one refuses the run, as [refused runs](#refused-runs)
-describe, under the name of the rule and with the entry and the first file
-found that fails it. The library makes each check on its own; the order in
-which a run makes them belongs to the flow of a run, which is not defined
-yet:
+These checks of an entry's payload come before the board is powered. They
+are made in a fixed order, and the first that fails refuses the run, as
+[refused runs](#refused-runs) describe, under the name of its rule and with
+its entry and file, so a run is refused under one rule only:
+
+1. for each entry, in the order of the plan, and for each file of its
+   payload, in increasing order of the bytes of the payload names (so
+   `B.txt` comes before `a.txt`): `payload.source_digest`,
+   `write.not_enabled` and `write.refused_property`; then, for the entry,
+   `payload.variant_missing`;
+2. once these pass for every entry, for each entry in the order of the plan,
+   its payload is staged and, for each file in the same order of names,
+   `payload.staged_digest`.
+
+The rules are:
 
 - `payload.source_digest`: the SHA-256 of every source file equals that of
   the payload;
@@ -788,7 +797,9 @@ yet:
 - `payload.variant_missing`: the payload has every file of the
   [variant](#variants) whose value the identity record gives for the
   variant's field, ignoring ASCII case, and every file of every variant of a
-  field whose value is unknown; names are compared ignoring ASCII case.
+  field whose value is unknown; names are compared ignoring ASCII case. The
+  file of a refusal is the first missing file of the first variant, in the
+  order of the board description, that misses one.
 
 Once the board is served the entry's payload, `payload.served_digest`
 compares the SHA-256 of every file of the copy that the board is served, read
@@ -1155,17 +1166,17 @@ verdicts, which are not defined yet.
 A run whose payload the [payload checks](#payload-checks) refuse is refused
 before any power command, and its receipt shows it:
 
-- `refusal` is `{ rule, entry, detail }`: the rule, the index of the entry
-  that it concerns, and what was found, as in
-  `the staged copy of config.txt was not read`;
+- `refusal` is `{ rule, entry, subject, detail }`: the rule, the index of
+  the entry that it concerns, the payload name of the file that it found,
+  and what was found, as in `the staged copy of config.txt was not read`;
 - `verdict` is `null`, since a refused run is not judged;
 - `start.events` is empty, and every entry is `"NOT RUN"`, with no event, no
   check and no cold boot.
 
 The rules that refuse a run are `payload.source_digest`,
 `payload.staged_digest`, `write.not_enabled`, `write.refused_property` and
-`payload.variant_missing`, and each names its entry. Every receipt has
-exactly one of `refusal` and `verdict`.
+`payload.variant_missing`, and each names its entry and its file. Every
+receipt has exactly one of `refusal` and `verdict`.
 
 ### Reading a receipt
 

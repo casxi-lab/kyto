@@ -869,6 +869,10 @@ fn a_refused_property_is_refused_even_when_writes_are_enabled() {
         refusal.subject.as_str(),
     );
     assert_eq!(found, ("write.refused_property", Some(1), "config.txt"));
+    // The bench was not opened: nothing was staged and no power command was
+    // sent.
+    assert!(env.script.borrow().is_some(), "the bench was opened");
+    assert!(!env.staged(1, "config.txt"));
     assert!(env.world.power_commands().is_empty());
 }
 

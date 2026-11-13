@@ -901,7 +901,10 @@ firmware.bootloader = {{ hash = "1accd665", date = "2026/09/25" }}
         let mut bounded = case(&LINES);
         for bound in ["from", "to"] {
             let on_bound = format!("{{ line = '^READY$', {bound} = \"ready\" }}");
-            bounded.plan = plan(|text| text.replace(forbid, &on_bound));
+            bounded.plan = plan(|text| {
+                assert!(text.contains(forbid), "{forbid}");
+                text.replace(forbid, &on_bound)
+            });
             assert_eq!(
                 bounded.result("marker.forbidden", "1"),
                 Outcome::Pass,

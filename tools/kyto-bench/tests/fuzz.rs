@@ -1882,9 +1882,12 @@ fn shapes<'a>(
 }
 
 /// The places in `bytes` of values that are not documentation values: of
-/// each value that the sensitive lines of `boards` hold, and of every
-/// dotted quad and every MAC address shape, each named by what it is and
-/// its offset, never by its value.
+/// each value that the sensitive lines of `boards` hold, of every dotted
+/// quad and every MAC address shape, and of every run of exactly eight
+/// hexadecimal digits that `serial ` comes before or `/` after, the shape of
+/// the serial number of a Raspberry Pi 5 on its boot mode line and as the
+/// path prefix of its TFTP reads; each named by what it is and its offset,
+/// never by its value.
 fn undocumented(boards: &[Board], bytes: &[u8]) -> Vec<String> {
     let mut found = Vec::new();
     for (span, rule, value) in observe::sensitive_values(boards, bytes) {
@@ -1902,6 +1905,32 @@ fn undocumented(boards: &[Board], bytes: &[u8]) -> Vec<String> {
             found.push(format!("a MAC address at {at}"));
         }
     }
+    for (at, serial) in shapes(bytes, b"", 1, 8..=8, u8::is_ascii_hexdigit) {
+        let named = bytes[..at].ends_with(b"serial ") || bytes[at + 8..].starts_with(b"/");
+        if named && !documentation(serial) {
+            found.push(format!("a serial number at {at}"));
+        }
+    }
+    found
+}
+
+/// Every file below the directory `dir` of `tools/`, at any depth, in order
+/// of their paths, each with its path below `tools/` and its bytes.
+fn every_file(dir: &str) -> Vec<(String, Vec<u8>)> {
+    let (mut found, mut dirs) = (Vec::new(), vec![dir.to_string()]);
+    while let Some(dir) = dirs.pop() {
+        for entry in fs::read_dir(tools().join(&dir)).unwrap() {
+            let entry = entry.unwrap();
+            let path = format!("{dir}/{}", entry.file_name().to_string_lossy());
+            if entry.file_type().unwrap().is_dir() {
+                dirs.push(path);
+            } else {
+                let bytes = fs::read(tools().join(&path)).unwrap();
+                found.push((path, bytes));
+            }
+        }
+    }
+    found.sort();
     found
 }
 
@@ -1909,20 +1938,49 @@ fn undocumented(boards: &[Board], bytes: &[u8]) -> Vec<String> {
 fn the_corpus_and_recordings_hold_documentation_values_only() {
     let synthetic = include_str!("data/synthetic-board.toml");
     let boards = [pi5(), Board::parse(synthetic).unwrap()];
-    let dirs = [
+    // Each file of the corpus, the recordings and the example console
+    // output, at any depth, is a seed of the fuzz tests or the Git
+    // attributes of a directory, and holds documentation values only.
+    let seeds = [
         (format!("{CORPUS}/transcripts"), "bin"),
         (format!("{CORPUS}/plans"), "toml"),
         (RECORDED.to_string(), "bin"),
+        ("examples/captures".to_string(), "bin"),
     ];
+    let known = |path: &str| {
+        let (dir, name) = path.rsplit_once('/').unwrap();
+        let extension = Path::new(name).extension();
+        let seed = |(seeds, wanted): &(String, &str)| {
+            dir == seeds && extension.is_some_and(|found| found == *wanted)
+        };
+        name == ".gitattributes" || seeds.iter().any(seed)
+    };
     let mut checked = Vec::new();
-    for (dir, extension) in &dirs {
-        for (path, bytes) in files(dir, extension) {
+    for dir in [CORPUS, RECORDED, "examples/captures"] {
+        for (path, bytes) in every_file(dir) {
+            assert!(known(&path), "{path} is not a seed of the fuzz tests");
             let found = undocumented(&boards, &bytes);
             assert!(found.is_empty(), "{path}: {found:?}");
             checked.push(path);
         }
     }
-    assert!(checked.len() >= 10, "{checked:?}");
+    assert!(checked.len() >= 15, "{checked:?}");
+    for (dir, extension) in &seeds {
+        for (path, _) in files(dir, extension) {
+            assert!(checked.contains(&path), "{path}");
+        }
+    }
+    // A file of another extension, or in another directory, is none.
+    let others = [
+        format!("{CORPUS}/transcripts/boot.txt"),
+        format!("{CORPUS}/transcripts/more/boot.bin"),
+        format!("{CORPUS}/plans/plan.bin"),
+        format!("{CORPUS}/boot.bin"),
+        format!("{RECORDED}/boot.raw"),
+    ];
+    for path in others {
+        assert!(!known(&path), "{path}");
+    }
     // The recordings hold documentation values of each kind, which the
     // gate finds and lets through; a value one step outside each is found.
     let recorded = files(RECORDED, "bin");
@@ -1958,6 +2016,7 @@ fn the_corpus_and_recordings_hold_documentation_values_only() {
             b"CSD: c5d0c5d0c5d0c5d0c5d0c5d0c5d0c5d1",
         ),
         (b"PARTUUID=5ca1ab1e", b"PARTUUID=5ca1ab1f"),
+        (b"tftp-rt/config.txt", b"fedc9876/config.txt"),
     ];
     for (from, to) in outside {
         let changed = replace(&bytes, from, to);

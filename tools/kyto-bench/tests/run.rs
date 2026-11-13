@@ -418,6 +418,25 @@ fn recorded_plan(dir: &Path, end: &str) -> PathBuf {
     path
 }
 
+/// Asserts that each of `values` occurs in the console output of the first
+/// cold boot that the receipt of `ran` holds, and that the public version
+/// of the receipt shows none of them, neither in that console output nor
+/// in any string.
+#[track_caller]
+fn assert_hidden(ran: &Ran, values: &[&str]) {
+    let receipt = ran.receipt();
+    let held = &receipt.entries[0].cold_boots[0].serial.bytes_base64.0;
+    let text = fs::read_to_string(ran.out.join("receipt.public.json")).unwrap();
+    let stream = "/entries/0/cold_boots/0/serial/bytes_base64";
+    let shown = ran.public().receipt.pointer(stream).unwrap().clone();
+    let shown = Base64::deserialize(shown).unwrap().0;
+    for value in values {
+        assert!(occurrences(held, value) > 0, "{value}");
+        assert_eq!(occurrences(&shown, value), 0, "{value}");
+        assert!(!text.contains(value), "{value}");
+    }
+}
+
 fn position(events: &[Event], kind: impl Fn(&EventKind) -> bool) -> Option<usize> {
     events.iter().position(|event| kind(&event.event))
 }
@@ -1694,6 +1713,10 @@ fn a_recorded_boot_without_the_network_marker_fails() {
     let fail = Verdict::Fail;
     assert_eq!(verdicts(&receipt), [(fail, vec![fail])]);
     assert_eq!(receipt.verdict, Some(fail));
+    // The public version does not show the board's serial number, which the
+    // recording gives twice.
+    assert_eq!(occurrences(&bytes, "a1b2c3d4"), 2);
+    assert_hidden(&ran, &["a1b2c3d4"]);
 }
 
 #[test]
@@ -1721,6 +1744,10 @@ fn a_recorded_fall_back_to_the_sd_card_fails() {
     assert_eq!(ran.status, cli::FAIL);
     let receipt = ran.receipt();
     let cold_boot = &receipt.entries[0].cold_boots[0];
+    // The cold boot holds the recording from its start to the end of the
+    // entry.
+    let held = &cold_boot.serial.bytes_base64.0;
+    assert!(bytes.starts_with(held), "a prefix");
     assert_eq!(end(&cold_boot.events), Some(EndReason::EndCondition));
     assert_eq!(failed(cold_boot), ["boot.fallback"]);
     // The failure names the SD card's boot mode line, the last one.
@@ -1735,16 +1762,20 @@ fn a_recorded_fall_back_to_the_sd_card_fails() {
     let fail = Verdict::Fail;
     assert_eq!(verdicts(&receipt), [(fail, vec![fail])]);
     assert_eq!(receipt.verdict, Some(fail));
-    // The public version shows neither the server address nor the prefix.
-    let text = fs::read_to_string(ran.out.join("receipt.public.json")).unwrap();
-    let stream = "/entries/0/cold_boots/0/serial/bytes_base64";
-    let shown = ran.public().receipt.pointer(stream).unwrap().clone();
-    let shown = Base64::deserialize(shown).unwrap().0;
-    for value in ["198.51.100.13", "tftp-rt/"] {
-        assert!(occurrences(&bytes, value) > 0, "{value}");
-        assert_eq!(occurrences(&shown, value), 0, "{value}");
-        assert!(!text.contains(value), "{value}");
-    }
+    // The public version shows none of the values that the recording holds
+    // for the board's serial number, the MAC and IP addresses and the SD
+    // card identifier, nor the path prefix of the instance.
+    let hidden = [
+        "a1b2c3d4",
+        "00:00:5e:00:53:b1",
+        "00:00:5e:00:53:b2",
+        "198.51.100.11",
+        "198.51.100.12",
+        "198.51.100.13",
+        "c1d0c1d0c1d0c1d0c1d0c1d0c1d0c1d0",
+        "tftp-rt/",
+    ];
+    assert_hidden(&ran, &hidden);
 }
 
 #[test]

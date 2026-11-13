@@ -848,8 +848,11 @@ firmware.bootloader = {{ hash = "1accd665", date = "2026/09/25" }}
     #[test]
     fn a_firmware_version_other_than_expected_fails() {
         // The entry expects the bootloader release in the EEPROM and the
-        // BL31 version, whose line comes before the start of the operating
-        // system; the cold boot shows both as expected.
+        // BL31 version, and the rule reads a version line anywhere in the
+        // cold boot. The BL31 line goes before the line of the start of the
+        // operating system, so that the segment of the entry is unchanged,
+        // although a Raspberry Pi 5 recorded booting from its SD card wrote
+        // it after that line. The cold boot shows both as expected.
         const BL31: &str = "NOTICE:  BL31: v2.6(release):v2.6-241-g36761b276";
         let bl31 = "firmware.bl31 = { version = \"v2.6(release):v2.6-241-g36761b276\" }\n";
         let expecting = |edit: &dyn Fn(String) -> String| {

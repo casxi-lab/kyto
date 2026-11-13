@@ -1427,9 +1427,10 @@ observations, checks and verdicts follow from the record:
 
 ## Public versions
 
-A public version holds a receipt with every value that identifies the board,
-the network or the bench replaced by `#`, byte for byte, and lists what was
-replaced, so that the record of a run can be published from a bench. The
+A public version holds a receipt with the values that identify the board, the
+network or the bench, as its board description and instance configuration
+give them, replaced by `#`, byte for byte, and lists what was replaced, so
+that the record of a run can be published from a bench. The
 library makes it from the receipt, with the sensitive lines of the board
 description that the receipt records and of the description of the same `id`
 built into the tool, and the
@@ -1439,6 +1440,18 @@ It is written in the form of a receipt and
 [read as strictly](#reading-a-public-version). A public version is for
 reading: where bytes were replaced it no longer shows what the board sent,
 and the receipt stays the record of the run.
+
+The sensitive lines of [the Raspberry Pi 5](#the-raspberry-pi-5) are forms
+of lines of its firmware. A value that only the software that the firmware
+starts prints, such as the host name of an operating system, an address that
+its DHCP client was given or an IPv6 address formed from the board's MAC
+address, is replaced only where its bytes equal a value to hide: a later
+line that prints the MAC address with colons has it replaced, but an IPv6
+interface identifier formed from it stays. The leak check searches for the same values, so it does not refuse
+such a public version. An entry whose cold boot can start an operating
+system that prints such values, such as one on the board's SD card that a
+network boot falls back to, can keep them out of its receipt by ending at
+`board.os_start`, the line of the firmware that starts it.
 
 When the cold boot of a receipt received these lines, each ended by CR LF,
 on a bench whose TFTP server is `192.0.2.10` and whose path prefix is empty:

@@ -237,8 +237,11 @@ it.
 | [VERD-R06](requirements.md#verd-r06) | `a_cold_boot_ends_at_its_deadline_whatever_the_console_reports` | `tools/kyto-bench/tests/run.rs` | negative |
 | [VERD-R06](requirements.md#verd-r06) | `a_deadline_that_the_console_reports_early_ends_no_cold_boot` | `tools/kyto-bench/tests/run.rs` | positive |
 | [VERD-R07](requirements.md#verd-r07) | `firmware_versions_and_segments_are_those_of_the_entry` | `tools/kyto-bench-core/src/verdict.rs` | negative |
+| [VERD-R07](requirements.md#verd-r07) | `a_firmware_version_other_than_expected_fails` | `tools/kyto-bench-core/src/verdict.rs` | negative |
 | [VERD-R07](requirements.md#verd-r07) | `the_checks_of_the_example_runs_are_fixed` | `tools/kyto-bench/tests/run.rs` | positive |
-| [VERD-R08](requirements.md#verd-r08) | `markers_keep_their_counts_order_and_bounds` | `tools/kyto-bench-core/src/verdict.rs` | negative |
+| [VERD-R08](requirements.md#verd-r08) | `a_marker_missing_or_counted_wrong_fails` | `tools/kyto-bench-core/src/verdict.rs` | negative |
+| [VERD-R08](requirements.md#verd-r08) | `markers_out_of_order_fail` | `tools/kyto-bench-core/src/verdict.rs` | negative |
+| [VERD-R08](requirements.md#verd-r08) | `a_forbidden_line_fails` | `tools/kyto-bench-core/src/verdict.rs` | negative |
 | [VERD-R08](requirements.md#verd-r08) | `markers_before_the_first_send_end_before_its_first_byte` | `tools/kyto-bench-core/src/verdict.rs` | negative |
 | [VERD-R08](requirements.md#verd-r08) | `the_checks_of_the_example_runs_are_fixed` | `tools/kyto-bench/tests/run.rs` | negative |
 | [VERD-R09](requirements.md#verd-r09) | `a_step_needs_its_trigger_its_send_and_a_response_in_time` | `tools/kyto-bench-core/src/verdict.rs` | negative |
@@ -318,8 +321,6 @@ it.
 | --- | --- | --- |
 | Fuzz tests of the parsing of console transcripts, run plans and receipts | No fuzz test exists | Fuzz tests in the `tools` workspace with a fixed seed and a number of cases written as a constant, run by the `test` step of `cargo xtask check` |
 | `VERD-R05` on console output recorded from a real board | Every test reads console output written for the examples | Console output recorded from a Raspberry Pi 5, one without the network boot mode line and one in which the firmware falls back to the SD card, with addresses, MAC addresses and serial numbers replaced by documentation values, each replayed by a run on simulated devices |
-| `VERD-R07` for BL31 | No test gives a BL31 version other than the expected one | A negative case of a BL31 version line that differs from the run plan |
-| `VERD-R08` below the expected count | No test asserts that `marker.count` fails when a marker has fewer lines than its entry expects | A negative case that asserts `marker.count` fails for a marker below its minimum |
 | `VERD-R10` on bytes read back | No test gives a receipt with a lone CR or LF and reads it back, or a segment digested over line ends that were changed | Negative cases of a receipt that keeps bytes that are not UTF-8 and lone CR and LF bytes as read, and of a segment whose digest was taken over changed line ends |
 | `PROV-R07` on a run | Only `evidence.simulated` is shown on a run | A run whose tool commit is unknown and whose working tree changed, giving a receipt that is not eligible with both reasons |
 | `PROV-R08` across builds | No test builds the tool, changes its working tree and builds it again. That every build asks Git again rests on Cargo running the build script on every build while a path that it watches does not exist | A test that builds the tool in a Git checkout, then changes a tracked file, adds an untracked file, edits a tracked file marked assume-unchanged or skip-worktree, or adds a file that only a local exclude hides, builds it again after each change and reads `tool.clean` as `false` |

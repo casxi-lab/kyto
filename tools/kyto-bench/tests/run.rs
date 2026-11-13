@@ -19,8 +19,9 @@ use kyto_bench::device::{
     Clock, Console, Delivery, DeviceError, Meter, Nanos, PowerState, PowerSwitch, Received, Role,
 };
 use kyto_bench::env::{self, Bench, Env};
+use kyto_bench::provenance::ToolRevision;
 use kyto_bench::sim::{
-    Files, Responder, Script, ScriptProvider, SimSupplyMeter, SimTftp, SimWorld,
+    Files, ON_MICRO, Responder, Script, ScriptProvider, SimSupplyMeter, SimTftp, SimWorld, replay,
 };
 use kyto_bench::{cli, output};
 use kyto_bench_core::board::{Board, RASPBERRY_PI_5};
@@ -183,11 +184,28 @@ impl PowerSwitch for Failing {
     }
 }
 
+/// A power switch whose command of the number given, from 1, is sent while
+/// the contacts of the relay of `world` stick, so that the supply does not
+/// follow it.
+struct Sticking(Box<dyn PowerSwitch>, SimWorld, u32, u32);
+
+impl PowerSwitch for Sticking {
+    fn command(&mut self, state: PowerState) -> Result<Nanos, DeviceError> {
+        self.2 += 1;
+        self.1.knobs().relay.stuck = self.2 == self.3;
+        let sent = self.0.command(state);
+        self.1.knobs().relay.stuck = false;
+        sent
+    }
+}
+
 /// Surroundings whose bench is a simulated device of each role on `world`,
 /// with a [`Deaf`] console when `deaf` is set, an [`Early`] one when `early`
-/// is, a [`Panicking`] one when `panics` is, and a [`Failing`] switch when
-/// `failing` gives a command. When the
-/// bench is opened, a directory is made at `block`, if it is given.
+/// is, a [`Panicking`] one when `panics` is, a [`Failing`] switch when
+/// `failing` gives a command and a [`Sticking`] one when `sticking` does.
+/// When the bench is opened, a directory is made at `block`, if it is
+/// given. The revision of the tool is `tool`, when it is given, in place of
+/// the one that the build embedded.
 struct TestEnv {
     world: SimWorld,
     script: RefCell<Option<ScriptProvider>>,
@@ -196,7 +214,9 @@ struct TestEnv {
     early: bool,
     panics: bool,
     failing: Option<u32>,
+    sticking: Option<u32>,
     block: Option<PathBuf>,
+    tool: Option<ToolRevision>,
 }
 
 impl TestEnv {
@@ -211,7 +231,9 @@ impl TestEnv {
             early: false,
             panics: false,
             failing: None,
+            sticking: None,
             block: None,
+            tool: None,
         }
     }
 
@@ -245,6 +267,9 @@ impl Env for TestEnv {
         if let Some(command) = self.failing {
             bench.power = Box::new(Failing(bench.power, 0, command));
         }
+        if let Some(command) = self.sticking {
+            bench.power = Box::new(Sticking(bench.power, self.world.clone(), 0, command));
+        }
         if let Some(block) = &self.block {
             fs::create_dir(block).unwrap();
         }
@@ -253,6 +278,10 @@ impl Env for TestEnv {
 
     fn boards(&self) -> &[&'static str] {
         &self.boards
+    }
+
+    fn tool(&self) -> ToolRevision {
+        self.tool.clone().unwrap_or_else(ToolRevision::built)
     }
 }
 
@@ -351,6 +380,63 @@ fn eeprom_plan(dir: &Path, digest: &Sha256, writes: &str) -> PathBuf {
     })
 }
 
+/// The example plan with a third entry, written into `dir`: a copy of the
+/// first, `firmware-again`, of one cold boot.
+fn three_entries(dir: &Path) -> PathBuf {
+    plan_with(dir, |text| {
+        let start = text.find("[[entries]]").unwrap();
+        let end = text.find("\n# One cold boot").unwrap();
+        let first = text[start..end].replacen("\"firmware-only\"", "\"firmware-again\"", 1);
+        let third = first.replacen("cold_boots = 3", "cold_boots = 1", 1);
+        format!("{text}\n{third}")
+    })
+}
+
+/// The console output recorded from a Raspberry Pi 5 in the file `name` of
+/// `tests/data/recorded/`.
+fn recorded(name: &str) -> Vec<u8> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/recorded");
+    fs::read(dir.join(name)).unwrap()
+}
+
+/// A plan of one cold boot of the example firmware-only payload that ends
+/// with `end`, sends nothing and expects the bootloader release of the
+/// recordings, written into `dir`.
+fn recorded_plan(dir: &Path, end: &str) -> PathBuf {
+    let example = String::from_utf8(example("run-plan.toml")).unwrap();
+    let from = example.find("payload = [").unwrap();
+    let to = from + example[from..].find("\n]\n").unwrap() + 2;
+    let plan = format!(
+        "format = \"kyto-bench run plan\"\nformat_version = 1\nboard = \"raspberry-pi-5\"\n\n\
+         [[entries]]\nname = \"recorded\"\npayload_dir = \"firmware-only\"\n{}\n\
+         cold_boots = 1\nboot_timeout_ms = 60000\nend = {end}\nsends = false\n\n\
+         [entries.firmware.bootloader]\nhash = \"1accd665\"\ndate = \"2026/09/25\"\n",
+        &example[from..to]
+    );
+    let path = dir.join("plan.toml");
+    fs::write(&path, plan).unwrap();
+    path
+}
+
+/// Asserts that each of `values` occurs in the console output of the first
+/// cold boot that the receipt of `ran` holds, and that the public version
+/// of the receipt shows none of them, neither in that console output nor
+/// in any string.
+#[track_caller]
+fn assert_hidden(ran: &Ran, values: &[&str]) {
+    let receipt = ran.receipt();
+    let held = &receipt.entries[0].cold_boots[0].serial.bytes_base64.0;
+    let text = fs::read_to_string(ran.out.join("receipt.public.json")).unwrap();
+    let stream = "/entries/0/cold_boots/0/serial/bytes_base64";
+    let shown = ran.public().receipt.pointer(stream).unwrap().clone();
+    let shown = Base64::deserialize(shown).unwrap().0;
+    for value in values {
+        assert!(occurrences(held, value) > 0, "{value}");
+        assert_eq!(occurrences(&shown, value), 0, "{value}");
+        assert!(!text.contains(value), "{value}");
+    }
+}
+
 fn position(events: &[Event], kind: impl Fn(&EventKind) -> bool) -> Option<usize> {
     events.iter().position(|event| kind(&event.event))
 }
@@ -424,6 +510,49 @@ fn failed(cold_boot: &ColdBootRecord) -> Vec<&str> {
         .iter()
         .filter(|c| c.result == Outcome::Fail);
     failed.map(|check| check.rule.as_str()).collect()
+}
+
+/// Asserts that the run switched the supply off once `cold_boot` ended and
+/// that a reading of the supply at or below the off threshold confirmed it,
+/// with the power off check passing; the time it was confirmed.
+#[track_caller]
+fn assert_confirmed_off(receipt: &Receipt, cold_boot: &ColdBootRecord) -> u64 {
+    let confirmation = &receipt.inputs.instance.parameters.confirmation;
+    let events = &cold_boot.events;
+    let end = position(events, |kind| matches!(kind, EventKind::End { .. })).unwrap();
+    let off = position(events, power(Command::Off)).expect("a power off");
+    assert_eq!((off, events[off].at_ns), (end + 1, events[end].at_ns));
+    let at = power::confirmed(confirmation, events, off).expect("readings confirm the off");
+    let reading = events[off..].iter().find_map(|event| match event.event {
+        EventKind::Reading { micro, .. } if event.at_ns == at => Some(micro),
+        _ => None,
+    });
+    let threshold = confirmation.off_at_most_micro;
+    assert!(
+        reading.is_some_and(|micro| micro <= threshold),
+        "{reading:?}"
+    );
+    let check = cold_boot
+        .checks
+        .iter()
+        .find(|c| (c.rule.as_str(), c.subject.as_str()) == ("power.off_unconfirmed", "off"));
+    assert_eq!(check.map(|c| c.result), Some(Outcome::Pass));
+    at
+}
+
+/// The verdicts of the entries of `receipt`, each with those of its cold
+/// boots.
+fn verdicts(receipt: &Receipt) -> Vec<(Verdict, Vec<Verdict>)> {
+    let verdicts = receipt.entries.iter().map(|entry| {
+        let boots = entry.cold_boots.iter().map(|c| c.verdict);
+        (entry.verdict, boots.collect())
+    });
+    verdicts.collect()
+}
+
+/// The states of the power commands that the relay of `env` sent.
+fn commands(env: &TestEnv) -> Vec<PowerState> {
+    env.world.power_commands().iter().map(|c| c.1).collect()
 }
 
 /// The steps that the cold boot of `events` sent, with their bytes.
@@ -1089,7 +1218,8 @@ fn an_unconfirmed_power_on_ends_at_its_timeout_and_is_switched_off() {
     // boot, which readings confirm, so the entry sends no second one.
     let env = TestEnv::example();
     env.world.knobs().relay.stuck = true;
-    let receipt = run_example("on-timeout", &env).receipt();
+    let ran = run_example("on-timeout", &env);
+    let receipt = ran.receipt();
     let first = &receipt.entries[0];
     let events = &first.cold_boots[0].events;
     let on = position(events, power(Command::On)).unwrap();
@@ -1104,6 +1234,20 @@ fn an_unconfirmed_power_on_ends_at_its_timeout_and_is_switched_off() {
     let confirmation = &receipt.inputs.instance.parameters.confirmation;
     assert!(power::off_confirmed_at(confirmation, events).is_some());
     assert!(first.events.iter().all(|e| power::command(e).is_none()));
+    // A fault of the bench: the cold boot, its entry and the run are BENCH
+    // FAULT with the exit status 3, and no verdict is FAIL, although the
+    // checks of the board, which never came on, are made and some fail.
+    assert_eq!(ran.status, cli::BENCH_FAULT);
+    let cold_boot = &first.cold_boots[0];
+    let rules = failed(cold_boot);
+    assert!(rules.contains(&"boot.end"), "{rules:?}");
+    let fault = Verdict::BenchFault;
+    let found = (cold_boot.verdict, first.verdict, receipt.verdict);
+    assert_eq!(found, (fault, fault, Some(fault)));
+    let all = verdicts(&receipt)
+        .into_iter()
+        .flat_map(|(entry, boots)| std::iter::once(entry).chain(boots));
+    assert!(all.chain(receipt.verdict).all(|v| v != Verdict::Fail));
 }
 
 #[test]
@@ -1487,4 +1631,371 @@ fn a_cold_boot_ends_at_its_deadline_whatever_the_console_reports() {
     assert!(t.end <= t.off && t.off < t.off_confirmed);
     let verdicts: Vec<Verdict> = receipt.entries.iter().map(|e| e.verdict).collect();
     assert_eq!(verdicts, [Verdict::Fail, Verdict::Pass]);
+}
+
+#[test]
+fn a_run_with_an_unknown_commit_or_a_changed_tree_is_not_evidence() {
+    // The revisions that a build gives when Git cannot tell the commit, or
+    // when the working tree had changes or Git cannot tell whether it had.
+    let commit = "0123456789abcdef0123456789abcdef01234567";
+    let (unknown, changed) = ("evidence.commit_unknown", "evidence.tree_changed");
+    let cases: [(Option<&str>, Option<bool>, &[&str]); 5] = [
+        (None, Some(false), &[unknown, changed]),
+        (None, Some(true), &[unknown]),
+        (Some(commit), Some(false), &[changed]),
+        (Some(commit), None, &[changed]),
+        (Some(commit), Some(true), &[]),
+    ];
+    for (number, (commit, clean, reasons)) in cases.into_iter().enumerate() {
+        let mut env = TestEnv::example();
+        let tool = ToolRevision {
+            commit: commit.map(str::to_string),
+            clean,
+        };
+        env.tool = Some(tool);
+        let ran = run_example(&format!("not-evidence-{number}"), &env);
+        // The revision changes no verdict.
+        assert_eq!(ran.status, cli::PASS, "{commit:?} {clean:?}");
+        let receipt = ran.receipt();
+        assert_eq!(
+            (receipt.tool.commit.as_deref(), receipt.tool.clean),
+            (commit, clean)
+        );
+        // Each reason that applies, with what it found, then that of the
+        // simulated devices, which every run here has.
+        let found: Vec<&str> = receipt
+            .evidence
+            .reasons
+            .iter()
+            .map(|r| r.rule.as_str())
+            .collect();
+        assert_eq!(found, [reasons, &["evidence.simulated"]].concat());
+        assert!(!receipt.evidence.eligible);
+        let public = ran.public();
+        let eligible = public.receipt.pointer("/evidence/eligible");
+        assert_eq!(eligible.and_then(|value| value.as_bool()), Some(false));
+        if number == 0 {
+            let details: Vec<&str> = receipt
+                .evidence
+                .reasons
+                .iter()
+                .map(|r| r.detail.as_str())
+                .collect();
+            let expected = [
+                "the commit of the tool is unknown",
+                "the working tree of the tool had changes",
+                "the run used simulated devices",
+            ];
+            assert_eq!(details, expected);
+        }
+    }
+}
+
+#[test]
+fn a_recorded_boot_without_the_network_marker_fails() {
+    // A cold boot of a Raspberry Pi 5, recorded up to the line before the
+    // firmware's network boot mode line, in an entry that ends at its boot
+    // timeout.
+    let dir = scratch("recorded-no-network");
+    let plan = recorded_plan(&dir, "\"timeout\"");
+    let bytes = recorded("no-network-boot.bin");
+    let env = TestEnv::new(replay(vec![bytes.clone()]));
+    let ran = run(&dir, &plan, &examples().join("payload"), &env);
+    assert_eq!(ran.status, cli::FAIL);
+    let receipt = ran.receipt();
+    let cold_boot = &receipt.entries[0].cold_boots[0];
+    assert_eq!(cold_boot.serial.bytes_base64.0, bytes, "replayed whole");
+    assert_eq!(end(&cold_boot.events), Some(EndReason::BootTimeout));
+    assert_eq!(failed(cold_boot), ["boot.network"]);
+    let network = cold_boot.checks.iter().find(|c| c.rule == "boot.network");
+    let detail = network.and_then(|c| c.detail.as_deref());
+    assert_eq!(detail, Some("no network boot mode line"));
+    let fail = Verdict::Fail;
+    assert_eq!(verdicts(&receipt), [(fail, vec![fail])]);
+    assert_eq!(receipt.verdict, Some(fail));
+    // The public version does not show the board's serial number, which the
+    // recording gives twice.
+    assert_eq!(occurrences(&bytes, "a1b2c3d4"), 2);
+    assert_hidden(&ran, &["a1b2c3d4"]);
+}
+
+#[test]
+fn a_recorded_fall_back_to_the_sd_card_fails() {
+    // A boot of a Raspberry Pi 5, recorded from the start of its bootloader
+    // after a reset: it boots from the network, gets no answer to its TFTP
+    // requests, falls back to the SD card and starts the operating system
+    // from there, which ends the entry. The instance has the TFTP server
+    // address and path prefix of the recording.
+    let dir = scratch("recorded-fallback");
+    let plan = recorded_plan(&dir, "{ marker = \"board.os_start\" }");
+    let instance = String::from_utf8(example("instance.toml")).unwrap();
+    let tftp = "server_address = \"192.0.2.10\"\npath_prefix = \"\"\n";
+    assert!(instance.contains(tftp));
+    let recorded_tftp = "server_address = \"198.51.100.13\"\npath_prefix = \"tftp-rt/\"\n";
+    fs::write(
+        dir.join("instance.toml"),
+        instance.replace(tftp, recorded_tftp),
+    )
+    .unwrap();
+    let bytes = recorded("fallback-to-sd.bin");
+    let env = TestEnv::new(replay(vec![bytes.clone()]));
+    let payloads = examples().join("payload");
+    let ran = run_with(&dir, &plan, &dir.join("instance.toml"), &payloads, &env);
+    assert_eq!(ran.status, cli::FAIL);
+    let receipt = ran.receipt();
+    let cold_boot = &receipt.entries[0].cold_boots[0];
+    // The cold boot holds the recording from its start to the end of the
+    // entry.
+    let held = &cold_boot.serial.bytes_base64.0;
+    assert!(bytes.starts_with(held), "a prefix");
+    assert_eq!(end(&cold_boot.events), Some(EndReason::EndCondition));
+    assert_eq!(failed(cold_boot), ["boot.fallback"]);
+    // The failure names the SD card's boot mode line, the last one.
+    let sd = b" 76.99 Boot mode: SD (01) order f\r\n";
+    let at = bytes.windows(sd.len()).position(|w| w == sd).unwrap();
+    let fallback = cold_boot.checks.iter().find(|c| c.rule == "boot.fallback");
+    let detail = fallback.and_then(|c| c.detail.clone());
+    assert_eq!(detail, Some(format!("the line at {at}")));
+    // Every line that names a TFTP server names that of the instance.
+    let servers = &cold_boot.observations.tftp.servers;
+    assert!(!servers.is_empty() && servers.iter().all(|server| server.instance));
+    let fail = Verdict::Fail;
+    assert_eq!(verdicts(&receipt), [(fail, vec![fail])]);
+    assert_eq!(receipt.verdict, Some(fail));
+    // The public version shows none of the values that the recording holds
+    // for the board's serial number, the MAC and IP addresses, the SD card's
+    // identifier and card-specific data and the partition UUID of the root
+    // file system, nor the path prefix of the instance.
+    let hidden = [
+        "a1b2c3d4",
+        "00:00:5e:00:53:b1",
+        "00:00:5e:00:53:b2",
+        "198.51.100.11",
+        "198.51.100.12",
+        "198.51.100.13",
+        "c1d0c1d0c1d0c1d0c1d0c1d0c1d0c1d0",
+        "c5d0c5d0c5d0c5d0c5d0c5d0c5d0c5d0",
+        "5ca1ab1e",
+        "tftp-rt/",
+    ];
+    assert_hidden(&ran, &hidden);
+}
+
+#[test]
+fn a_boot_timeout_fails_and_the_supply_is_confirmed_off() {
+    // The board writes nothing after the line before the end marker of the
+    // first cold boot, so the cold boot runs to its boot timeout; the order
+    // of the entry leaves the end marker out, so `boot.end` alone fails.
+    let dir = scratch("boot-timeout");
+    let plan = plan_with(&dir, |plan| plan.replacen(", \"started\"] }]", "] }]", 1));
+    let env = TestEnv::new(script(Some(1), STATS));
+    let ran = run(&dir, &plan, &examples().join("payload"), &env);
+    assert_eq!(ran.status, cli::FAIL);
+    let receipt = ran.receipt();
+    let cold_boot = &receipt.entries[0].cold_boots[0];
+    assert_eq!(end(&cold_boot.events), Some(EndReason::BootTimeout));
+    let t = times(&receipt, &cold_boot.events);
+    assert_eq!(
+        t.end.0,
+        t.on.0 + 60_000 * MS,
+        "the boot timeout of the plan"
+    );
+    assert_eq!(failed(cold_boot), ["boot.end"]);
+    // The supply was switched off at the end and a reading confirmed it,
+    // before the next entry ran.
+    let off_at = assert_confirmed_off(&receipt, cold_boot);
+    assert!(receipt.entries[1].events[0].at_ns >= off_at);
+    let (pass, fail) = (Verdict::Pass, Verdict::Fail);
+    let expected = [(fail, vec![fail]), (pass, vec![pass])];
+    assert_eq!(verdicts(&receipt), expected);
+    assert_eq!(receipt.verdict, Some(fail));
+    let on_off = [PowerState::On, PowerState::Off];
+    assert_eq!(
+        commands(&env),
+        [&[PowerState::Off][..], &on_off, &on_off].concat()
+    );
+}
+
+#[test]
+fn a_missing_boot_marker_fails_and_the_supply_is_confirmed_off() {
+    // The first cold boot shows no network boot mode line, the line of the
+    // board's network boot marker, and still shows its end marker.
+    let network = "Boot mode: NETWORK (02)";
+    let mut example = script(None, STATS);
+    let env = TestEnv::new(Box::new(move |power_on, files: &Files| {
+        let mut script = example(power_on, files);
+        if power_on == 1 {
+            let lines = script.chunks.len();
+            script
+                .chunks
+                .retain(|(_, line)| occurrences(line, network) == 0);
+            assert_eq!(script.chunks.len(), lines - 1);
+        }
+        script
+    }));
+    let ran = run_example("missing-boot-marker", &env);
+    assert_eq!(ran.status, cli::FAIL);
+    let receipt = ran.receipt();
+    let cold_boot = &receipt.entries[0].cold_boots[0];
+    assert_eq!(end(&cold_boot.events), Some(EndReason::EndCondition));
+    let failed: Vec<(&str, &str)> = cold_boot
+        .checks
+        .iter()
+        .filter(|c| c.result != Outcome::Pass)
+        .map(|c| (c.rule.as_str(), c.subject.as_str()))
+        .collect();
+    let order = "board.bootloader board.network_boot board.os_start started";
+    let expected = [
+        ("boot.network", "board.network_boot"),
+        ("marker.count", "board.network_boot"),
+        ("marker.order", order),
+    ];
+    assert_eq!(failed, expected);
+    // The supply was switched off once the end marker came and a reading
+    // confirmed it, before the next entry ran.
+    let off_at = assert_confirmed_off(&receipt, cold_boot);
+    assert!(receipt.entries[1].events[0].at_ns >= off_at);
+    let (pass, fail) = (Verdict::Pass, Verdict::Fail);
+    let expected = [(fail, vec![fail]), (pass, vec![pass])];
+    assert_eq!(verdicts(&receipt), expected);
+    assert_eq!(receipt.verdict, Some(fail));
+    let on_off = [PowerState::On, PowerState::Off];
+    assert_eq!(
+        commands(&env),
+        [&[PowerState::Off][..], &on_off, &on_off].concat()
+    );
+}
+
+#[test]
+fn an_unconfirmed_power_off_after_a_cold_boot_is_a_bench_fault() {
+    // The relay's contacts stick at the third command, the power off after
+    // the first cold boot, which showed what its entry expects: the supply
+    // stays on, and a reading every 100 ms up to the 3 s timeout of the
+    // example configuration reads it on.
+    let mut env = TestEnv::example();
+    env.sticking = Some(3);
+    let ran = run_example("off-unconfirmed", &env);
+    assert_eq!(ran.status, cli::BENCH_FAULT);
+    let receipt = ran.receipt();
+    let first = &receipt.entries[0];
+    let cold_boot = &first.cold_boots[0];
+    let events = &cold_boot.events;
+    let off = position(events, power(Command::Off)).unwrap();
+    let sent = events[off].at_ns;
+    let readings: Vec<(u64, i64)> = events[off..]
+        .iter()
+        .filter_map(|event| match event.event {
+            EventKind::Reading { micro, .. } => Some((event.at_ns - sent, micro)),
+            _ => None,
+        })
+        .collect();
+    let polls: Vec<(u64, i64)> = (1..=30).map(|poll| (poll * 100 * MS, ON_MICRO)).collect();
+    assert_eq!(readings, polls);
+    // That power off is the only check that does not pass, and a fault: the
+    // cold boot, its entry and the run are BENCH FAULT, never PASS, and the
+    // second entry is NOT RUN.
+    let other: Vec<(&str, &str, Outcome)> = cold_boot
+        .checks
+        .iter()
+        .filter(|c| c.result != Outcome::Pass)
+        .map(|c| (c.rule.as_str(), c.subject.as_str(), c.result))
+        .collect();
+    assert_eq!(other, [("power.off_unconfirmed", "off", Outcome::Fault)]);
+    let (fault, not_run) = (Verdict::BenchFault, Verdict::NotRun);
+    assert_eq!(
+        verdicts(&receipt),
+        [(fault, vec![fault]), (not_run, vec![])]
+    );
+    assert_eq!(receipt.verdict, Some(fault));
+    // The run switched the supply off once more, recorded in the entry,
+    // and readings confirmed it.
+    let confirmation = &receipt.inputs.instance.parameters.confirmation;
+    let again: Vec<Command> = first.events.iter().filter_map(power::command).collect();
+    assert_eq!(again, [Command::Off]);
+    assert!(power::off_confirmed_at(confirmation, &first.events).is_some());
+    let on_off_off = [PowerState::On, PowerState::Off, PowerState::Off];
+    assert_eq!(
+        commands(&env),
+        [&[PowerState::Off][..], &on_off_off].concat()
+    );
+    let mut meter = SimSupplyMeter::new(&env.world);
+    assert_eq!(meter.sample().unwrap().micro, 0);
+}
+
+#[test]
+fn a_failed_cold_boot_ends_its_entry_and_the_next_entry_runs() {
+    // A plan of three entries, whose first one's second cold boot of three
+    // does not show its end marker.
+    let dir = scratch("failed-then-next");
+    let plan = three_entries(&dir);
+    let env = TestEnv::new(script(Some(2), STATS));
+    let ran = run(&dir, &plan, &examples().join("payload"), &env);
+    assert_eq!(ran.status, cli::FAIL);
+    let receipt = ran.receipt();
+    let (pass, fail) = (Verdict::Pass, Verdict::Fail);
+    let expected = [
+        (fail, vec![pass, fail]),
+        (pass, vec![pass]),
+        (pass, vec![pass]),
+    ];
+    assert_eq!(verdicts(&receipt), expected);
+    assert_eq!(receipt.verdict, Some(fail));
+    // The failed cold boot was switched off and confirmed off; then the
+    // next entry's payload was served, and its cold boot started once the
+    // off interval had passed since that confirmation.
+    let off_at = assert_confirmed_off(&receipt, &receipt.entries[0].cold_boots[1]);
+    let next = &receipt.entries[1];
+    let switch = position(&next.events, |k| matches!(k, EventKind::Switch { .. }));
+    assert!(next.events[switch.unwrap()].at_ns >= off_at);
+    let t = times(&receipt, &next.cold_boots[0].events);
+    assert_eq!(t.ready.0, off_at + 5000 * MS);
+    let on_off = [PowerState::On, PowerState::Off];
+    let mut sent = vec![PowerState::Off];
+    for _ in 0..4 {
+        sent.extend(on_off);
+    }
+    assert_eq!(
+        commands(&env),
+        sent,
+        "the off at the start, two cold boots of the first entry and one of each other"
+    );
+}
+
+#[test]
+fn a_bench_fault_ends_the_run_and_the_rest_is_not_run() {
+    // A plan of three entries, whose first one's second power on is not
+    // confirmed: the relay's contacts stick at the fourth command.
+    let dir = scratch("fault-ends-run");
+    let plan = three_entries(&dir);
+    let mut env = TestEnv::example();
+    env.sticking = Some(4);
+    let ran = run(&dir, &plan, &examples().join("payload"), &env);
+    assert_eq!(ran.status, cli::BENCH_FAULT);
+    let receipt = ran.receipt();
+    let (pass, fault, not_run) = (Verdict::Pass, Verdict::BenchFault, Verdict::NotRun);
+    let expected = [
+        (fault, vec![pass, fault]),
+        (not_run, vec![]),
+        (not_run, vec![]),
+    ];
+    assert_eq!(verdicts(&receipt), expected);
+    assert_eq!(receipt.verdict, Some(fault));
+    let faulted = &receipt.entries[0].cold_boots[1];
+    let faults = faulted.checks.iter().filter(|c| c.result == Outcome::Fault);
+    let faults: Vec<&str> = faults.map(|c| c.rule.as_str()).collect();
+    assert_eq!(faults, ["power.on_unconfirmed"]);
+    // Nothing of the other entries was recorded: no event, so no switch to
+    // their payloads, no check and no cold boot.
+    for entry in &receipt.entries[1..] {
+        assert!(entry.events.is_empty() && entry.checks.is_empty() && entry.cold_boots.is_empty());
+    }
+    // No command followed the power off of the faulted cold boot, which
+    // readings confirmed.
+    let confirmation = &receipt.inputs.instance.parameters.confirmation;
+    assert!(power::off_confirmed_at(confirmation, &faulted.events).is_some());
+    let on_off = [PowerState::On, PowerState::Off];
+    assert_eq!(
+        commands(&env),
+        [&[PowerState::Off][..], &on_off, &on_off].concat()
+    );
 }

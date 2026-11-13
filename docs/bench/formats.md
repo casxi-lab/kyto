@@ -403,7 +403,10 @@ each value. In short:
   its hash, date and time (`bootloader`), the same for BOOTSYS (`bootsys`),
   the manufacturing version of the bootloader image that is read, which is
   not that of the board (`bootloader_image_mfg`, the `MFG_VER` line), and the
-  BL31 version and build lines (`bl31`, `bl31_built`).
+  BL31 version and build lines (`bl31`, `bl31_built`). In every boot of a
+  Raspberry Pi 5 recorded so far, from the network or from its SD card, the
+  BL31 lines follow the `os_start` line, so an entry that expects `bl31`
+  ends at a later marker or at its boot timeout.
 - **Identity.** The ways of reading the ten fields are listed under
   [the ten fields](#the-ten-fields).
 - **Variants.** A board of the stepping C1 needs `bcm2712-rpi-5-b.dtb`; one
@@ -442,13 +445,21 @@ each value. In short:
   board's MAC address and the TFTP server in the line that waits for the
   network link; the client, gateway and server addresses in the `NET` line;
   the address and MAC address in `ARP` lines; the MAC address and the server
-  in `TFTP_GET` lines; and the SD card identifier in the `CID:` line. These
+  in `TFTP_GET` lines; the SD card's identifier in the `CID:` line and its
+  card-specific data in the `CSD:` line; and, in the `root=PARTUUID=`
+  argument of a kernel command line, such as the one that the firmware shows
+  after it reads `cmdline.txt` from an SD card, the disk signature of an MBR
+  disk, without the partition number, so that it is found with the number of
+  any other partition too, or the whole partition UUID of a GPT disk. These
   forms cover static addressing, and each starts at the word that names its
-  line, such as `BOOTMODE:`. `0.0.0.0` is never a value to hide.
+  line or argument, such as `BOOTMODE:` or `root=PARTUUID=`. `0.0.0.0` is
+  never a value to hide.
 - **Example values.** The examples hold no value of a real board: the serial
-  number `fedc9876` is made up, the MAC addresses `00:00:5e:00:53:a1` and
-  `00:00:5e:00:53:a2` and the IPv4 addresses of `192.0.2.0/24` are reserved
-  for documentation, and `bench/` stands for the path prefix.
+  number `fedc9876`, the SD card's identifier and card-specific data and the
+  partition UUID `0a1b2c3d-02` are made up, the MAC addresses
+  `00:00:5e:00:53:a1` and `00:00:5e:00:53:a2` and the IPv4 addresses of
+  `192.0.2.0/24` are reserved for documentation, and `bench/` stands for the
+  path prefix.
 
 ## Identity records
 
@@ -1416,9 +1427,10 @@ observations, checks and verdicts follow from the record:
 
 ## Public versions
 
-A public version holds a receipt with every value that identifies the board,
-the network or the bench replaced by `#`, byte for byte, and lists what was
-replaced, so that the record of a run can be published from a bench. The
+A public version holds a receipt with the values that identify the board, the
+network or the bench, as its board description and instance configuration
+give them, replaced by `#`, byte for byte, and lists what was replaced, so
+that the record of a run can be published from a bench. The
 library makes it from the receipt, with the sensitive lines of the board
 description that the receipt records and of the description of the same `id`
 built into the tool, and the
@@ -1428,6 +1440,18 @@ It is written in the form of a receipt and
 [read as strictly](#reading-a-public-version). A public version is for
 reading: where bytes were replaced it no longer shows what the board sent,
 and the receipt stays the record of the run.
+
+The sensitive lines of [the Raspberry Pi 5](#the-raspberry-pi-5) are forms
+of lines of its firmware. A value that only the software that the firmware
+starts prints, such as the host name of an operating system, an address that
+its DHCP client was given or an IPv6 address formed from the board's MAC
+address, is replaced only where its bytes equal a value to hide: a later
+line that prints the MAC address with colons has it replaced, but an IPv6
+interface identifier formed from it stays. The leak check searches for the same values, so it does not refuse
+such a public version. An entry whose cold boot can start an operating
+system that prints such values, such as one on the board's SD card that a
+network boot falls back to, can keep them out of its receipt by ending at
+`board.os_start`, the line of the firmware that starts it.
 
 When the cold boot of a receipt received these lines, each ended by CR LF,
 on a bench whose TFTP server is `192.0.2.10` and whose path prefix is empty:
@@ -1444,7 +1468,7 @@ its public version, with the receipt digest shortened here, starts like this:
 {
   "format": "kyto-bench public receipt",
   "format_version": 1,
-  "receipt_sha256": "a78c47f0...",
+  "receipt_sha256": "a67d6e1a...",
   "placeholder": "#",
   "withheld": [
     {

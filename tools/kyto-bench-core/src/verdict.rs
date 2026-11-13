@@ -646,6 +646,31 @@ firmware.bootloader = {{ hash = "1accd665", date = "2026/09/25" }}
             fallback.result("boot.fallback", "board.network_boot"),
             Outcome::Fail
         );
+        // A boot mode line of the SD card alone fails both rules.
+        let sd = case(&lines_with(|lines| {
+            lines[3] = "  4.94 Boot mode: SD (01) order f";
+        }));
+        assert_eq!(
+            sd.result("boot.network", "board.network_boot"),
+            Outcome::Fail
+        );
+        assert_eq!(
+            sd.result("boot.fallback", "board.network_boot"),
+            Outcome::Fail
+        );
+        // A boot order that tries the SD card first and then boots from the
+        // network does not fall back.
+        let sd_first = case(&lines_with(|lines| {
+            lines.insert(3, "  4.20 Boot mode: SD (01) order f2")
+        }));
+        assert_eq!(
+            sd_first.result("boot.network", "board.network_boot"),
+            Outcome::Pass
+        );
+        assert_eq!(
+            sd_first.result("boot.fallback", "board.network_boot"),
+            Outcome::Pass
+        );
     }
 
     #[test]
@@ -701,16 +726,54 @@ firmware.bootloader = {{ hash = "1accd665", date = "2026/09/25" }}
     }
 
     #[test]
-    fn markers_keep_their_counts_order_and_bounds() {
+    fn a_marker_missing_or_counted_wrong_fails() {
+        // The entry expects exactly one READY line.
         let twice = case(&lines_with(|lines| lines.push("READY")));
         assert_eq!(twice.result("marker.count", "ready"), Outcome::Fail);
+        let missing = case(&lines_with(|lines| {
+            lines.remove(8);
+        }));
+        assert_eq!(missing.result("marker.count", "ready"), Outcome::Fail);
+        let (_, checks) = missing.judged();
+        let count = checks.iter().find(|c| c.rule == "marker.count").unwrap();
+        assert_eq!(count.detail.as_deref(), Some("0 lines"));
+        // An entry that expects at least two: one line is below the
+        // minimum, two are not, and without a maximum more are not either.
+        let at_least = |text: String| {
+            let count = "{ marker = \"ready\", count = 1 }";
+            assert!(text.contains(count), "{count}");
+            text.replace(count, "{ marker = \"ready\", min = 2 }")
+        };
+        let mut below = case(&LINES);
+        below.plan = plan(at_least);
+        assert_eq!(below.result("marker.count", "ready"), Outcome::Fail);
+        for lines in [2, 3] {
+            let mut enough = case(&lines_with(|all| {
+                all.extend(std::iter::repeat_n("READY", lines - 1));
+            }));
+            enough.plan = plan(at_least);
+            assert_eq!(enough.result("marker.count", "ready"), Outcome::Pass);
+        }
+    }
+
+    #[test]
+    fn markers_out_of_order_fail() {
         let order = "board.bootloader board.network_boot board.os_start ready";
+        assert_eq!(case(&LINES).result("marker.order", order), Outcome::Pass);
         let swapped = case(&lines_with(|lines| lines.swap(1, 3)));
         assert_eq!(swapped.result("marker.order", order), Outcome::Fail);
         let missing = case(&lines_with(|lines| {
             lines.remove(6);
         }));
         assert_eq!(missing.result("marker.order", order), Outcome::Fail);
+        // The order is that of the first line of each marker: a later line
+        // of the bootloader leaves it as it was.
+        let again = case(&lines_with(|lines| lines.push(LINES[1])));
+        assert_eq!(again.result("marker.order", order), Outcome::Pass);
+    }
+
+    #[test]
+    fn a_forbidden_line_fails() {
         // A forbidden line anywhere, or after the line of `from` only.
         let panic = case(&lines_with(|lines| lines.insert(2, "PANIC: oops")));
         assert_eq!(panic.result("marker.forbidden", "0"), Outcome::Fail);
@@ -734,20 +797,69 @@ firmware.bootloader = {{ hash = "1accd665", date = "2026/09/25" }}
 
     #[test]
     fn markers_before_the_first_send_end_before_its_first_byte() {
-        let mut case = case(&LINES);
+        let is_send = |kind: &EventKind| matches!(kind, EventKind::Send { .. });
+        let mut sent = case(&LINES);
         assert_eq!(
-            case.result("marker.before_first_send", "ready"),
+            sent.result("marker.before_first_send", "ready"),
             Outcome::Pass
         );
-        case.at(|kind| matches!(kind, EventKind::Send { .. }))
-            .received -= 1;
+        sent.at(is_send).received -= 1;
         assert_eq!(
-            case.result("marker.before_first_send", "ready"),
+            sent.result("marker.before_first_send", "ready"),
             Outcome::Fail
         );
         assert_eq!(
-            case.result("marker.before_first_send", "board.network_boot"),
+            sent.result("marker.before_first_send", "board.network_boot"),
             Outcome::Pass
+        );
+        // A marker that never appeared did not come before the send.
+        let missing = case(&lines_with(|lines| {
+            lines.remove(3);
+        }));
+        assert_eq!(
+            missing.result("marker.before_first_send", "board.network_boot"),
+            Outcome::Fail
+        );
+        // The line of a marker that is the last line ends with the
+        // transcript: before a send at that end, after one a byte earlier.
+        let mut last = case(&LINES[..9]);
+        assert_eq!(
+            last.result("marker.before_first_send", "ready"),
+            Outcome::Pass
+        );
+        last.at(is_send).received -= 1;
+        assert_eq!(
+            last.result("marker.before_first_send", "ready"),
+            Outcome::Fail
+        );
+        // Only the first send counts: a second step, sent once a second
+        // READY line has appeared, does not make the line of `ready` come
+        // before the first.
+        let lines = lines_with(|lines| lines.extend(["READY", "STATS seq=2"]));
+        let mut two = case(&lines);
+        two.plan = plan(|text| {
+            let steps = "timeout_ms = 1000 }]";
+            assert!(text.contains(steps), "{steps}");
+            let second = "{ after = \"ready\", send = \"!\\r\", expect = '^STATS seq=2', timeout_ms = 1000 }";
+            text.replace(steps, &format!("timeout_ms = 1000 }}, {second}]"))
+        });
+        let received: usize = lines[..11].iter().map(|line| line.len() + 2).sum();
+        let bytes_base64 = Base64(b"!\r".to_vec());
+        let send = EventKind::Send {
+            step: 1,
+            bytes_base64,
+        };
+        let end = two
+            .events
+            .iter()
+            .position(|e| matches!(e.event, EventKind::End { .. }));
+        let send = event(ON + 11 * STEP, received as u64, send);
+        two.events.insert(end.unwrap(), send);
+        assert_eq!(two.result("step.response", "1"), Outcome::Pass);
+        two.at(is_send).received -= 1;
+        assert_eq!(
+            two.result("marker.before_first_send", "ready"),
+            Outcome::Fail
         );
     }
 
@@ -809,6 +921,93 @@ firmware.bootloader = {{ hash = "1accd665", date = "2026/09/25" }}
             lines.remove(6);
         }));
         assert_eq!(gone.result("segment.digest", "banner"), Outcome::Fail);
+    }
+
+    #[test]
+    fn a_firmware_version_other_than_expected_fails() {
+        // The entry expects the bootloader release in the EEPROM and the
+        // BL31 version, and the rule reads a version line anywhere in the
+        // cold boot. The BL31 line goes before the line of the start of the
+        // operating system, so that the segment of the entry is unchanged,
+        // although a Raspberry Pi 5 writes it after that line. The cold boot
+        // shows both as expected.
+        const BL31: &str = "NOTICE:  BL31: v2.6(release):v2.6-241-g36761b276";
+        let bl31 = "firmware.bl31 = { version = \"v2.6(release):v2.6-241-g36761b276\" }\n";
+        let expecting = |edit: &dyn Fn(String) -> String| {
+            plan(|text| {
+                let bootloader = "firmware.bootloader = ";
+                assert!(text.contains(bootloader), "{bootloader}");
+                edit(text.replace(bootloader, &format!("{bl31}{bootloader}")))
+            })
+        };
+        let with_bl31 = |line: &'static str| {
+            lines_with(|lines| {
+                assert!(lines[6].contains("Starting OS"));
+                lines.insert(6, line);
+            })
+        };
+        // The result and detail of the checks of the bootloader and of
+        // BL31, in that order.
+        let results = |lines: &[&str], edit: &dyn Fn(String) -> String| {
+            let mut case = case(lines);
+            case.plan = expecting(edit);
+            let (_, checks) = case.judged();
+            ["bootloader", "bl31"].map(|name| {
+                let found = checks
+                    .iter()
+                    .find(|c| c.rule == "firmware.version" && c.subject == name);
+                let check = found.unwrap_or_else(|| panic!("no check of {name}"));
+                (check.result, check.detail.clone())
+            })
+        };
+        // A failure at the line of `index` among `lines`, by its offset.
+        let other = |lines: &[&str], index: usize| {
+            let at: usize = lines[..index].iter().map(|line| line.len() + 2).sum();
+            (Outcome::Fail, Some(format!("the line at {at}")))
+        };
+        let pass = (Outcome::Pass, None::<String>);
+        let none = (Outcome::Fail, Some("no line".to_string()));
+        let same = |text: String| text;
+        let shown = with_bl31(BL31);
+        assert_eq!(results(&shown, &same), [pass.clone(), pass.clone()]);
+        // The plan alone gives the expected values: another hash or date of
+        // the bootloader, or another BL31 version, fails that line, and so
+        // does a BL31 version that the line only starts with.
+        let edits = [
+            ("hash = \"1accd665\"", "hash = \"0accd665\""),
+            ("date = \"2026/09/25\"", "date = \"2026/09/24\""),
+            ("-241-g36761b276\" }", "-242-g36761b276\" }"),
+            ("-241-g36761b276\" }", "-241\" }"),
+        ];
+        let failed = [
+            [other(&shown, 1), pass.clone()],
+            [other(&shown, 1), pass.clone()],
+            [pass.clone(), other(&shown, 6)],
+            [pass.clone(), other(&shown, 6)],
+        ];
+        for ((from, to), failed) in edits.into_iter().zip(failed) {
+            let edit = |text: String| {
+                assert!(text.contains(from), "{from}");
+                text.replace(from, to)
+            };
+            assert_eq!(results(&shown, &edit), failed, "{to}");
+        }
+        // The cold boot shows another BL31 version, or none.
+        let changed = with_bl31("NOTICE:  BL31: v2.7(release):v2.7-1-g0123abcd");
+        let found = results(&changed, &same);
+        assert_eq!(found, [pass.clone(), other(&changed, 6)]);
+        assert_eq!(results(&LINES, &same), [pass.clone(), none.clone()]);
+        // Without the bootloader line, or with a second one of another
+        // release, the bootloader fails.
+        let without = [&shown[..1], &shown[2..]].concat();
+        assert_eq!(results(&without, &same), [none, pass.clone()]);
+        let again =
+            "  4.38 RPi: BOOTLOADER release VERSION:0accd665 DATE: 2026/09/24 TIME: 15:59:09";
+        let twice = lines_with(|lines| {
+            lines.insert(6, BL31);
+            lines.insert(2, again);
+        });
+        assert_eq!(results(&twice, &same), [other(&twice, 2), pass]);
     }
 
     #[test]

@@ -391,8 +391,9 @@ properties = [
   { name = "program_usb_boot_timeout", source = "boot-usb" },
 ]
 
-# Lines that hold the board's serial number, MAC addresses, IP addresses and
-# the SD card identifier. The bytes of each named group are replaced in a
+# Lines that hold the board's serial number, MAC addresses, IP addresses,
+# the SD card's identifier and card-specific data, and the partition UUID of
+# the root file system. The bytes of each named group are replaced in a
 # public receipt. These forms cover static addressing. They are not
 # anchored, so a stray byte beside a line keeps no line from its form.
 [[sensitive]]
@@ -424,6 +425,20 @@ example = ' 16.75 TFTP_GET: 00:00:5e:00:53:a2 192.0.2.50 bench/config.txt'
 name = "sd-card-id"
 line = 'CID: (?P<cid>[0-9a-f]{32})'
 example = 'CID: 00112233445566778899aabbccddeeff'
+
+[[sensitive]]
+name = "sd-card-csd"
+line = 'CSD: (?P<csd>[0-9a-f]{32})'
+example = 'CSD: ffeeddccbbaa99887766554433221100'
+
+# The kernel command line that the firmware shows after it reads
+# cmdline.txt, as from an SD card. The group takes the disk signature of an
+# MBR disk, without the partition number, or the whole partition UUID of a
+# GPT disk, so that the signature is found with any partition number too.
+[[sensitive]]
+name = "root-partuuid"
+line = 'root=PARTUUID=(?P<partuuid>[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})?)'
+example = 'console=serial0,115200 console=tty1 root=PARTUUID=0a1b2c3d-02 rootfstype=ext4 fsck.repair=yes rootwait'
 
 # 0.0.0.0 stands for no address, such as a gateway the network does not have.
 [deidentify]

@@ -1015,6 +1015,8 @@ mod tests {
                 "arp",
                 "tftp-request",
                 "sd-card-id",
+                "sd-card-csd",
+                "root-partuuid",
             ]
         );
         assert_eq!(board.never, ["0.0.0.0"]);

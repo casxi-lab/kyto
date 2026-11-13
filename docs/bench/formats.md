@@ -612,9 +612,15 @@ listed.
 ### Checks against the board description
 
 A configuration is checked with the board description that its `board`
-names: the `id` of the description equals `board`, and the identity record
-passes the [checks of an identity record](#identity-records) against the
-description.
+names: the `id` of the description equals `board`; no
+[value to hide](#values-to-hide) of the configuration occurs in the text of
+the description, ignoring ASCII case; and the identity record passes the
+[checks of an identity record](#identity-records) against the description.
+A receipt records the description as it is, and a
+[public version](#public-versions) never rewrites it, so a value of the bench
+that the description holds, such as the path prefix `bench/` that the
+Raspberry Pi 5 description uses as a stand-in, would leave no run of the
+bench with a public version.
 
 ## Run plans
 

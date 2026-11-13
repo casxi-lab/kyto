@@ -82,8 +82,7 @@ pub struct PinnedFile {
     pub sha256: Sha256,
 }
 
-/// The parameters that verdicts and the checks before a run read, which
-/// receipts record.
+/// The parameters that receipts record, which verdicts and the checks before a run read.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Parameters {
@@ -133,8 +132,7 @@ impl Devices {
     }
 }
 
-/// An instance value that a public receipt must not show, with the name of
-/// the rule that hides it.
+/// An instance value that a public receipt must not show, with its rule.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InstanceValue {
     pub rule: String,
@@ -272,11 +270,16 @@ impl Instance {
     }
 
     /// Checks the configuration against the description of its board, which
-    /// must also accept the identity record.
+    /// must accept the identity record and hold no value to hide.
     pub fn check_board(&self, board: &Board) -> Result<(), InstanceError> {
         if self.board != board.id {
             let (instance, board) = (self.board.clone(), board.id.clone());
             return Err(InstanceError::Board { instance, board });
+        }
+        let text = board.text().to_ascii_lowercase();
+        for InstanceValue { rule, value } in self.deidentify_values() {
+            let at = rule.trim_start_matches("instance.");
+            check! { at => !text.contains(&value.to_ascii_lowercase()), IN_BOARD; }
         }
         let identity = &self.parameters.identity;
         identity.check(board).map_err(InstanceError::Identity)
@@ -392,6 +395,7 @@ const PUBLISHED_SALTS: [&str; 2] = [
 
 const SEARCHABLE: &str = "the value is 4 to 255 printable ASCII characters without spaces";
 const TIMEOUT: &str = "the timeout is 1 ms to 1 h";
+const IN_BOARD: &str = "the board description holds this value to hide; choose another";
 
 /// A value that canonical JSON does not hold: `found`, a float or a date or
 /// time, `at` a path of `.key` and `[index]` steps from the top.
@@ -999,6 +1003,32 @@ B = { z = "", y = "q\"b\\c\n\t\u0001é/" }
         ));
     }
 
+    #[test]
+    fn a_value_to_hide_that_the_board_description_holds_is_refused() {
+        // Receipts record the description verbatim, so such a value would
+        // leave no public version of any run of the bench.
+        let board = Board::parse(RASPBERRY_PI_5).unwrap();
+        example().check_board(&board).unwrap();
+        let prefix = "path_prefix = \"\"";
+        let console = "[local.console]\n";
+        for (from, to, at) in [
+            (prefix, "path_prefix = \"bench/\"", "tftp.path_prefix"),
+            (prefix, "path_prefix = \"BENCH/\"", "tftp.path_prefix"),
+            (
+                console,
+                "[local.console]\nbaud = \"115200\"\n",
+                "local.console.baud",
+            ),
+        ] {
+            let instance = Instance::parse(&edited(from, to)).unwrap();
+            assert_eq!(instance.check_board(&board), Err(invalid(at, IN_BOARD)));
+        }
+    }
+
+    /// Every salt that kyto writes, in its documentation and its tests, is
+    /// one that only simulated devices may use, and none is in what a run
+    /// reads or in the console output that the tests build, where a public
+    /// version would have to hide it.
     #[test]
     fn every_salt_that_kyto_writes_is_published_and_found_in_no_example() {
         let tests = [

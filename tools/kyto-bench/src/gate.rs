@@ -3,9 +3,9 @@
 //! of their class, and only the gate of a run plan entry that enables the
 //! class gives one. Only this crate builds a gate, so no code outside it can
 //! make a permit, and a permit borrows the gate that gave it, so it cannot
-//! outlive that gate. No command runs a run plan yet, so only tests build a
-//! gate. [`crate::device::Delivery::stage`] checks every payload file before
-//! a delivery device writes anything.
+//! outlive that gate. A delivery device writes only [`Checked`] files, which
+//! only [`check_staging`] makes, so [`crate::device::Delivery::stage`] checks
+//! every payload file before a device writes anything.
 //!
 //! An entry's enable is needed for such a write, but it does not authorize
 //! one: whoever runs a plan that enables a write decides that outside the
@@ -70,17 +70,32 @@ impl WriteGate {
     }
 }
 
+/// The files of a payload, each a name and its bytes, that the write gate
+/// has checked. It has no public constructor: only [`check_staging`] makes
+/// one.
+#[derive(Debug)]
+pub struct Checked<'f>(&'f [(PayloadName, Vec<u8>)]);
+
+impl<'f> Checked<'f> {
+    /// The files.
+    pub fn files(&self) -> &'f [(PayloadName, Vec<u8>)] {
+        self.0
+    }
+}
+
 /// Checks the files of a payload against the board's write `triggers`
 /// before any of them is written: a file that lets the firmware write a
 /// class needs a permit of that class. [`crate::device::Delivery::stage`]
 /// calls this before it hands the files to the device.
-pub fn check_staging<'a>(
-    files: impl IntoIterator<Item = &'a PayloadName>,
+pub fn check_staging<'f>(
+    files: &'f [(PayloadName, Vec<u8>)],
     triggers: &[WriteTrigger],
     permits: &[WritePermit<'_>],
-) -> Result<(), WriteRefused> {
+) -> Result<Checked<'f>, WriteRefused> {
     let permitted: Vec<WriteClass> = permits.iter().map(WritePermit::class).collect();
-    write::check_triggers(files, triggers, &permitted).map_err(WriteRefused::Unpermitted)
+    let names = files.iter().map(|(name, _)| name);
+    write::check_triggers(names, triggers, &permitted).map_err(WriteRefused::Unpermitted)?;
+    Ok(Checked(files))
 }
 
 impl fmt::Display for WriteRefused {
@@ -134,8 +149,8 @@ mod tests {
             trigger(WriteClass::Eeprom, "update.bin").unwrap(),
             trigger(WriteClass::Storage, "disk.img").unwrap(),
         ];
-        let files =
-            ["update.bin", "disk.img", "notes.txt"].map(|name| PayloadName::parse(name).unwrap());
+        let files = ["update.bin", "disk.img", "notes.txt"]
+            .map(|name| (PayloadName::parse(name).unwrap(), Vec::new()));
         let gate = WriteGate::new(&WriteEnables {
             eeprom: true,
             ..WriteEnables::default()
@@ -145,7 +160,7 @@ mod tests {
         assert_eq!(
             refused,
             WriteRefused::Unpermitted(vec![Unpermitted {
-                file: files[1].clone(),
+                file: files[1].0.clone(),
                 class: WriteClass::Storage
             }])
         );
@@ -153,7 +168,8 @@ mod tests {
             refused.to_string(),
             "the payload file disk.img lets the firmware write storage, which is not enabled"
         );
-        assert_eq!(check_staging(&files[..1], &triggers, &permits), Ok(()));
+        let checked = check_staging(&files[..1], &triggers, &permits).unwrap();
+        assert_eq!(checked.files(), &files[..1]);
         assert!(check_staging(&files[..1], &triggers, &[]).is_err());
     }
 }

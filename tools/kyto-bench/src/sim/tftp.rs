@@ -6,6 +6,7 @@ use kyto_bench_core::names::{self, GenerationName, PayloadName};
 use kyto_bench_core::write::WriteTrigger;
 
 use crate::device::{Delivery, DeviceError, Role};
+use crate::gate::Checked;
 
 use super::console::Files;
 use super::world::SimWorld;
@@ -73,10 +74,8 @@ impl Delivery for SimTftp {
         &self.triggers
     }
 
-    fn write_generation(
-        &mut self,
-        files: &[(PayloadName, Vec<u8>)],
-    ) -> Result<GenerationName, DeviceError> {
+    fn write_generation(&mut self, files: Checked<'_>) -> Result<GenerationName, DeviceError> {
+        let files = files.files();
         let mut world = self.world.borrow_mut();
         if world.knobs.tftp.stage_fails {
             return Err(delivery_error(

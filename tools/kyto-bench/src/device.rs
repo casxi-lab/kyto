@@ -15,7 +15,7 @@ use kyto_bench_core::write::WriteTrigger;
 
 pub use kyto_bench_core::roles::{Quantity, Role};
 
-use crate::gate::{self, WritePermit, WriteRefused};
+use crate::gate::{self, Checked, WritePermit, WriteRefused};
 
 /// A time of the bench clock: nanoseconds since its origin.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -131,9 +131,9 @@ pub enum Received {
 /// reads. Each payload is staged as a new generation, read back, and then
 /// made the served one in one step.
 ///
-/// A device implements [`Delivery::write_generation`] and keeps the provided
-/// [`Delivery::stage`], so that the write gate checks every payload before
-/// the device writes it.
+/// A device implements [`Delivery::write_generation`], which writes only
+/// files that the write gate has checked, and keeps the provided
+/// [`Delivery::stage`], which checks them.
 pub trait Delivery {
     /// The board's write triggers, which [`Delivery::stage`] checks every
     /// payload file against.
@@ -148,17 +148,14 @@ pub trait Delivery {
         files: &[(PayloadName, Vec<u8>)],
         permits: &[WritePermit<'_>],
     ) -> Result<GenerationName, StageError> {
-        let names = files.iter().map(|(name, _)| name);
-        gate::check_staging(names, self.write_triggers(), permits).map_err(StageError::Refused)?;
-        self.write_generation(files).map_err(StageError::Device)
+        let checked = gate::check_staging(files, self.write_triggers(), permits);
+        self.write_generation(checked.map_err(StageError::Refused)?)
+            .map_err(StageError::Device)
     }
-    /// Writes `files`, which [`Delivery::stage`] has checked, as a complete
-    /// new generation and returns its name, the next free one; never
-    /// touches an existing generation. Only `stage` calls it.
-    fn write_generation(
-        &mut self,
-        files: &[(PayloadName, Vec<u8>)],
-    ) -> Result<GenerationName, DeviceError>;
+    /// Writes `files`, which the write gate has checked, as a complete new
+    /// generation and returns its name, the next free one; never touches an
+    /// existing generation.
+    fn write_generation(&mut self, files: Checked<'_>) -> Result<GenerationName, DeviceError>;
     /// A staged file, read back from where the TFTP server reads files.
     fn read_staged(
         &mut self,

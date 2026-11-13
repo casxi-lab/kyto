@@ -1289,9 +1289,10 @@ table says otherwise:
 The readings that follow a power command, up to the next power command,
 confirm it when `consecutive` of them in a row are of the `quantity` of the
 confirmation parameters, each at or above `on_at_least_micro` for a power on
-or at or below `off_at_most_micro` for a power off, and all taken within
-`on_timeout_ms` or `off_timeout_ms` of the command. A reading of another
-quantity, or on the other side of the threshold, starts the count again.
+or at or below `off_at_most_micro` for a power off, and all taken at or
+after the time of the command and within `on_timeout_ms` or `off_timeout_ms`
+of it. A reading of another quantity, or on the other side of the threshold,
+starts the count again.
 The supply was last confirmed off at the time of the reading that confirms
 the last power command of the events before, when that command is a power
 off; for the first cold boot of a run, those are `start.events`, and for any

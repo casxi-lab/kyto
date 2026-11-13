@@ -13,6 +13,7 @@ use crate::receipt::{Check, Command, Event, EventKind, Outcome};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Confirming {
     command: Command,
+    sent: u64,
     deadline: u64,
     run: u32,
 }
@@ -25,9 +26,10 @@ impl Confirming {
             Command::On => confirmation.on_timeout_ms,
             Command::Off => confirmation.off_timeout_ms,
         };
-        let (deadline, run) = (at_ns.saturating_add(nanos(timeout)), 0);
+        let (sent, deadline, run) = (at_ns, at_ns.saturating_add(nanos(timeout)), 0);
         Self {
             command,
+            sent,
             deadline,
             run,
         }
@@ -41,7 +43,8 @@ impl Confirming {
     /// Takes the next reading, of `quantity`, `micro` at `at_ns`, and
     /// returns whether it confirms the command: it is the `consecutive`-th
     /// reading in a row of the configured quantity at or beyond the
-    /// threshold of the command's state, all taken by the deadline.
+    /// threshold of the command's state, all taken from the time the command
+    /// was sent to the deadline.
     pub fn read(
         &mut self,
         confirmation: &Confirmation,
@@ -53,7 +56,8 @@ impl Confirming {
             Command::On => micro >= confirmation.on_at_least_micro,
             Command::Off => micro <= confirmation.off_at_most_micro,
         };
-        let counts = quantity == confirmation.quantity && beyond && at_ns <= self.deadline;
+        let within = (self.sent..=self.deadline).contains(&at_ns);
+        let counts = quantity == confirmation.quantity && beyond && within;
         self.run = if counts { self.run + 1 } else { 0 };
         self.run >= confirmation.consecutive
     }
@@ -290,6 +294,11 @@ mod tests {
         let mut off = Confirming::new(&one, Command::Off, 0);
         assert!(!off.read(&one, volts, 500_001, MS));
         assert!(off.read(&one, volts, 500_000, 2 * MS));
+        // A reading taken before the command, such as one that a meter kept
+        // from before, does not count.
+        let mut stale = Confirming::new(&one, Command::Off, 1_000 * MS);
+        assert!(!stale.read(&one, volts, 0, 999 * MS));
+        assert!(stale.read(&one, volts, 0, 1_000 * MS));
     }
 
     #[test]
@@ -319,6 +328,11 @@ mod tests {
         );
         assert_eq!(start_check(&conf, &events).result, Outcome::Fault);
         assert_eq!(start_check(&conf, &[]).result, Outcome::Fault);
+        // A reading stamped before the power off confirms nothing.
+        let stale = [event(1_000, power(Command::Off)), event(900, volts(0))];
+        let start = start_check(&conf, &stale);
+        let found = (start.rule.as_str(), start.subject.as_str(), start.result);
+        assert_eq!(found, ("power.off_unconfirmed", "start", Outcome::Fault));
     }
 
     #[test]

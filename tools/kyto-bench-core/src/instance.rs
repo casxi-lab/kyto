@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::board::Board;
 use crate::digest::{Sha256, is_lower_hex};
@@ -33,7 +33,7 @@ const MAX_TIMEOUT_MS: u64 = 3_600_000;
 
 /// Where the board finds its files over TFTP: instance values that a public
 /// receipt never shows.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TftpParameters {
     /// The address of the TFTP server as the board's firmware prints it.
@@ -44,7 +44,7 @@ pub struct TftpParameters {
 
 /// How readings of the supply confirm that it is on or off, in micro-units
 /// of `quantity`.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Confirmation {
     pub quantity: Quantity,
@@ -60,14 +60,14 @@ pub struct Confirmation {
 }
 
 /// How long the console may take to be ready.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConsoleParameters {
     pub ready_timeout_ms: u64,
 }
 
 /// A set of payload digests that the bench pins, which run plans name.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Pin {
     pub name: String,
@@ -75,15 +75,17 @@ pub struct Pin {
 }
 
 /// One payload file of a pinned set.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PinnedFile {
     pub name: PayloadName,
     pub sha256: Sha256,
 }
 
-/// The parameters that verdicts and the checks before a run read.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// The parameters that verdicts and the checks before a run read, which
+/// receipts record.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Parameters {
     pub tftp: TftpParameters,
     pub confirmation: Confirmation,

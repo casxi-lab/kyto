@@ -232,7 +232,8 @@ pub fn read_path_name(path: &[u8], prefix: &[u8]) -> Result<PayloadName, ReadPat
 /// The name of a staged generation: `g` followed by six decimal digits. The
 /// tool gives each new generation the number after the highest one present
 /// and never reuses a name.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(into = "String", try_from = "String")]
 pub struct GenerationName(u32);
 
 /// Why a text is not a generation name.
@@ -275,6 +276,20 @@ impl GenerationName {
 impl fmt::Display for GenerationName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "g{:06}", self.0)
+    }
+}
+
+impl From<GenerationName> for String {
+    fn from(name: GenerationName) -> String {
+        name.to_string()
+    }
+}
+
+impl TryFrom<String> for GenerationName {
+    type Error = GenerationNameError;
+
+    fn try_from(text: String) -> Result<Self, GenerationNameError> {
+        Self::parse(&text)
     }
 }
 

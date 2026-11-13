@@ -9,12 +9,13 @@
 
 use std::fmt;
 
-use serde::Deserialize;
 use serde::de::{self, DeserializeOwned, Deserializer};
+use serde::{Deserialize, Serialize};
 
 use crate::board::{Board, Method};
 use crate::document::{Header, is_line_text, named_enum};
 use crate::names::{self, PayloadName};
+use crate::receipt::RecordedIdentity;
 
 /// The `format` of an identity record.
 pub const FORMAT: &str = "kyto-bench board identity";
@@ -142,7 +143,7 @@ impl fmt::Display for FieldRef {
 
 named_enum! {
     /// A way of reading an identity value.
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
     #[serde(rename_all = "snake_case")]
     pub enum ReadMethod {
         /// A group of a line of the firmware log.
@@ -193,8 +194,10 @@ pub struct Entry {
     pub read: ReadMethod,
 }
 
-/// The identity record of one board.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// The identity record of one board. Receipts write it in the form of
+/// [`crate::receipt::RecordedIdentity`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(into = "RecordedIdentity", try_from = "RecordedIdentity")]
 pub struct IdentityRecord {
     board: String,
     entries: Vec<Entry>,

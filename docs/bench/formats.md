@@ -17,8 +17,9 @@ repository root with:
 cargo test --locked --manifest-path tools/Cargo.toml
 ```
 
-Receipts and the public versions of receipts are not defined yet; the tool
-has no format for them.
+The library also renders receipts, the records of runs, reads them back
+strictly, and makes and checks their public versions; no command writes
+either yet, and this page does not describe their formats yet.
 
 ## Common rules
 
@@ -572,10 +573,11 @@ bench generates once for its configuration, for example with:
 openssl rand -hex 16
 ```
 
-A missing salt, or one of another length or form, is an error. The other
-values of a configuration are few and could be guessed from a template and
-tried one by one against a published SHA-256 of the file; with 128 random
-bits in the file, they cannot. The salt itself is never recorded.
+A missing salt, or one of another length or form, is an error. A receipt
+records the SHA-256 of the whole configuration file, and receipts may be
+published. The other values of a configuration are few and could be guessed
+from a template and tried one by one against that digest; with 128 random
+bits in the file, they cannot. The salt itself never enters a receipt.
 
 ### Values to hide
 

@@ -14,6 +14,11 @@ rust-version = "1.99"
 # Every external dependency is an exact version from crates.io. A member
 # names it with `workspace = true` and adds no features of its own.
 [workspace.dependencies]
+# Raw console bytes and sent bytes are kept in receipts in the standard
+# alphabet with padding, encoded to and decoded from strings in memory, which
+# needs `alloc`; the standard-library support and the unsafe SIMD engines of
+# the default features are left out.
+base64 = { version = "=0.23.1", default-features = false, features = ["alloc"] }
 # Line patterns are matched against the bytes of one console line with
 # Unicode mode off, so the Unicode tables are left out; console lines are
 # short, so the literal and DFA optimisations of `perf` are left out; `std` is

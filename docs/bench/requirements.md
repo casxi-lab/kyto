@@ -16,7 +16,8 @@ Every requirement is shown so far by tests on the host: unit tests of
 `kyto-bench-core` and `kyto-bench` on records and simulated devices built in
 code, runs of the command on simulated devices, and runs of the built binary
 on the example. The console output that they read was written for the
-examples, and no test is a run on a real bench.
+examples, and no test is a run on a real bench. The tests that remain are
+the contract's [open obligations](contract.md#open-obligations).
 
 ## Verdicts
 
@@ -85,8 +86,7 @@ boot mode line of the cold boot is of the board's network mode, and
 as a line of the SD card mode after the network one.
 
 **Evidence.** A unit test on console lines built in code: the network boot
-mode line left out, and a line of the SD card mode after it. No test reads
-console output recorded from a real board.
+mode line left out, and a line of the SD card mode after it.
 
 ### VERD-R06
 
@@ -110,8 +110,7 @@ entry expects. The expected values come from the run plan alone.
 
 **Evidence.** A unit test in which the bootloader line gives another hash
 or is missing, and runs on simulated devices in which the bootloader and
-BL31 lines give the expected values. No test gives a BL31 version other
-than the expected one.
+BL31 lines give the expected values.
 
 ### VERD-R08
 
@@ -126,8 +125,7 @@ included, had ended.
 **Evidence.** Unit tests on console lines built in code: a marker that
 appears twice, markers swapped or missing, forbidden lines anywhere and
 between bounds, and a send one byte too early; and runs on simulated devices
-whose check lists, failing ones included, are fixed. No test has fewer lines
-of a marker than its entry expects.
+whose check lists, failing ones included, are fixed.
 
 ### VERD-R09
 
@@ -157,8 +155,7 @@ ends, and that reading refuses base64 that is not canonical; a run on
 simulated devices whose receipt holds the example console output, which
 starts with a byte that is not UTF-8 and ends its lines with CR LF, byte for
 byte; and a unit test of a segment whose content changed or whose line is
-missing. No test gives a receipt with a lone CR or LF and reads it back, or
-a segment digested over line ends that were changed.
+missing.
 
 ### VERD-R11
 
@@ -300,8 +297,7 @@ list exactly the reasons that apply.
 **Evidence.** A unit test of each reason alone and of all three, a test in
 which reading refuses evidence that leaves a reason out or calls the
 receipt eligible, and runs of the built binary on simulated devices, whose
-receipts are not eligible. No run gives a receipt of a tool whose
-commit is unknown or whose working tree changed.
+receipts are not eligible.
 
 ### PROV-R08
 
@@ -320,8 +316,7 @@ build of the tests: it watches only paths that do not exist, so that Cargo
 runs it on every build, and it gives both values, those that the build
 embedded; a test that a build in a Git checkout embeds both values; and a
 test that a commit or a clean flag that is empty or of another form is
-unknown. No test builds the tool twice, as the contract's
-[current deviations](contract.md#current-deviations) state.
+unknown.
 
 ## Power off and reporting
 
@@ -339,7 +334,7 @@ it sent a command confirms nothing.
 readings and the readings up to the next command; tests of the simulated
 meter, which reads the supply and not the command, and fails on its own;
 and a run on simulated devices whose supply keeps a voltage above the off
-threshold. The meter is simulated.
+threshold.
 
 ### POWER-R02
 
@@ -370,8 +365,7 @@ payload are still made and recorded.
 **Evidence.** Unit tests of each fault and of a cold boot whose console
 output came while the supply was off, which is `BENCH FAULT` while its end
 marker passes; and runs on simulated devices whose power on is not
-confirmed or whose power device fails. No run test has a power off after a
-cold boot that was sent and that readings do not confirm.
+confirmed or whose power device fails.
 
 ### POWER-R04
 

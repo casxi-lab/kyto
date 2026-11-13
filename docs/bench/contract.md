@@ -61,10 +61,12 @@ Every rule name that the code gives a check, a refusal or a reason, once
 each. **Group** is the requirement that the rule serves, whose prefix names
 its group of rules; **Result** is what the rule gives when it does not pass:
 `fail`, `fault`, `refusal` or `reason`; **Function** is the function that
-names it. Reading a receipt does not check rule names, so a rule can be
-refined without a new version of the receipt format; a rule that is added,
-renamed or removed changes this table and the formats page in the same
-change.
+names it. Reading a receipt does not check the rule names of checks and
+refusals, so such a rule can be refined without a new version of the
+receipt format. Reading checks the reasons of evidence against
+`receipt::EVIDENCE_RULES`, so adding, renaming or removing one of those
+changes the receipt format. A rule that is added, renamed or removed
+changes this table and the formats page in the same change.
 
 | Rule | Group | Result | Function | Formats |
 | --- | --- | --- | --- | --- |
@@ -85,12 +87,12 @@ change.
 | `tftp.unplanned_file` | `VERD-R11` | fail | `verdict::Judging::transfers` | [checks](formats.md#checks) |
 | `identity.disagree` | `VERD-R11` | fail | `verdict::Judging::identity` | [checks](formats.md#checks) |
 | `payload.source_digest` | `PROV-R01`, `PROV-R04` | refusal | `payload::check_entry` | [payload checks](formats.md#payload-checks) |
-| `write.not_enabled` | `PROV-R05` | refusal | `payload::check_entry` | [payload checks](formats.md#payload-checks) |
-| `write.refused_property` | `PROV-R05` | refusal | `payload::check_entry` | [payload checks](formats.md#payload-checks) |
-| `payload.variant_missing` | `PROV-R06` | refusal | `payload::check_variants` | [payload checks](formats.md#payload-checks) |
-| `payload.staged_digest` | `PROV-R02` | refusal | `payload::check_staged` | [payload checks](formats.md#payload-checks) |
+| `write.not_enabled` | `PROV-R04`, `PROV-R05` | refusal | `payload::check_entry` | [payload checks](formats.md#payload-checks) |
+| `write.refused_property` | `PROV-R04`, `PROV-R05` | refusal | `payload::check_entry` | [payload checks](formats.md#payload-checks) |
+| `payload.variant_missing` | `PROV-R04`, `PROV-R06` | refusal | `payload::check_variants` | [payload checks](formats.md#payload-checks) |
+| `payload.staged_digest` | `PROV-R02`, `PROV-R04` | refusal | `payload::check_staged` | [payload checks](formats.md#payload-checks) |
 | `payload.served_digest` | `PROV-R03` | fault | `payload::check_served` | [payload checks](formats.md#payload-checks) |
-| `evidence.commit_unknown` | `PROV-R07` | reason | `evidence::eligibility` | [evidence](formats.md#evidence) |
+| `evidence.commit_unknown` | `PROV-R07`, `PROV-R08` | reason | `evidence::eligibility` | [evidence](formats.md#evidence) |
 | `evidence.tree_changed` | `PROV-R07`, `PROV-R08` | reason | `evidence::eligibility` | [evidence](formats.md#evidence) |
 | `evidence.simulated` | `PROV-R07` | reason | `evidence::eligibility` | [evidence](formats.md#evidence) |
 | `power.off_unconfirmed` | `POWER-R02`, `POWER-R03` | fault | `power::start_check`, `power::cold_boot_checks` | [checks](formats.md#checks) |
@@ -317,11 +319,14 @@ it.
 | Fuzz tests of the parsing of console transcripts, run plans and receipts | No fuzz test exists | Fuzz tests in the `tools` workspace with a fixed seed and a number of cases written as a constant, run by the `test` step of `cargo xtask check` |
 | `VERD-R05` on console output recorded from a real board | Every test reads console output written for the examples | Console output recorded from a Raspberry Pi 5, one without the network boot mode line and one in which the firmware falls back to the SD card, with addresses, MAC addresses and serial numbers replaced by documentation values, each replayed by a run on simulated devices |
 | `VERD-R07` for BL31 | No test gives a BL31 version other than the expected one | A negative case of a BL31 version line that differs from the run plan |
-| `VERD-R08` below the expected count | No test has fewer lines of a marker than its entry expects | A negative case of `marker.count` below its minimum |
+| `VERD-R08` below the expected count | No test asserts that `marker.count` fails when a marker has fewer lines than its entry expects | A negative case that asserts `marker.count` fails for a marker below its minimum |
 | `VERD-R10` on bytes read back | No test gives a receipt with a lone CR or LF and reads it back, or a segment digested over line ends that were changed | Negative cases of a receipt that keeps bytes that are not UTF-8 and lone CR and LF bytes as read, and of a segment whose digest was taken over changed line ends |
 | `PROV-R07` on a run | Only `evidence.simulated` is shown on a run | A run whose tool commit is unknown and whose working tree changed, giving a receipt that is not eligible with both reasons |
+| `PROV-R08` across builds | No test builds the tool, changes its working tree and builds it again. That every build asks Git again rests on Cargo running the build script on every build while a path that it watches does not exist | A test that builds the tool in a Git checkout, then changes a tracked file, adds an untracked file, edits a tracked file marked assume-unchanged or skip-worktree, or adds a file that only a local exclude hides, builds it again after each change and reads `tool.clean` as `false` |
 | `POWER-R02` after a missing marker | No run test asserts the power off and its confirming reading after a cold boot that fails because a marker of the board is missing while its end marker comes | A run test of that cold boot that asserts the power off command and the reading that confirms it |
 | `POWER-R03` for a power off after a cold boot | No run test has a power off after a cold boot that was sent and that readings do not confirm | A run test of that power off that gives `BENCH FAULT` and the exit status 3 |
+| `POWER-R04` on standard error | No test reads what a run says on standard error after it sends the power off again | A test that reads the standard error of a run whose fault leaves the supply unconfirmed, and of one whose power off is then confirmed |
+| `POWER-R05` and `POWER-R06` for an error of the tool | No test reads the message on standard error or runs the binary to the exit status 101, the status of a Rust panic | A test that runs the built binary to an error of the tool and reads its message on standard error and its exit status 101 |
 | `POWER-R01` on a real bench | Power commands are confirmed only by the simulated supply meter | Drivers for a real power device and supply meter, and runs on a bench |
 
 ## Current deviations
@@ -338,12 +343,6 @@ it.
   a file that is not in the payload is a failed read, which no rule judges:
   such a cold boot is judged by its markers, its end and its other checks
   only.
-- **No test builds the tool twice** (`PROV-R08`). That every build asks Git
-  again, so that `tool.clean` describes the tree at the build, rests on
-  Cargo running a build script again on every build while a path that the
-  script watches does not exist. A test checks that the script watches only
-  such paths and gives both values, but no test builds the tool, changes its
-  working tree and builds it again.
 - **The minimum bootloader is information only.**
   `bootloader::minimum` gives the earliest bootloader release that a board
   needs from its identity record, as

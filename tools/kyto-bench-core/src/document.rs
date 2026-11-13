@@ -54,6 +54,15 @@ pub(crate) fn render_json(value: &impl Serialize) -> String {
     json + "\n"
 }
 
+/// Whether every array and table in `value` has at most 100 items.
+pub(crate) fn bounded(value: &toml::Value) -> bool {
+    match value {
+        toml::Value::Array(items) => items.len() <= 100 && items.iter().all(bounded),
+        toml::Value::Table(table) => table.len() <= 100 && table.values().all(bounded),
+        _ => true,
+    }
+}
+
 /// The reason given when a value is not a name.
 pub(crate) const NOT_A_NAME: &str =
     "a name is a lowercase ASCII letter, then lowercase letters, digits, _ and -";
@@ -87,9 +96,8 @@ macro_rules! named_enum {
 }
 pub(crate) use named_enum;
 
-/// Returns `Err(invalid(at, rule))`, with the `invalid` of the calling
-/// module, for the first of the listed values that breaks its rule, each
-/// written `at => kept, rule;`.
+/// Returns `Err(invalid(at, rule))` of the calling module for the first
+/// listed value that breaks its rule, each written `at => kept, rule;`.
 macro_rules! check {
     ($($at:expr => $kept:expr, $rule:expr;)+) => {
         $(if !$kept {

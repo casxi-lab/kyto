@@ -17,7 +17,7 @@ use regex::bytes::{Regex, RegexBuilder};
 use serde::Deserialize;
 
 /// The largest compiled size of a pattern, in bytes.
-pub const SIZE_LIMIT: usize = 1 << 20;
+pub const SIZE_LIMIT: usize = 64 << 10;
 
 /// A compiled line pattern with its source text, read from a document as a
 /// string.
@@ -245,7 +245,9 @@ mod tests {
         assert!(invalid("("));
         assert!(invalid("[a-"));
         assert!(invalid("(?P<x>a)(?P<x>b)"));
-        assert!(LinePattern::new(r"(?:a{100}){100}").is_ok());
+        assert!(LinePattern::new(r"(?:a{10}){100}").is_ok());
+        // A short pattern can still compile to more than the limit.
+        assert!(invalid(r"a{25000}"));
         let oversized = LinePattern::new(r"(?:a{1000}){1000}").unwrap_err();
         assert!(oversized.to_string().contains("size limit"), "{oversized}");
         let error = LinePattern::new("(").unwrap_err().to_string();

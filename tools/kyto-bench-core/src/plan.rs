@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 use crate::board::Board;
 use crate::digest::Sha256;
-use crate::document::{Header, NOT_A_NAME, check, is_line_text, is_name};
+use crate::document::{Header, NOT_A_NAME, bounded, check, is_line_text, is_name};
 use crate::instance::{Pin, PinnedFile};
 use crate::names::{self, PayloadName};
 use crate::pattern::LinePattern;
@@ -31,6 +31,9 @@ pub const DEFAULT_CAPTURE_BYTES: u64 = 4 << 20;
 
 /// The largest capture limit of a cold boot, in bytes.
 pub const MAX_CAPTURE_BYTES: u64 = 16 << 20;
+
+/// The most line patterns of a plan, `line` and `expect` of every entry.
+pub const MAX_PATTERNS: usize = 1000;
 
 const MAX_ITEMS: usize = 100;
 const MAX_MS: u64 = 3_600_000;
@@ -221,6 +224,7 @@ fn is_reference(text: &str) -> bool {
 }
 
 const REFERENCE: &str = "a reference is at most 1024 bytes without control characters";
+const ENTRIES: &str = "a plan has 1 to 100 entries";
 const TIMEOUT: &str = "the timeout is 1 ms to 1 h";
 
 impl RunPlan {
@@ -232,12 +236,13 @@ impl RunPlan {
         if !header.is(FORMAT, FORMAT_VERSION) {
             return Err(PlanError::Format(header));
         }
+        check_sizes(&table)?;
         let raw: RawPlan = table.try_into().map_err(syntax)?;
         let entries = &raw.entries;
         check! {
             "board" => is_name(&raw.board), NOT_A_NAME;
             "reference" => raw.reference.as_deref().is_none_or(is_reference), REFERENCE;
-            "entries" => (1..=MAX_ITEMS).contains(&entries.len()), "a plan has 1 to 100 entries";
+            "entries" => (1..=MAX_ITEMS).contains(&entries.len()), ENTRIES;
         }
         let mut seen = BTreeSet::new();
         for entry in entries {
@@ -342,18 +347,6 @@ impl Entry {
     fn check(&self, entry: &str) -> Result<(), PlanError> {
         let at = |key: &str| format!("{entry}.{key}");
         let ms = |ms: u64| (1..=MAX_MS).contains(&ms);
-        let lists = [
-            self.payload.len(),
-            self.firmware.len(),
-            self.markers.len(),
-            self.expect.len(),
-            self.order.len(),
-            self.forbid.len(),
-            self.before_first_send.len(),
-            self.steps.len(),
-            self.values.len(),
-            self.segments.len(),
-        ];
         let mut expected = self.firmware.values().flat_map(BTreeMap::values);
         check! {
             at("reference") => self.reference.as_deref().is_none_or(is_reference), REFERENCE;
@@ -364,11 +357,10 @@ impl Entry {
             at("boot_timeout_ms") => ms(self.boot_timeout_ms), TIMEOUT;
             at("max_capture_bytes") => (1..=MAX_CAPTURE_BYTES).contains(&self.max_capture_bytes),
                 "the capture limit is 1 byte to 16 MiB";
-            at("steps") => self.steps.is_empty() == (self.sends == Some(false)),
+            at("steps") => matches!((self.steps.is_empty(), self.sends), (true, Some(false)) | (false, None)),
                 "an entry has either steps or sends = false";
             at("before_first_send") => !self.steps.is_empty() || self.before_first_send.is_empty(),
                 "an entry without steps sends nothing";
-            entry => lists.iter().all(|len| *len <= MAX_ITEMS), "a list has at most 100 items";
             at("firmware") => expected.all(|value| is_line_text(value)),
                 "an expected value is a line of text";
         }
@@ -428,6 +420,38 @@ impl Entry {
         }
         Ok(())
     }
+}
+
+/// Checks the bounds of the lists of a plan, and of its line patterns,
+/// before any pattern is compiled: at most 100 entries, 100 items in every
+/// list and table of an entry, and [`MAX_PATTERNS`] patterns.
+fn check_sizes(table: &toml::Table) -> Result<(), PlanError> {
+    let entries = table.get("entries").and_then(toml::Value::as_array);
+    check! { "entries" => entries.is_none_or(|entries| entries.len() <= MAX_ITEMS), ENTRIES; }
+    let mut patterns = 0;
+    for entry in entries
+        .into_iter()
+        .flatten()
+        .filter_map(toml::Value::as_table)
+    {
+        let name = entry.get("name").and_then(toml::Value::as_str);
+        let list = |key| {
+            entry
+                .get(key)
+                .and_then(toml::Value::as_array)
+                .map_or(0, Vec::len)
+        };
+        patterns += ["markers", "forbid", "steps", "values"]
+            .map(list)
+            .iter()
+            .sum::<usize>();
+        check! {
+            format!("entries.{}", name.unwrap_or_default()) => entry.values().all(bounded),
+                "a list has at most 100 items";
+        }
+    }
+    check! { "entries" => patterns <= MAX_PATTERNS, "a plan has at most 1000 line patterns"; }
+    Ok(())
 }
 
 impl fmt::Display for PlanError {
@@ -788,6 +812,12 @@ mod tests {
         assert_eq!(at, "entries.echo.steps");
         let at = invalid_at(&edited("sends = false", "sends = true"), &[]);
         assert_eq!(at, "entries.firmware-only.steps");
+        // `sends` is written only as false, even beside steps.
+        let at = invalid_at(
+            &edited("name = \"echo\"", "name = \"echo\"\nsends = true"),
+            &[],
+        );
+        assert_eq!(at, "entries.echo.steps");
         let at = invalid_at(
             &edited(
                 "sends = false",
@@ -877,6 +907,45 @@ mod tests {
             ),
         );
         assert_eq!(invalid_at(&many, &[]), "entries.echo");
+        let order = (0..101).map(|n| format!("\"m{n}\"")).collect::<Vec<_>>();
+        let long = edited(
+            "[\"board.bootloader\", \"board.network_boot\", \"board.os_start\", \"started\"]",
+            &format!("[{}]", order.join(", ")),
+        );
+        assert_eq!(invalid_at(&long, &[]), "entries.firmware-only");
+    }
+
+    #[test]
+    fn list_and_pattern_bounds_are_checked_before_any_pattern_is_compiled() {
+        // Too many markers, none of which compiles: the bound is named.
+        let markers = vec!["{ name = \"m\", line = '(' }"; 101].join(", ");
+        let many = edited(
+            "markers = [{ name = \"ready\", line = '^READY$' }]",
+            &format!("markers = [{markers}]"),
+        );
+        assert_eq!(invalid_at(&many, &[]), "entries.echo");
+        // At most 1000 patterns in a plan, counted before the entries are read.
+        let entry = |n: usize| {
+            let markers = vec!["{ name = \"m\", line = '(' }"; 91].join(", ");
+            format!("[[entries]]\nname = \"e{n}\"\nmarkers = [{markers}]\n")
+        };
+        let head =
+            "format = \"kyto-bench run plan\"\nformat_version = 1\nboard = \"raspberry-pi-5\"\n";
+        let text = format!("{head}{}", (0..11).map(entry).collect::<String>());
+        match RunPlan::parse(&text) {
+            Err(PlanError::Invalid { at, reason }) => {
+                assert_eq!(
+                    (at.as_str(), reason.as_str()),
+                    ("entries", "a plan has at most 1000 line patterns")
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        let fewer = format!("{head}{}", (0..10).map(entry).collect::<String>());
+        assert!(syntax(&fewer).contains("cannot be used"));
+        // A short pattern that compiles to more than 64 KiB is refused.
+        let large = edited("line = '^READY$'", "line = 'a{25000}'");
+        assert!(syntax(&large).contains("size limit"));
     }
 
     #[test]

@@ -13,7 +13,7 @@ use std::ops::Deref;
 use serde::Deserialize;
 
 use crate::bootloader::ReleaseDate;
-use crate::document::{Header, NOT_A_NAME, check, is_line_text, is_name};
+use crate::document::{Header, NOT_A_NAME, bounded, check, is_line_text, is_name};
 use crate::identity::{Field, FieldRef, Kind, ReadMethod, UNKNOWN};
 use crate::names::{self, PayloadName};
 use crate::pattern::LinePattern;
@@ -302,6 +302,9 @@ impl Board {
         let header = Header::take(&mut table).map_err(syntax)?;
         if !header.is(FORMAT, FORMAT_VERSION) {
             return Err(BoardError::Format(header));
+        }
+        for (key, value) in &table {
+            check! { key.as_str() => bounded(value), "a list or table has at most 100 items"; }
         }
         let mut raw: RawBoard = table.try_into().map_err(syntax)?;
         let sources = std::mem::take(&mut raw.sources);
@@ -1541,6 +1544,27 @@ mod tests {
                 BoardError::Format(_) => panic!("{to}: {error}"),
             }
         }
+    }
+
+    #[test]
+    fn lists_are_bounded_before_any_pattern_is_compiled() {
+        let never = vec!["\"0.0.0.0\""; 101].join(", ");
+        let long = edited("never = [\"0.0.0.0\"]", &format!("never = [{never}]"));
+        let at = "deidentify";
+        assert_eq!(
+            Board::parse(&long).unwrap_err(),
+            invalid(at, "a list or table has at most 100 items")
+        );
+        // 101 sensitive lines, none of which compiles, are refused by their number.
+        let line = "[[sensitive]]\nname = \"s\"\nline = '('\nexample = 'x'\n\n".repeat(101);
+        let many = edited(
+            "[[sensitive]]\nname = \"board-serial\"",
+            &format!("{line}[[sensitive]]\nname = \"board-serial\""),
+        );
+        assert_eq!(
+            Board::parse(&many).unwrap_err(),
+            invalid("sensitive", "a list or table has at most 100 items")
+        );
     }
 
     #[test]

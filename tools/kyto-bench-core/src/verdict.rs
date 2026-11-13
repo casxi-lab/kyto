@@ -849,6 +849,99 @@ firmware.bootloader = {{ hash = "1accd665", date = "2026/09/25" }}
         assert_eq!(same.result("identity.disagree", "identity"), Outcome::Pass);
     }
 
+    #[test]
+    fn a_cold_boot_ends_in_time_only_after_a_power_on_and_with_an_end() {
+        // Without a power on, the end marker did not come by a boot timeout.
+        let mut unpowered = case(&LINES);
+        unpowered
+            .events
+            .retain(|e| power::command(e) != Some(Command::On));
+        assert_eq!(unpowered.result("boot.end", "ready"), Outcome::Fail);
+        // An entry that ends at the timeout needs the end of its capture.
+        let mut endless = case(&LINES);
+        endless.plan = plan(|text| {
+            let text = text.replace("end = { marker = \"ready\" }", "end = \"timeout\"");
+            text.replace("boot_timeout_ms = 60000", "boot_timeout_ms = 1000")
+        });
+        assert_eq!(endless.result("boot.end", "timeout"), Outcome::Pass);
+        endless
+            .events
+            .retain(|e| !matches!(e.event, EventKind::End { .. }));
+        assert_eq!(endless.result("boot.end", "timeout"), Outcome::Fail);
+    }
+
+    #[test]
+    fn an_order_needs_every_marker_each_on_a_later_line() {
+        let order = "board.bootloader board.network_boot board.os_start ready";
+        let no_first = case(&lines_with(|lines| {
+            lines.remove(1);
+        }));
+        assert_eq!(no_first.result("marker.order", order), Outcome::Fail);
+        // Two markers whose first lines are the same line.
+        let mut same = case(&LINES);
+        same.plan = plan(|text| {
+            let ready = "markers = [{ name = \"ready\", line = '^READY$' }";
+            let text = text.replace(
+                ready,
+                &format!("{ready}, {{ name = \"up\", line = '^READY' }}"),
+            );
+            let orders = "order = [{ markers = [";
+            text.replace(
+                orders,
+                &format!("{orders}\"ready\", \"up\"] }}, {{ markers = ["),
+            )
+        });
+        assert_eq!(same.result("marker.order", order), Outcome::Pass);
+        assert_eq!(same.result("marker.order", "ready up"), Outcome::Fail);
+    }
+
+    #[test]
+    fn the_lines_of_the_bounds_of_a_forbidden_pattern_are_outside_it() {
+        let forbid = "{ line = '^Example', from = \"ready\" }";
+        let mut bounded = case(&LINES);
+        for bound in ["from", "to"] {
+            let on_bound = format!("{{ line = '^READY$', {bound} = \"ready\" }}");
+            bounded.plan = plan(|text| text.replace(forbid, &on_bound));
+            assert_eq!(
+                bounded.result("marker.forbidden", "1"),
+                Outcome::Pass,
+                "{bound}"
+            );
+        }
+    }
+
+    #[test]
+    fn markers_before_the_first_send_pass_when_nothing_is_sent() {
+        // Without `READY`, the step is never armed and nothing is sent.
+        let unsent = case(&lines_with(|lines| {
+            lines.remove(8);
+        }));
+        assert!(
+            !unsent
+                .events
+                .iter()
+                .any(|e| matches!(e.event, EventKind::Send { .. }))
+        );
+        assert_eq!(
+            unsent.result("marker.before_first_send", "ready"),
+            Outcome::Pass
+        );
+    }
+
+    #[test]
+    fn each_segment_is_compared_with_the_bytes_of_its_own_lines() {
+        let mut two = case(&LINES);
+        let mode = Sha256::of(format!("{}\r\n", LINES[2]).as_bytes());
+        two.plan = plan(|text| {
+            let segment = format!(
+                "{{ name = \"mode\", from = \"board.bootloader\", to = \"board.network_boot\", sha256 = \"{mode}\" }}"
+            );
+            text.replace("segments = [", &format!("segments = [{segment}, "))
+        });
+        assert_eq!(two.result("segment.digest", "mode"), Outcome::Pass);
+        assert_eq!(two.result("segment.digest", "banner"), Outcome::Pass);
+    }
+
     fn check(result: Outcome) -> Check {
         let detail = (result != Outcome::Pass).then(|| "found".to_string());
         Check::new("rule", "subject", result, detail)

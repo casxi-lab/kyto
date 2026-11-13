@@ -1413,8 +1413,10 @@ agree:
   sorted and distinct;
 - `receipt`, read with `0` for each replaced byte of a string, such as a
   payload name of which a hit replaced a part, is a receipt of version 1 in
-  the form of the format: every key, none missing or unknown, and every
-  value of its type and form. The rules that tie the parts of a receipt
+  the form of the format: every key, none missing or unknown, every value of
+  its type and form, and its keys as a receipt renders them, in their order,
+  with `null` for each absent value and no `detail` of a check that passed.
+  The rules that tie the parts of a receipt
   together are not checked, since replaced values no longer show what the
   run recorded; its board description must be one that the library reads.
 

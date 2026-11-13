@@ -182,12 +182,13 @@ impl PublicReceipt {
             let reason = "a span of # in a field rewritten, in order, with sorted rules";
             return Err(invalid(format!("/replacements/{index}"), reason));
         }
-        let body: Receipt =
-            serde_json::from_value(body).map_err(|e| invalid("/receipt", e.to_string()))?;
+        let parsed = Receipt::deserialize(&body).map_err(|e| invalid("/receipt", e.to_string()))?;
         check! {
-            "/receipt" => body.format == receipt::FORMAT && body.format_version == receipt::FORMAT_VERSION,
+            "/receipt" => receipt::render_json(&parsed) == receipt::render_json(&body),
+                "a receipt in the form of the format, its keys in order";
+            "/receipt" => parsed.format == receipt::FORMAT && parsed.format_version == receipt::FORMAT_VERSION,
                 "a receipt of this version";
-            "/receipt/inputs/board_description/text" => Board::parse(&body.inputs.board_description.text).is_ok(),
+            "/receipt/inputs/board_description/text" => Board::parse(&parsed.inputs.board_description.text).is_ok(),
                 "a board description that this tool reads";
         }
         Ok(())
@@ -989,6 +990,23 @@ mod tests {
         refused(&|p| p.withheld[1].length = 9, "/withheld");
         refused(&|p| p.receipt["extra"] = 1.into(), "/receipt");
         refused(&|p| p.receipt["format"] = FORMAT.into(), "/receipt");
+        // The receipt keeps the rendered form of a receipt: its keys in order,
+        // none missing and no detail of a passing check.
+        refused(
+            &|p| {
+                let keys = p.receipt.as_object().unwrap().clone();
+                p.receipt = Value::Object(keys.into_iter().rev().collect());
+            },
+            "/receipt",
+        );
+        refused(
+            &|p| drop(p.receipt.as_object_mut().unwrap().shift_remove("refusal")),
+            "/receipt",
+        );
+        refused(
+            &|p| p.receipt["entries"][0]["cold_boots"][0]["checks"][0]["detail"] = Value::Null,
+            "/receipt",
+        );
         refused(
             &|p| p.receipt["inputs"]["board_description"]["text"] = "board".into(),
             "/receipt/inputs/board_description/text",

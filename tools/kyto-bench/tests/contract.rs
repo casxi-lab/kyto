@@ -1001,3 +1001,51 @@ fn the_contract_lists_every_requirement_and_rule() {
     );
     assert_finds(&found, "the requirements of `payload::check_staged`");
 }
+
+#[test]
+fn the_contract_check_finds_ids_tables_and_cells_out_of_form() {
+    let requirements = |from: &str, to: &str| {
+        assert!(REQUIREMENTS.contains(from), "{from}");
+        let edited = REQUIREMENTS.replacen(from, to, 1);
+        problems(&edited, CONTRACT, FORMATS, &SOURCES)
+    };
+    let contract = |from: &str, to: &str| {
+        assert!(CONTRACT.contains(from), "{from}");
+        let edited = CONTRACT.replacen(from, to, 1);
+        problems(REQUIREMENTS, &edited, FORMATS, &SOURCES)
+    };
+    // Prefixes of one and of six letters, a number of three digits, and a
+    // requirement given twice.
+    for id in ["V-R01", "VERDIC-R01", "VERD-R001"] {
+        let found = requirements("### VERD-R01\n", &format!("### {id}\n"));
+        assert_finds(&found, &format!("{id} is not a requirement id"));
+    }
+    let found = requirements("### POWER-R06", "### POWER-R06\n\n### POWER-R06");
+    assert_finds(&found, "POWER-R06 comes twice");
+    // A table with another header, and a test cell with more than its code
+    // span.
+    let header = "| Requirement | Test | File | Kind |";
+    let found = contract(header, "| Requirement | Test | Path | Kind |");
+    assert_finds(&found, "the table of Requirement tests has another header");
+    let test = "`a_run_that_panics_switches_the_supply_off_and_leaves_no_output`";
+    let found = contract(test, &format!("{test} (run)"));
+    assert_finds(&found, "is not a link and two code spans");
+    // A rule of two groups, one of them no requirement, a rule without a
+    // function, and a rule that the code gives two results.
+    let rule =
+        "| `payload.source_digest` | `PROV-R01`, `PROV-R04` | refusal | `payload::check_entry` |";
+    let found = contract(rule, &rule.replace("PROV-R04", "PROV-R09"));
+    assert_finds(
+        &found,
+        "the group of payload.source_digest is not requirements",
+    );
+    let found = contract(rule, &rule.replace("`payload::check_entry`", "check_entry"));
+    assert_finds(&found, "payload.source_digest has no function");
+    let rejudge = "tools/kyto-bench-core/src/rejudge.rs";
+    let other = "fn other() -> Check {\n    Check::new(\"device.error\", \"x\", Outcome::Fail, None)\n}\n\n";
+    let found = edited(rejudge, |text| format!("{other}{text}"), &[]);
+    assert_finds(
+        &found,
+        "the code gives device.error {\"fail\", \"fault\"}, not fault",
+    );
+}

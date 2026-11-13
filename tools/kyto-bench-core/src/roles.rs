@@ -1,12 +1,13 @@
 //! The device roles of a bench and the quantities that confirm its supply.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::document::named_enum;
 
 named_enum! {
     /// A device role of a bench, named as instance configurations name it.
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
     pub enum Role {
         /// Switches the board's supply.
         Power = "power",
@@ -21,7 +22,7 @@ named_enum! {
 
 /// A quantity of the supply that a meter reads and that confirms the supply
 /// state, in micro-units: microvolts or microamperes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Quantity {
     SupplyVoltage,

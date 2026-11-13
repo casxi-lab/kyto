@@ -4,8 +4,8 @@
 //! version, `min_boot_version` or else `manufacturing_version`, gives the
 //! earliest release with that version or a later one; a change notice gives
 //! a date for some values of a field, ignoring ASCII case. A bound whose
-//! value the record does not give is undecided, and the minimum is then at
-//! least the latest decided bound, possibly later.
+//! value the record does not give is undecided, and the minimum is then the
+//! latest decided bound, marked undecided with every undecided bound listed.
 
 use std::fmt;
 
@@ -96,9 +96,10 @@ pub struct Minimum {
     /// The latest date of the bounds that the record decides and that apply;
     /// `None` when none does.
     pub at_least: Option<ReleaseDate>,
-    /// The bounds that need a value the record does not give and that could
-    /// make the minimum later than `at_least`, in the order of the board
-    /// description. The minimum is decided when this is empty.
+    /// Every bound that needs a value the record does not give, in the order
+    /// of the board description, whether its date is before or after
+    /// `at_least`. The minimum is decided when this is empty; otherwise it is
+    /// `at_least` or later.
     pub undecided: Vec<Undecided>,
 }
 
@@ -169,17 +170,9 @@ pub fn minimum(board: &Board, identity: &IdentityRecord) -> Minimum {
         }
     }
 
-    let at_least = decided.into_iter().max();
-    let undecided = open
-        .into_iter()
-        .filter(|bound| match (bound.at_least, at_least) {
-            (Some(date), Some(known)) => date > known,
-            _ => true,
-        })
-        .collect();
     Minimum {
-        at_least,
-        undecided,
+        at_least: decided.into_iter().max(),
+        undecided: open,
     }
 }
 
@@ -254,12 +247,21 @@ mod tests {
         ]);
         let found = minimum(&board, &record);
         assert_eq!(found.at_least, Some(date("2026/09/25")));
-        assert!(found.undecided.is_empty(), "{:?}", found.undecided);
+        // The SPI flash part is unknown: its bound is listed though its date
+        // is earlier than the decided one.
+        assert_eq!(
+            found.undecided,
+            [Undecided {
+                field: field("spi_flash.part"),
+                at_least: Some(date("2026/05/05"))
+            }]
+        );
         // A part number applies its bound in any ASCII case.
         let record = identity(&[
             ("pcb_version", "\"3\""),
             ("min_boot_version", "1"),
             ("memory.part", "\"rs2g32lr4d4bnr-46bt\""),
+            ("spi_flash.part", "\"another-part\""),
         ]);
         assert_eq!(
             minimum(&board, &record),
@@ -272,6 +274,7 @@ mod tests {
             ("pcb_version", "\"7\""),
             ("min_boot_version", "3"),
             ("memory.part", "\"RS2G32LR4D4BNR-46BT\""),
+            ("spi_flash.part", "\"GD25Q16EEIGR\""),
         ]);
         assert_eq!(
             minimum(&board, &record),
@@ -315,6 +318,7 @@ mod tests {
             ("pcb_version", "\"3\""),
             ("manufacturing_version", "2"),
             ("memory.part", "\"another-part\""),
+            ("spi_flash.part", "\"another-part\""),
         ]);
         assert_eq!(
             minimum(&board, &record),
@@ -371,13 +375,26 @@ mod tests {
                 },
             ]
         );
-        // Bounds that cannot make the minimum later are not listed.
+        // Bounds whose dates are earlier than the decided date are listed
+        // too: the result is undecided until every bound is decided.
         let found = minimum(
             &board,
             &identity(&[("min_boot_version", "3"), ("pcb_version", "\"7\"")]),
         );
         assert_eq!(found.at_least, Some(date("2026/10/23")));
-        assert!(found.undecided.is_empty(), "{:?}", found.undecided);
+        assert_eq!(
+            found.undecided,
+            [
+                Undecided {
+                    field: field("memory.part"),
+                    at_least: Some(date("2026/09/25"))
+                },
+                Undecided {
+                    field: field("spi_flash.part"),
+                    at_least: Some(date("2026/05/05"))
+                },
+            ]
+        );
     }
 
     #[test]
@@ -388,6 +405,7 @@ mod tests {
             ("min_boot_version", "1"),
             ("memory.vendor", "\"Micron\""),
             ("memory.part", "\"another-part\""),
+            ("spi_flash.part", "\"another-part\""),
         ]);
         let found = minimum(&board, &record);
         assert_eq!(found.at_least, Some(date("2026/05/11")));

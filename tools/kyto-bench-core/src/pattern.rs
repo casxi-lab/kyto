@@ -14,12 +14,15 @@ use std::fmt;
 use std::ops::Range;
 
 use regex::bytes::{Regex, RegexBuilder};
+use serde::Deserialize;
 
 /// The largest compiled size of a pattern, in bytes.
-pub const SIZE_LIMIT: usize = 1 << 20;
+pub const SIZE_LIMIT: usize = 64 << 10;
 
-/// A compiled line pattern with its source text.
-#[derive(Clone, Debug)]
+/// A compiled line pattern with its source text, read from a document as a
+/// string.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(try_from = "String")]
 pub struct LinePattern {
     source: String,
     regex: Regex,
@@ -85,18 +88,18 @@ impl LinePattern {
         self.regex.find(line).map(|found| found.range())
     }
 
-    /// The named groups of the first match in `line` that took part in it,
-    /// each with its span, in the order of the pattern; `None` when the
-    /// pattern does not match.
-    pub fn named_groups<'p>(&'p self, line: &[u8]) -> Option<Vec<(&'p str, Range<usize>)>> {
-        let captures = self.regex.captures(line)?;
-        Some(
-            self.regex
-                .capture_names()
-                .flatten()
-                .filter_map(|name| captures.name(name).map(|group| (name, group.range())))
-                .collect(),
-        )
+    /// Every match in `line` that does not overlap the one before it, in
+    /// order, as the named groups that took part in it, each with its span,
+    /// in the order of the pattern.
+    pub fn matches<'p>(&'p self, line: &[u8]) -> Vec<Vec<(&'p str, Range<usize>)>> {
+        let names = self.group_names();
+        let groups = |found: regex::bytes::Captures<'_>| -> Vec<_> {
+            let spans = names
+                .iter()
+                .map(|name| Some((*name, found.name(name)?.range())));
+            spans.flatten().collect()
+        };
+        self.regex.captures_iter(line).map(groups).collect()
     }
 
     /// The bytes of the group `name` in the first match in `line`; `None`
@@ -141,6 +144,14 @@ impl LinePattern {
                 example: example.to_string(),
             })
         }
+    }
+}
+
+impl TryFrom<String> for LinePattern {
+    type Error = PatternError;
+
+    fn try_from(source: String) -> Result<Self, PatternError> {
+        Self::new(&source)
     }
 }
 
@@ -234,7 +245,9 @@ mod tests {
         assert!(invalid("("));
         assert!(invalid("[a-"));
         assert!(invalid("(?P<x>a)(?P<x>b)"));
-        assert!(LinePattern::new(r"(?:a{100}){100}").is_ok());
+        assert!(LinePattern::new(r"(?:a{10}){100}").is_ok());
+        // A short pattern can still compile to more than the limit.
+        assert!(invalid(r"a{25000}"));
         let oversized = LinePattern::new(r"(?:a{1000}){1000}").unwrap_err();
         assert!(oversized.to_string().contains("size limit"), "{oversized}");
         let error = LinePattern::new("(").unwrap_err().to_string();
@@ -245,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn named_groups_give_their_spans_and_bytes() {
+    fn matches_and_groups_give_their_spans_and_bytes() {
         let read = pattern(r"^Read (?P<path>[^ ]+) bytes +(?P<bytes>[0-9]+)(?P<tail> x)?$");
         let line = b"Read bench/config.txt bytes      246";
         assert_eq!(read.group(line, "path"), Some(&b"bench/config.txt"[..]));
@@ -253,10 +266,20 @@ mod tests {
         assert_eq!(read.group(line, "tail"), None);
         assert_eq!(read.group(line, "other"), None);
         assert_eq!(
-            read.named_groups(line),
-            Some(vec![("path", 5..21), ("bytes", 33..36)])
+            read.matches(line),
+            [vec![("path", 5..21), ("bytes", 33..36)]]
         );
-        assert_eq!(read.named_groups(b"nothing"), None);
+        assert!(read.matches(b"nothing").is_empty());
+        // Every match counts, each with the groups that took part in it.
+        let pairs = pattern(r"(?P<key>[a-z]+)=(?P<value>[0-9]+)?");
+        assert_eq!(
+            pairs.matches(b"a=1 b= c=22"),
+            [
+                vec![("key", 0..1), ("value", 2..3)],
+                vec![("key", 4..5)],
+                vec![("key", 7..8), ("value", 9..11)],
+            ]
+        );
         assert!(read.has_group("tail"));
         assert!(!read.has_group("value"));
         assert_eq!(read.group_names(), ["path", "bytes", "tail"]);

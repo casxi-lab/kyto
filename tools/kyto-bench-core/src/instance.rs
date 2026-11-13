@@ -7,10 +7,10 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::board::Board;
-use crate::digest::Sha256;
+use crate::digest::{Sha256, is_lower_hex};
 use crate::document::{Header, NOT_A_NAME, check, is_line_text, is_name};
 use crate::identity::{IdentityError, IdentityRecord};
 use crate::names::{self, PayloadName};
@@ -26,11 +26,14 @@ pub const FORMAT_VERSION: i64 = 1;
 /// shorter value would match unrelated bytes.
 pub const MIN_SEARCHED_LEN: usize = 4;
 
+/// The number of hexadecimal digits of the salt in `[local]`: 128 bits.
+pub const SALT_DIGITS: usize = 32;
+
 const MAX_TIMEOUT_MS: u64 = 3_600_000;
 
 /// Where the board finds its files over TFTP: instance values that a public
 /// receipt never shows.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TftpParameters {
     /// The address of the TFTP server as the board's firmware prints it.
@@ -41,7 +44,7 @@ pub struct TftpParameters {
 
 /// How readings of the supply confirm that it is on or off, in micro-units
 /// of `quantity`.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Confirmation {
     pub quantity: Quantity,
@@ -57,14 +60,14 @@ pub struct Confirmation {
 }
 
 /// How long the console may take to be ready.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConsoleParameters {
     pub ready_timeout_ms: u64,
 }
 
 /// A set of payload digests that the bench pins, which run plans name.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Pin {
     pub name: String,
@@ -72,15 +75,16 @@ pub struct Pin {
 }
 
 /// One payload file of a pinned set.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PinnedFile {
     pub name: PayloadName,
     pub sha256: Sha256,
 }
 
-/// The parameters that verdicts and the checks before a run read.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// The parameters that receipts record, which verdicts and the checks before a run read.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Parameters {
     pub tftp: TftpParameters,
     pub confirmation: Confirmation,
@@ -128,8 +132,7 @@ impl Devices {
     }
 }
 
-/// An instance value that a public receipt must not show, with the name of
-/// the rule that hides it.
+/// An instance value that a public receipt must not show, with its rule.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InstanceValue {
     pub rule: String,
@@ -142,7 +145,7 @@ pub struct Instance {
     board: String,
     parameters: Parameters,
     devices: Devices,
-    /// `[local]`, a table of each role's settings.
+    /// `[local]`: the salt and a table of each role's settings.
     local: toml::Table,
     hardware_revision: Sha256,
 }
@@ -190,15 +193,17 @@ impl Instance {
         // The revision covers what `[devices]` holds, as written.
         let json = canonical_json(&raw.devices)
             .map_err(|error| invalid(format!("devices{}", error.at), error.to_string()))?;
+        let parameters = Parameters {
+            tftp: raw.tftp,
+            confirmation: raw.confirmation,
+            console: raw.console,
+            identity,
+            pins: raw.pins,
+        };
+        parameters.check_values()?;
         Ok(Self {
             board: raw.board,
-            parameters: Parameters {
-                tftp: raw.tftp,
-                confirmation: raw.confirmation,
-                console: raw.console,
-                identity,
-                pins: raw.pins,
-            },
+            parameters,
             devices,
             local: raw.local,
             hardware_revision: Sha256::of(json.as_bytes()),
@@ -238,10 +243,11 @@ impl Instance {
 
     /// The instance values that a public receipt must not show, with their
     /// rules: the TFTP server address (`instance.tftp.server_address`), the
-    /// path prefix unless empty (`instance.tftp.path_prefix`), and every
-    /// string of at least [`MIN_SEARCHED_LEN`] bytes in `[local]`, nested
-    /// ones too (`instance.local.<role>.<key>`, nested keys joined by `.`), in
-    /// the order of the roles and of the keys.
+    /// path prefix unless empty (`instance.tftp.path_prefix`), the salt
+    /// (`instance.local.salt`), and every string of at least
+    /// [`MIN_SEARCHED_LEN`] bytes in the tables of `[local]`, nested ones too
+    /// (`instance.local.<role>.<key>`, nested keys joined by `.`), in the
+    /// order of the roles and of the keys.
     pub fn deidentify_values(&self) -> Vec<InstanceValue> {
         let tftp = &self.parameters.tftp;
         let mut values = Vec::new();
@@ -252,6 +258,9 @@ impl Instance {
             let value = toml::Value::from(value.as_str());
             collect(&format!("instance.tftp.{key}"), &value, &mut values);
         }
+        if let Some(salt) = self.local.get("salt") {
+            collect("instance.local.salt", salt, &mut values);
+        }
         for role in Role::ALL {
             for (key, value) in self.local(role).into_iter().flatten() {
                 collect(&format!("instance.local.{role}.{key}"), value, &mut values);
@@ -261,11 +270,16 @@ impl Instance {
     }
 
     /// Checks the configuration against the description of its board, which
-    /// must also accept the identity record.
+    /// must accept the identity record and hold no value to hide.
     pub fn check_board(&self, board: &Board) -> Result<(), InstanceError> {
         if self.board != board.id {
             let (instance, board) = (self.board.clone(), board.id.clone());
             return Err(InstanceError::Board { instance, board });
+        }
+        let text = board.text().to_ascii_lowercase();
+        for InstanceValue { rule, value } in self.deidentify_values() {
+            let at = rule.trim_start_matches("instance.");
+            check! { at => !text.contains(&value.to_ascii_lowercase()), IN_BOARD; }
         }
         let identity = &self.parameters.identity;
         identity.check(board).map_err(InstanceError::Identity)
@@ -296,9 +310,16 @@ fn is_searchable(text: &str) -> bool {
         && text.bytes().all(|byte| byte.is_ascii_graphic())
 }
 
-impl RawInstance {
+impl Parameters {
+    /// Checks the rules of every value, as reading a configuration does, and
+    /// the identity record against the description of the board.
+    pub fn check(&self, board: &Board) -> Result<(), InstanceError> {
+        self.check_values()?;
+        self.identity.check(board).map_err(InstanceError::Identity)
+    }
+
     /// Checks the rules of every value but those of the identity record.
-    fn check(&self, devices: &Devices) -> Result<(), InstanceError> {
+    fn check_values(&self) -> Result<(), InstanceError> {
         let (tftp, conf, console) = (&self.tftp, &self.confirmation, &self.console);
         let prefix = &tftp.path_prefix;
         let timeout = |ms: u64| (1..=MAX_TIMEOUT_MS).contains(&ms);
@@ -326,7 +347,14 @@ impl RawInstance {
             names::check_distinct(pin.files.iter().map(|file| &file.name))
                 .map_err(|error| invalid(&at, error.to_string()))?;
         }
-        for (key, settings) in &self.local {
+        Ok(())
+    }
+}
+
+impl RawInstance {
+    /// Checks the rules of `[local]` and `[devices]`.
+    fn check(&self, devices: &Devices) -> Result<(), InstanceError> {
+        for (key, settings) in self.local.iter().filter(|(key, _)| *key != "salt") {
             if !Role::ALL.iter().any(|role| role.name() == key) || !settings.is_table() {
                 let message = format!("[local.{key}] is not the settings table of a role");
                 return Err(InstanceError::Syntax(message));
@@ -346,12 +374,28 @@ impl RawInstance {
                     "both ends of a connection are lines of text";
             }
         }
+        let salt = self.local.get("salt").and_then(toml::Value::as_str);
+        let real = Role::ALL.map(|role| devices.device(role).kind != "simulated");
+        check! {
+            "local.salt" => salt.is_some_and(|salt| is_lower_hex(salt, SALT_DIGITS)),
+                "the salt is 32 lowercase hexadecimal digits, 128 random bits";
+            "local.salt" => !real.contains(&true) || salt.is_none_or(|salt| !PUBLISHED_SALTS.contains(&salt)),
+                "kyto publishes this salt; generate one with openssl rand -hex 16";
+        }
         Ok(())
     }
 }
 
+/// The salts that kyto publishes, in its documentation and its tests, which
+/// only a configuration of simulated devices may use.
+const PUBLISHED_SALTS: [&str; 2] = [
+    "9c1f5e0a7b3d48e2a6c0f4b8d2e71a35",
+    "6b2d9f41c07e8a35d4e19b7c2f60a853",
+];
+
 const SEARCHABLE: &str = "the value is 4 to 255 printable ASCII characters without spaces";
 const TIMEOUT: &str = "the timeout is 1 ms to 1 h";
+const IN_BOARD: &str = "the board description holds this value to hide; choose another";
 
 /// A value that canonical JSON does not hold: `found`, a float or a date or
 /// time, `at` a path of `.key` and `[index]` steps from the top.
@@ -431,7 +475,6 @@ struct RawInstance {
     #[serde(default)]
     pins: Vec<Pin>,
     devices: toml::Value,
-    #[serde(default)]
     local: toml::Table,
 }
 
@@ -442,7 +485,7 @@ mod tests {
 
     /// An instance configuration of a bench with simulated devices, in
     /// documentation values: the TFTP server address 192.0.2.10, an empty
-    /// path prefix, and console captures named by relative paths.
+    /// path prefix, a salt, and console captures named by relative paths.
     const EXAMPLE: &str = r#"format = "kyto-bench instance"
 format_version = 1
 board = "raspberry-pi-5"
@@ -493,6 +536,9 @@ delivery = { kind = "simulated", model = "simulated" }
 [[devices.connections]]
 from = "console"
 to = "board debug UART"
+
+[local]
+salt = "6b2d9f41c07e8a35d4e19b7c2f60a853"
 
 [local.console]
 replay = ["captures/firmware-only.bin", "captures/echo.bin"]
@@ -660,6 +706,7 @@ B = { z = "", y = "q\"b\\c\n\t\u0001é/" }
             pairs,
             [
                 ("instance.tftp.server_address", "192.0.2.10"),
+                ("instance.local.salt", "6b2d9f41c07e8a35d4e19b7c2f60a853"),
                 (
                     "instance.local.console.replay",
                     "captures/firmware-only.bin"
@@ -682,6 +729,7 @@ B = { z = "", y = "q\"b\\c\n\t\u0001é/" }
             [
                 ("instance.tftp.server_address", "192.0.2.10"),
                 ("instance.tftp.path_prefix", "bench/"),
+                ("instance.local.salt", "6b2d9f41c07e8a35d4e19b7c2f60a853"),
                 ("instance.local.power.bus.name", "bus-a"),
                 ("instance.local.power.port", "/dev/example"),
                 (
@@ -814,6 +862,55 @@ B = { z = "", y = "q\"b\\c\n\t\u0001é/" }
     }
 
     #[test]
+    fn an_instance_without_a_128_bit_salt_is_rejected() {
+        let salt = "salt = \"6b2d9f41c07e8a35d4e19b7c2f60a853\"";
+        let refused = [
+            edited(salt, ""),
+            edited(salt, "salt = \"6b2d9f41c07e8a35d4e19b7c2f60a8\""),
+            edited(salt, "salt = \"6b2d9f41c07e8a35d4e19b7c2f60a8530\""),
+            edited(salt, "salt = \"6B2D9F41C07E8A35D4E19B7C2F60A853\""),
+            edited(salt, "salt = \"6b2d9f41c07e8a35d4e19b7c2f60a85g\""),
+            edited(salt, "salt = 128"),
+            edited(
+                salt,
+                "salt = { value = \"6b2d9f41c07e8a35d4e19b7c2f60a853\" }",
+            ),
+        ];
+        for text in refused {
+            assert_eq!(at_of(&text), "local.salt", "{text}");
+        }
+        // [local] made only of the settings of the console, and no [local].
+        let start = EXAMPLE.find("[local]\n").unwrap();
+        let end = EXAMPLE.find("[local.console]\n").unwrap();
+        let without = format!("{}{}", &EXAMPLE[..start], &EXAMPLE[end..]);
+        assert_eq!(at_of(&without), "local.salt");
+        let no_local = &EXAMPLE[..start];
+        let error = Instance::parse(no_local).unwrap_err().to_string();
+        assert!(error.contains("missing field `local`"), "{error}");
+    }
+
+    #[test]
+    fn a_salt_that_kyto_publishes_is_only_for_simulated_devices() {
+        let power = "power = { kind = \"simulated\", model = \"simulated\" }";
+        let real = edited(power, "power = { kind = \"relay-board\", model = \"R4\" }");
+        assert_eq!(at_of(&real), "local.salt");
+        let documented = real.replace(
+            "6b2d9f41c07e8a35d4e19b7c2f60a853",
+            "9c1f5e0a7b3d48e2a6c0f4b8d2e71a35",
+        );
+        assert_eq!(at_of(&documented), "local.salt");
+        // A salt of the bench's own, made here so that no text holds it.
+        let salt = Sha256::of(b"a bench").to_string();
+        let own = real.replace("6b2d9f41c07e8a35d4e19b7c2f60a853", &salt[..32]);
+        assert_eq!(
+            Instance::parse(&own).unwrap().devices().power.kind,
+            "relay-board"
+        );
+        // The documented example, of simulated devices, keeps its salt.
+        assert!(Instance::parse(documented_example()).is_ok());
+    }
+
+    #[test]
     fn an_instance_that_breaks_a_rule_is_refused() {
         let syntax = [
             edited("[local.console]", "[local.relay]"),
@@ -904,6 +1001,89 @@ B = { z = "", y = "q\"b\\c\n\t\u0001é/" }
             Instance::parse(&read).unwrap().check_board(&board),
             Err(InstanceError::Identity(IdentityError::Read { .. }))
         ));
+    }
+
+    #[test]
+    fn a_value_to_hide_that_the_board_description_holds_is_refused() {
+        // Receipts record the description verbatim, so such a value would
+        // leave no public version of any run of the bench.
+        let board = Board::parse(RASPBERRY_PI_5).unwrap();
+        example().check_board(&board).unwrap();
+        let prefix = "path_prefix = \"\"";
+        let console = "[local.console]\n";
+        for (from, to, at) in [
+            (prefix, "path_prefix = \"bench/\"", "tftp.path_prefix"),
+            (prefix, "path_prefix = \"BENCH/\"", "tftp.path_prefix"),
+            (
+                console,
+                "[local.console]\nbaud = \"115200\"\n",
+                "local.console.baud",
+            ),
+        ] {
+            let instance = Instance::parse(&edited(from, to)).unwrap();
+            assert_eq!(instance.check_board(&board), Err(invalid(at, IN_BOARD)));
+        }
+    }
+
+    /// Every salt that kyto writes, in its documentation and its tests, is
+    /// one that only simulated devices may use, and none is in what a run
+    /// reads or in the console output that the tests build, where a public
+    /// version would have to hide it.
+    #[test]
+    fn every_salt_that_kyto_writes_is_published_and_found_in_no_example() {
+        let tests = [
+            include_str!("instance.rs"),
+            include_str!("receipt.rs"),
+            include_str!("public.rs"),
+            include_str!("observe.rs"),
+            include_str!("plan.rs"),
+            include_str!("payload.rs"),
+        ];
+        let mut written = BTreeSet::new();
+        for text in tests.iter().chain([&FORMATS_PAGE]) {
+            for prefix in ["salt = \"", "salt = \\\""] {
+                for (at, _) in text.match_indices(prefix) {
+                    let start = at + prefix.len();
+                    if let Some(salt) = text.get(start..start + SALT_DIGITS)
+                        && is_lower_hex(salt, SALT_DIGITS)
+                    {
+                        written.insert(salt);
+                    }
+                }
+            }
+        }
+        assert_eq!(written, BTreeSet::from(PUBLISHED_SALTS));
+        let read = [
+            include_str!("../../examples/run-plan.toml"),
+            include_str!("../../examples/payload/firmware-only/config.txt"),
+            include_str!("../../examples/payload/firmware-only/bcm2712-rpi-5-b.dtb"),
+            include_str!("../../examples/payload/firmware-only/overlays/bcm2712d0.dtbo"),
+            include_str!("../../examples/payload/firmware-only/kernel.img"),
+            include_str!("../../examples/payload/echo/config.txt"),
+            include_str!("../../examples/payload/echo/bcm2712-rpi-5-b.dtb"),
+            include_str!("../../examples/payload/echo/overlays/bcm2712d0.dtbo"),
+            include_str!("../../examples/payload/echo/kernel.img"),
+            RASPBERRY_PI_5,
+        ];
+        // The documented instance values, the salts among them.
+        let documented = [example(), Instance::parse(documented_example()).unwrap()];
+        let values: Vec<String> = documented
+            .iter()
+            .flat_map(Instance::deidentify_values)
+            .map(|value| value.value.to_ascii_lowercase())
+            .collect();
+        for text in read.map(str::to_ascii_lowercase) {
+            for value in &values {
+                assert!(!text.contains(value.as_str()), "{value}");
+            }
+        }
+        // The console output that the tests build holds the documented TFTP
+        // server on purpose, but no salt.
+        for text in tests[1..].iter().map(|text| text.to_ascii_lowercase()) {
+            for salt in PUBLISHED_SALTS {
+                assert!(!text.contains(salt), "{salt}");
+            }
+        }
     }
 
     #[test]

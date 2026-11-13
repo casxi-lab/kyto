@@ -13,7 +13,7 @@ use std::ops::Deref;
 use serde::Deserialize;
 
 use crate::bootloader::ReleaseDate;
-use crate::document::{Header, NOT_A_NAME, check, is_line_text, is_name};
+use crate::document::{Header, NOT_A_NAME, bounded, check, is_line_text, is_name};
 use crate::identity::{Field, FieldRef, Kind, ReadMethod, UNKNOWN};
 use crate::names::{self, PayloadName};
 use crate::pattern::LinePattern;
@@ -303,6 +303,9 @@ impl Board {
         if !header.is(FORMAT, FORMAT_VERSION) {
             return Err(BoardError::Format(header));
         }
+        for (key, value) in &table {
+            check! { key.as_str() => bounded(value), "a list or table has at most 100 items"; }
+        }
         let mut raw: RawBoard = table.try_into().map_err(syntax)?;
         let sources = std::mem::take(&mut raw.sources);
         let description = Builder::new(sources)?.build(raw)?;
@@ -481,6 +484,7 @@ impl Builder {
         for line in raw {
             let at = format!("{list}.{}", line.name);
             let form = line_form(&at, line.line, line.example, &[])?;
+            let source = form.pattern.as_str();
             check! {
                 &at => is_name(&line.name), NOT_A_NAME;
                 &at => !lines.iter().any(|known| known.name == line.name), "the name is used twice";
@@ -488,6 +492,8 @@ impl Builder {
                     "the pattern has at least one named group";
                 &at => list == "firmware_versions" || line.sources.is_none(),
                     "only firmware version lines cite sources";
+                &at => list != "sensitive" || !(source.starts_with('^') || source.ends_with('$')),
+                    "a sensitive line is not anchored with ^ or $";
             }
             let sources = line.sources.unwrap_or_default();
             self.cite(&at, &sources)?;
@@ -1541,6 +1547,57 @@ mod tests {
                 BoardError::Format(_) => panic!("{to}: {error}"),
             }
         }
+    }
+
+    #[test]
+    fn lists_are_bounded_before_any_pattern_is_compiled() {
+        let never = vec!["\"0.0.0.0\""; 101].join(", ");
+        let long = edited("never = [\"0.0.0.0\"]", &format!("never = [{never}]"));
+        let at = "deidentify";
+        assert_eq!(
+            Board::parse(&long).unwrap_err(),
+            invalid(at, "a list or table has at most 100 items")
+        );
+        // 101 sensitive lines, none of which compiles, are refused by their number.
+        let line = "[[sensitive]]\nname = \"s\"\nline = '('\nexample = 'x'\n\n".repeat(101);
+        let many = edited(
+            "[[sensitive]]\nname = \"board-serial\"",
+            &format!("{line}[[sensitive]]\nname = \"board-serial\""),
+        );
+        assert_eq!(
+            Board::parse(&many).unwrap_err(),
+            invalid("sensitive", "a list or table has at most 100 items")
+        );
+    }
+
+    #[test]
+    fn a_sensitive_line_is_not_anchored() {
+        let line = "line = 'CID: (?P<cid>[0-9a-f]{32})'";
+        for anchored in [
+            "'^CID: (?P<cid>[0-9a-f]{32})'",
+            "'CID: (?P<cid>[0-9a-f]{32})$'",
+        ] {
+            let text = edited(line, &format!("line = {anchored}"));
+            assert_eq!(
+                Board::parse(&text).unwrap_err(),
+                invalid(
+                    "sensitive.sd-card-id",
+                    "a sensitive line is not anchored with ^ or $"
+                )
+            );
+        }
+        // Other lines may be anchored.
+        let board = pi5();
+        assert!(board.sensitive.iter().all(|line| {
+            let source = line.form.pattern.as_str();
+            !source.starts_with('^') && !source.ends_with('$')
+        }));
+        assert!(
+            board
+                .markers
+                .iter()
+                .any(|marker| marker.form.pattern.as_str().starts_with('^'))
+        );
     }
 
     #[test]

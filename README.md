@@ -107,16 +107,19 @@ are built on are fixed; no other part has been chosen, and the screen size,
 the key count and the arrangement within each form are open. Nothing has been
 designed or modelled yet: there are no design files and no models, and nothing
 to build, order, print or assemble. The bench tool in `tools/` is partly
-written: its library reads [board descriptions, identity records and instance
-configurations](docs/bench/formats.md), with the Raspberry Pi 5 description
-built in, and the tool has the interfaces of four kinds of device, each with
-one simulated device: power commands, a supply meter that also confirms
-power-on and power-off, the serial console, and payload delivery to the
-directory that the board reads over TFTP. It has no command that runs a
-bench, no driver for a real device, and no input injection or display capture
-yet. None of the other items above exists today. Until a power circuit
-exists, the development boards, a whole Raspberry Pi 5 board and a Compute
-Module 5 in its official IO board, run from a stable external supply.
+written: its library reads [board descriptions, identity records, instance
+configurations and run plans](docs/bench/formats.md), with the Raspberry Pi 5
+description built in, checks payloads, reads what a cold boot shows, and
+writes and reads receipts and their public versions, and the tool has the
+interfaces of four kinds of device, each with one simulated device: power
+commands, a supply meter that also confirms power-on and power-off, the
+serial console, and payload delivery to the directory that the board reads
+over TFTP. It has no command that runs a bench, no driver for a real device,
+and no input injection or display capture yet, so no run makes a receipt.
+Apart from the bench tool, the board descriptions and the formats of run
+plans and receipts, none of the items above exists today. Until a power
+circuit exists, the development boards, a whole Raspberry Pi 5 board and a
+Compute Module 5 in its official IO board, run from a stable external supply.
 
 The repository checks run from the repository root:
 

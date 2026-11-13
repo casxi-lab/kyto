@@ -1,9 +1,10 @@
 # Contributing
 
-kyto is newly initialized. It has no design files, models or bench tool yet;
-the only Cargo package is the repository-task workspace in `xtask/`. Before
-proposing a change, enable the commit message hook once and run these
-commands from the repository root:
+kyto is newly initialized. It has no design files or models yet. Its Cargo
+workspaces are the repository tasks in `xtask/` and the bench tool in
+`tools/`, which has no command that runs a bench yet. Before proposing a
+change, enable the commit message hook once and run these commands from the
+repository root:
 
 ```sh
 git config --local core.hooksPath .githooks
@@ -19,12 +20,13 @@ The last two report whitespace errors in unstaged and staged changes.
 ## Building and checking
 
 The Rust toolchain is pinned in `rust-toolchain.toml`, and rustup installs it
-on first use. The repository tasks are a Cargo workspace of their own in
-`xtask/`, with its own `Cargo.lock`, run as `cargo xtask`. `cargo xtask check`
-runs these steps in order and stops at the first one that fails:
+on first use. The repository tasks in `xtask/`, run as `cargo xtask`, and the
+bench tool in `tools/` are Cargo workspaces of their own, each with its own
+`Cargo.lock`. `cargo xtask check` runs these steps in order and stops at the
+first one that fails:
 
-1. `fmt`, `clippy` with warnings as errors, and `test`, in the `xtask`
-   workspace;
+1. `fmt`, then `clippy` with warnings as errors, then `test`, each first in
+   the `xtask` workspace and then in the `tools` workspace;
 2. `docs`: relative links and anchors in the Markdown files;
 3. `commits`: the header of every commit message in `<base>..HEAD` keeps to
    the rules of the commit message hook. The base is the commit that the
@@ -68,11 +70,25 @@ commit before the push, installs the toolchain of `rust-toolchain.toml` with
 rustup, and uploads the receipt as the artifact
 `check-receipt-<commit>-<attempt>`.
 
+In the `tools` workspace, Clippy reads `tools/clippy.toml`, which bans
+sleeping and reading the system clock, since every time and wait of a run
+comes from the bench clock, and running an external program; only the build
+script of `kyto-bench`, which asks Git for the commit and whether the working
+tree is clean, runs one. `tools/kyto-bench-core/clippy.toml` repeats these
+bans, which a test of the workspace checks, and also bans the entry points
+of the standard library to files and links, the network, environment
+variables, process and system state, threads, standard input and output and
+the clock, so that the crate, in which unsafe code is forbidden, has no
+input or output. The tests of the bench tool alone run with:
+
+```sh
+cargo test --locked --manifest-path tools/Cargo.toml
+```
+
 The change that adds the first design file or model also adds the checks of
 the chosen design tool, such as electrical rule checks, design rule checks
-and reproducible manufacturing outputs and exports. The change that adds the
-bench tool adds its workspace to the format, Clippy and test steps. Each
-updates this section and [AGENTS](AGENTS.md) to match.
+and reproducible manufacturing outputs and exports, and updates this section
+and [AGENTS](AGENTS.md) to match.
 
 ## Design files
 
@@ -143,8 +159,9 @@ parts.
 
 ## Hardware-in-the-loop bench
 
-The bench tool and the bench hardware do not exist yet. The rules below apply
-from the first change that adds them.
+The bench hardware does not exist yet, and the bench tool under `tools/`
+cannot run a bench yet. The rules below apply to the tool now and to the
+hardware from the first change that adds it.
 
 - **Tool.** The bench tool is written in Rust and kept under `tools/`, in a
   Cargo workspace with its own `Cargo.lock`. External dependencies come only

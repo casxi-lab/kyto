@@ -101,11 +101,12 @@
 - Use English Conventional Commit subjects of at most 72 characters and the
   local `.githooks/commit-msg` hook. Preserve history. Do not create remotes,
   tags or releases, and do not order anything, without authorization.
-- kyto has no design files, models or bench tool yet; the only Cargo package
-  is the repository-task workspace in `xtask/`. Before committing, run
-  `cargo xtask check`, `git diff --check` and `git diff --cached --check` and
-  review the staged diff. CI runs `cargo xtask check` on every pull request to
-  `main` and every push to `main`. The change that adds the first design file
-  or model also adds the checks of the chosen design tool, and the change that
-  adds the bench tool adds its workspace to the check; each updates
-  `CONTRIBUTING.md` and these instructions.
+- kyto has no design files or models yet. Its Cargo workspaces are the
+  repository tasks in `xtask/` and the bench tool in `tools/`, which has no
+  command that runs a bench yet; `cargo xtask check` runs the format, Clippy
+  and test steps in both. Before committing, run `cargo xtask check`,
+  `git diff --check` and `git diff --cached --check` and review the staged
+  diff. CI runs `cargo xtask check` on every pull request to `main` and every
+  push to `main`. The change that adds the first design file or model also
+  adds the checks of the chosen design tool and updates `CONTRIBUTING.md` and
+  these instructions.

@@ -4,8 +4,9 @@ This page describes the complete target scope of kyto: what it will provide,
 which other parts of casξ it works with, and the status of each part. The two
 forms and the compute module they are built on are fixed; no other part has
 been chosen, and the screen size, the key count and the arrangement within
-each form are open. kyto has no design files, models or bench program yet, so
-every part has the status `planned`.
+each form are open. kyto has no design files or models yet. The bench tool
+is partly written and cannot run a bench yet; every other part has the status
+`planned`.
 
 | Status | Meaning |
 | --- | --- |
@@ -100,7 +101,7 @@ Other parts of casξ work with kyto's hardware:
 
 | Part | What kyto will provide | Works with | Status |
 | --- | --- | --- | --- |
-| Bench tool | A Rust program under `tools/` that drives a bench through device interfaces: power control with a confirmation of power-on and power-off that does not rely on the relay's own reply, the serial console, image delivery and network boot, input injection, display capture and measurement. Host tests run it against simulated devices | krepi runs on the Raspberry Pi 5; measurements and sample checks | `planned` |
+| Bench tool | A Rust program under `tools/` that drives a bench through device interfaces: power control with a confirmation of power-on and power-off that does not rely on the relay's own reply, the serial console, image delivery and network boot, input injection, display capture and measurement. Host tests run it against simulated devices | krepi runs on the Raspberry Pi 5; measurements and sample checks | `partial`: [`tools/`](../tools) holds the write gate and the interfaces of four kinds of device, each with one simulated device: power commands, a supply meter that also confirms power-on and power-off, the serial console, and payload delivery to the directory that the board reads over TFTP. A command that runs a bench and records what it measures, drivers for real devices, input injection and display capture remain |
 | Board descriptions | For each supported board, how it boots and what its boot log must show, such as the network boot markers and the firmware versions; the Raspberry Pi 5 comes first | krepi version records | `planned` |
 | Run plans and receipts | A run plan names the image by digest and the steps to run; a receipt records the tool revision, the bench hardware revision, the image digest, the commands sent, the console transcript and every observation, with a verdict. A run refuses an image whose digest does not match, and a run that fails powers the board off and says that it did | krepi version records and regression runs | `planned` |
 | Bench self-test | A pinned self-test image and run that show a bench works; its result says nothing about any system tested on the bench | — | `planned` |

@@ -1,0 +1,16 @@
+[package]
+name = "kyto-bench-core"
+description = "Formats and rules of the kyto bench tool, without input or output"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+regex = { workspace = true }
+serde = { workspace = true }
+sha2 = { workspace = true }
+
+[lints]
+workspace = true

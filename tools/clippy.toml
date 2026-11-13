@@ -1,0 +1,23 @@
+# Clippy settings for every member of the bench tool workspace. Clippy reads
+# the nearest `clippy.toml` above a member's manifest, so a member with its own
+# file repeats these lists there, which a test of the workspace checks.
+
+# Every timestamp, wait, timeout and deadline of a run comes from the clock
+# that the bench provides, so nothing sleeps or reads the system clock.
+disallowed-methods = [
+    { path = "std::thread::sleep", reason = "waits use the bench clock" },
+    { path = "std::thread::park_timeout", reason = "waits use the bench clock" },
+    { path = "std::time::Instant::now", reason = "time comes from the bench clock" },
+    { path = "std::time::Instant::elapsed", reason = "time comes from the bench clock" },
+    { path = "std::time::SystemTime::now", reason = "time comes from the bench clock" },
+    { path = "std::time::SystemTime::elapsed", reason = "time comes from the bench clock" },
+    { path = "std::sync::mpsc::Receiver::recv_timeout", reason = "waits use the bench clock" },
+    { path = "std::sync::Condvar::wait_timeout", reason = "waits use the bench clock" },
+    { path = "std::sync::Condvar::wait_timeout_while", reason = "waits use the bench clock" },
+]
+
+# The tool runs no external program; only the build script, which asks Git
+# for the commit, may.
+disallowed-types = [
+    { path = "std::process::Command", reason = "the tool runs no external program" },
+]

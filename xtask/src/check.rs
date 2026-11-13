@@ -11,7 +11,7 @@ use crate::{commits, docs, receipt, workflows};
 
 /// The Cargo workspaces that the format, Clippy and test steps cover, as
 /// repository-relative directories.
-pub const WORKSPACES: [&str; 1] = ["xtask"];
+pub const WORKSPACES: [&str; 2] = ["xtask", "tools"];
 
 /// A command run in the repository root.
 #[derive(Debug, Clone)]
@@ -270,7 +270,7 @@ mod tests {
                         cmd.args[at.expect("each command names a manifest") + 1].as_str()
                     })
                     .collect();
-                assert_eq!(targets, ["xtask/Cargo.toml"]);
+                assert_eq!(targets, ["xtask/Cargo.toml", "tools/Cargo.toml"]);
             }
         }
     }

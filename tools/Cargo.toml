@@ -1,0 +1,36 @@
+# The bench tool is a workspace of its own, apart from the repository tasks
+# in `xtask/`, with its own `Cargo.lock`.
+[workspace]
+members = ["kyto-bench-core", "kyto-bench"]
+resolver = "3"
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+publish = false
+rust-version = "1.99"
+
+# Every external dependency is an exact version from crates.io. A member
+# names it with `workspace = true` and adds no features of its own.
+[workspace.dependencies]
+# Line patterns are matched against the bytes of one console line with
+# Unicode mode off, so the Unicode tables are left out; console lines are
+# short, so the literal and DFA optimisations of `perf` are left out; `std` is
+# required.
+regex = { version = "=1.13.1", default-features = false, features = ["std"] }
+# Digests, payload names, the write classes and enables and the supply
+# quantities derive `Deserialize` so that documents can name them; only the
+# derive macros and the allocation support for strings are needed.
+serde = { version = "=1.0.229", default-features = false, features = ["alloc", "derive"] }
+# SHA-256 is computed over bytes held in memory, so the allocation and
+# object-identifier support of the default features is left out.
+sha2 = { version = "=0.11.1", default-features = false }
+# The tests of `kyto-bench` parse the workspace manifests, the lock file and
+# the Clippy settings, which are TOML, into tables, which needs the parser and
+# the serde support; none is written, so the writer and the standard-library
+# support of the default features are left out.
+toml = { version = "=1.2.1", default-features = false, features = ["parse", "serde"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"

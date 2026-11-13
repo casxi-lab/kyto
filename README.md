@@ -105,11 +105,16 @@ a commit hook and the repository checks, which CI runs on every pull request
 to `main` and every push to `main`. The two forms and the compute module they
 are built on are fixed; no other part has been chosen, and the screen size,
 the key count and the arrangement within each form are open. Nothing has been
-designed, modelled or written yet: there are no design files, no models and no
-bench tool, nothing to build, order, print or assemble, and none of the items
-above exists today. Until a power circuit exists, the development boards, a
-whole Raspberry Pi 5 board and a Compute Module 5 in its official IO board,
-run from a stable external supply.
+designed or modelled yet: there are no design files and no models, and nothing
+to build, order, print or assemble. The bench tool in `tools/` is partly
+written: it has the interfaces of four kinds of device, each with one
+simulated device: power commands, a supply meter that also confirms power-on
+and power-off, the serial console, and payload delivery to the directory that
+the board reads over TFTP. It has no command that runs a bench, no driver for
+a real device, and no input injection or display capture yet. None of the
+other items above exists today. Until a power circuit exists, the development
+boards, a whole Raspberry Pi 5 board and a Compute Module 5 in its official
+IO board, run from a stable external supply.
 
 The repository checks run from the repository root:
 
@@ -124,9 +129,10 @@ rules.
 
 ## How the files will be organized
 
-No design file, model or bench program exists yet, and the electronic and
-mechanical design tools have not been chosen; the formats of the design files
-follow that choice. When work starts, the repository will keep:
+No design file or model exists yet, the bench tool under `tools/` cannot run
+a bench yet, and the electronic and mechanical design tools have not been
+chosen; the formats of the design files follow that choice. When work starts,
+the repository will keep:
 
 - the editable design sources of each electrical module (schematics and board
   layouts) and the parametric models and assembly sources of each part, in the

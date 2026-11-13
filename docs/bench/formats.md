@@ -1024,7 +1024,7 @@ changes, is eligible as evidence.
 built. Every build of the tool asks Git for them again, so a change made
 after an earlier build, an untracked file included, makes the next build's
 `clean` `false`. A build from a source tree that is not a Git checkout of its
-own records both as `null`.
+own records both as `null`; neither comes from the environment of the build.
 
 ### Inputs of judgement
 

@@ -45,6 +45,8 @@ fn is_commit(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
 
     const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -67,6 +69,34 @@ mod tests {
                 option_env!("KYTO_BENCH_CLEAN")
             )
         );
+    }
+
+    #[test]
+    fn the_build_script_runs_on_every_build_and_gives_both_values() {
+        // Cargo keeps what the build script printed for this build in
+        // `output`, next to the script's output directory.
+        let output = Path::new(env!("OUT_DIR")).with_file_name("output");
+        let text = std::fs::read_to_string(&output).expect("the build script's output");
+        let (mut watched, mut values) = (Vec::new(), Vec::new());
+        for line in text.lines() {
+            if let Some(path) = line.strip_prefix("cargo::rerun-if-changed=") {
+                watched.push(path);
+            } else if let Some(value) = line.strip_prefix("cargo::rustc-env=") {
+                values.push(value);
+            }
+        }
+        // Cargo runs the script again on every build while a path that it
+        // watches does not exist.
+        assert!(!watched.is_empty(), "{text}");
+        for path in watched {
+            assert!(!Path::new(path).exists(), "{path}");
+        }
+        // Both values are given, once each, and are those of this build.
+        let given = [
+            format!("KYTO_BENCH_COMMIT={}", env!("KYTO_BENCH_COMMIT")),
+            format!("KYTO_BENCH_CLEAN={}", env!("KYTO_BENCH_CLEAN")),
+        ];
+        assert_eq!(values, given);
     }
 
     #[test]

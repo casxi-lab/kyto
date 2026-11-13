@@ -256,6 +256,7 @@ it.
 | [PROV-R07](requirements.md#prov-r07) | `evidence_needs_a_known_commit_a_clean_tree_and_real_devices` | `tools/kyto-bench-core/src/evidence.rs` | negative |
 | [PROV-R07](requirements.md#prov-r07) | `evidence_lists_exactly_the_reasons_that_apply` | `tools/kyto-bench-core/src/receipt.rs` | negative |
 | [PROV-R07](requirements.md#prov-r07) | `the_example_runs_to_pass_with_the_built_binary` | `tools/kyto-bench/tests/release.rs` | negative |
+| [PROV-R08](requirements.md#prov-r08) | `the_build_script_runs_on_every_build_and_gives_both_values` | `tools/kyto-bench/src/provenance.rs` | positive |
 | [PROV-R08](requirements.md#prov-r08) | `provenance_embeds_the_commit_and_clean_flag` | `tools/kyto-bench/src/provenance.rs` | positive |
 | [PROV-R08](requirements.md#prov-r08) | `build_values_are_read_strictly` | `tools/kyto-bench/src/provenance.rs` | negative |
 | [POWER-R01](requirements.md#power-r01) | `readings_in_a_row_beyond_the_threshold_confirm_a_command_by_its_timeout` | `tools/kyto-bench-core/src/power.rs` | negative |
@@ -312,6 +313,12 @@ it.
   firmware request other files, which `payload.variant_missing` does not
   detect before power-on. A cold boot that reads a file outside the payload
   in full, inside the path prefix, still fails `tftp.unplanned_file`.
+- **No test builds the tool twice** (`PROV-R08`). That every build asks Git
+  again, so that `tool.clean` describes the tree at the build, rests on
+  Cargo running a build script again on every build while a path that the
+  script watches does not exist. A test checks that the script watches only
+  such paths and gives both values, but no test builds the tool, changes its
+  working tree and builds it again.
 - **The minimum bootloader is information only.**
   `bootloader::minimum` gives the earliest bootloader release that a board
   needs from its identity record, as

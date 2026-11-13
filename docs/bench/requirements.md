@@ -302,14 +302,18 @@ commit is unknown or whose working tree changed.
 
 **The tool's revision comes from its build alone.** Every build of the
 tool asks Git for the commit and whether the working tree had changes,
-untracked files included, and embeds them; nothing at run time overrides
-them. A value that Git cannot give, or that has another form, is unknown,
-so `tool.commit` and `tool.clean` describe the tree at the build that made
-the binary.
+untracked files included, and embeds them; nothing at run time or in the
+environment of the build overrides them. A value that Git cannot give, or
+that has another form, is unknown, so `tool.commit` and `tool.clean`
+describe the tree at the build that made the binary.
 
-**Evidence.** A test that a build in a Git checkout embeds both values, and
-a test that a commit or a clean flag of another form is unknown. No test
-runs the build script itself.
+**Evidence.** A test that reads what the build script gave Cargo for the
+build of the tests: it watches only paths that do not exist, so that Cargo
+runs it on every build, and it gives both values, those that the build
+embedded; a test that a build in a Git checkout embeds both values; and a
+test that a commit or a clean flag that is empty or of another form is
+unknown. No test builds the tool twice, as the contract's
+[current deviations](contract.md#current-deviations) state.
 
 ## Power off and reporting
 

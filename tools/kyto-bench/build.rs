@@ -1,11 +1,12 @@
 //! Embeds the revision of the tool: the commit it is built from as
 //! `KYTO_BENCH_COMMIT` (40 lowercase hexadecimal digits) and whether the
 //! working tree was clean, untracked files included, as `KYTO_BENCH_CLEAN`
-//! (`true` or `false`). A value that Git cannot give is left out, and the
-//! tool reads it as unknown.
+//! (`true` or `false`). Both are given on every build; a value that Git
+//! cannot give is given empty, and the tool reads it as unknown, so a value
+//! of the same name in the build's environment never reaches the tool.
 //!
 //! Git runs in the repository root with the variables that point it at
-//! another repository or index removed, and the values are given only when
+//! another repository or index removed, and its values are used only when
 //! the top level of the work tree that Git finds is that root, so a source
 //! tree without its own `.git` never takes the commit of a checkout around
 //! it.
@@ -40,12 +41,20 @@ fn main() {
         let never = Path::new(&out).join("never-created");
         println!("cargo::rerun-if-changed={}", never.display());
     }
-    let Some(manifest_dir) = std::env::var_os("CARGO_MANIFEST_DIR") else {
-        return;
-    };
-    let Ok(root) = Path::new(&manifest_dir).join("../..").canonicalize() else {
-        return;
-    };
+    // Both values are given on every path; an empty one is unknown.
+    let (commit, clean) = revision().unwrap_or_default();
+    let (commit, clean) = (commit.unwrap_or_default(), clean.map(|c| c.to_string()));
+    let clean = clean.unwrap_or_default();
+    println!("cargo::rustc-env=KYTO_BENCH_COMMIT={commit}");
+    println!("cargo::rustc-env=KYTO_BENCH_CLEAN={clean}");
+}
+
+/// The commit of the repository root and whether its working tree is clean,
+/// each `None` when Git cannot give it, or `None` when the root is not the
+/// top level of the work tree that Git finds.
+fn revision() -> Option<(Option<String>, Option<bool>)> {
+    let manifest_dir = std::env::var_os("CARGO_MANIFEST_DIR")?;
+    let root = Path::new(&manifest_dir).join("../..").canonicalize().ok()?;
     let text = |out: Vec<u8>| {
         String::from_utf8(out)
             .ok()
@@ -53,23 +62,17 @@ fn main() {
     };
     let top_level = git(&root, "rev-parse --show-toplevel").and_then(text);
     if top_level.and_then(|top| PathBuf::from(top).canonicalize().ok()) != Some(root.clone()) {
-        return;
+        return None;
     }
-
     let commit = git(&root, "rev-parse --verify HEAD").and_then(text);
-    if let Some(commit) = commit.filter(|commit| is_commit(commit)) {
-        println!("cargo::rustc-env=KYTO_BENCH_COMMIT={commit}");
-    }
-
     // `--no-optional-locks` keeps `git status` from refreshing the index, so
     // that a build writes nothing in the repository.
     let status = git(
         &root,
         "--no-optional-locks status --porcelain --untracked-files=all",
     );
-    if let Some(status) = &status {
-        println!("cargo::rustc-env=KYTO_BENCH_CLEAN={}", status.is_empty());
-    }
+    let clean = status.map(|status| status.is_empty());
+    Some((commit.filter(|commit| is_commit(commit)), clean))
 }
 
 /// Runs Git in `root` with `args`, separated by spaces, without the

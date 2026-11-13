@@ -821,8 +821,12 @@ firmware.bootloader = {{ hash = "1accd665", date = "2026/09/25" }}
             Outcome::Fail
         );
         // The line of a marker that is the last line ends with the
-        // transcript, after the first byte of a send before that end.
+        // transcript: before a send at that end, after one a byte earlier.
         let mut last = case(&LINES[..9]);
+        assert_eq!(
+            last.result("marker.before_first_send", "ready"),
+            Outcome::Pass
+        );
         last.at(is_send).received -= 1;
         assert_eq!(
             last.result("marker.before_first_send", "ready"),

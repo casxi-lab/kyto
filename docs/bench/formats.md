@@ -39,7 +39,9 @@ Documents are read strictly, at every level except inside the tables of
 [local settings](#local-settings), whose keys belong to device drivers. A key
 that the format does not have, a missing key and a value of the wrong type are
 errors. The values are then checked against the rules that this page states
-for each key, and an error names the value and the rule it breaks.
+for each key, and an error names the value and the rule it breaks. In board
+descriptions and run plans, every array and every table, nested ones too,
+has at most 100 items, which is checked before any line pattern is compiled.
 
 These forms of values recur in every format:
 
@@ -90,7 +92,7 @@ line ending. Patterns are compiled with Unicode mode off:
   character.
 
 A pattern matches anywhere in the line unless it is anchored with `^` or
-`$`. Its compiled form is at most 1 MiB. Named groups are written
+`$`. Its compiled form is at most 64 KiB. Named groups are written
 `(?P<name>...)`; where the use of a pattern needs a group, such as `value`,
 the pattern must have it.
 
@@ -576,7 +578,9 @@ bench generates once for its configuration, for example with:
 openssl rand -hex 16
 ```
 
-A missing salt, or one of another length or form, is an error. A
+A missing salt, or one of another length or form, is an error, and so is a
+salt that kyto publishes, such as the one of the example above, unless every
+device of the configuration is of the kind `simulated`. A
 [receipt](#receipts) records the SHA-256 of the whole configuration file,
 and its [public version](#public-versions) shows every digest. The other
 values of a configuration are few and could be guessed from a template and
@@ -681,13 +685,16 @@ Each entry has these keys:
 | `order` | no | Each `{ markers = [...] }`, at least two distinct markers whose first occurrences appear in this order |
 | `forbid` | no | Each `{ line, from, to }`: a line pattern that no line may match strictly between the first occurrences of the optional markers `from` and `to`; an end left out is the start or the end of the capture |
 | `before_first_send` | no | Markers whose lines end before the first byte sent; only in an entry with steps |
-| `steps` or `sends = false` | one of the two | `steps`, the [steps](#steps-and-the-end-of-a-cold-boot), each `{ after, send, expect, timeout_ms }`; or `sends = false`, for an entry that sends nothing |
+| `steps` or `sends = false` | one of the two | `steps`, the [steps](#steps-and-the-end-of-a-cold-boot), each `{ after, send, expect, timeout_ms }`; or `sends = false`, for an entry that sends nothing; `sends` is never `true` |
 | `values` | no | Named values, each `{ field, line }`: `field`, a name that no other value of the entry has, and `line`, a line pattern with the group `value` |
 | `segments` | no | Each `{ name, from, to, sha256 }`: a name that no other segment of the entry has, two markers and the SHA-256 of the bytes between their lines |
 | `[entries.writes]` | no | `firmware`, `eeprom` and `storage`, each `false` unless written `true`: the [classes of writes](#write-triggers-and-refused-properties) that the entry enables |
 
-Every list of an entry has at most 100 items. `line` and `expect` are
-[line patterns](#line-patterns); they need no example.
+Every list of an entry has at most 100 items, the markers of each `order`
+included, and a plan has at most 1000 line patterns in all, the `line` and
+`expect` of every entry; both bounds are checked before any pattern is
+compiled. `line` and `expect` are [line patterns](#line-patterns); they need
+no example.
 
 ### References
 
@@ -917,7 +924,7 @@ output received before it; `event`, its kind; and the keys of its kind:
 | `console_ready` | none | The console is open and keeps every byte from now on |
 | `console_closed` | none | The console is closed |
 | `send` | `step`, the index of the step in the entry, and `bytes_base64` | The bytes of the step were sent to the console |
-| `end` | `reason`: `"end_condition"`, `"boot_timeout"`, `"step_timeout"`, `"byte_limit"` or `"device_error"` | The cold boot ended |
+| `end` | `reason`: `"end_condition"`, `"boot_timeout"`, `"step_timeout"`, `"byte_limit"`, `"chunk_limit"` or `"device_error"` | The cold boot ended |
 | `switch` | `generation`, `g` followed by six decimal digits | The board is served the staged generation of that name |
 | `device_error` | `role`, a [device role](#devices), and `detail` | A device of that role failed |
 
@@ -957,7 +964,8 @@ decoded:
   the offset of its first byte and the time it was received, as
   [lines](#lines) use them. Offsets start at 0, increase and stay below
   `length`, and times do not decrease; a cold boot without bytes has an
-  empty index.
+  empty index. The index has at most 65536 chunks: a cold boot whose bytes
+  arrive in more ends with the reason `chunk_limit`.
 
 `observations` are what the cold boot shows, as
 [a cold boot is read](#how-a-cold-boot-is-read), each line named by its
@@ -1119,11 +1127,11 @@ A run whose payload the [payload checks](#payload-checks) refuse is refused
 before any power command, and its receipt shows it:
 
 - `refusal` is `{ rule, entry, detail }`: the rule, the index of the entry
-  that it concerns, or `null` when it concerns none, and what was found, as
-  in `the staged copy of config.txt was not read`;
+  that it concerns, and what was found, as in
+  `the staged copy of config.txt was not read`;
 - `verdict` is `null`, since a refused run is not judged;
-- `start.events` is empty, and every entry is `"NOT RUN"`, with no event and
-  no cold boot.
+- `start.events` is empty, and every entry is `"NOT RUN"`, with no event, no
+  check and no cold boot.
 
 The rules that refuse a run are `payload.source_digest`,
 `payload.staged_digest`, `write.not_enabled`, `write.refused_property` and
@@ -1148,19 +1156,23 @@ The library reads a receipt strictly:
    - `nonce` is 32 lowercase hexadecimal digits, and `tool.commit` is 40 or
      `null`;
    - `evidence` keeps the [rules of evidence](#evidence);
-   - each recorded text has its SHA-256, the recorded plan is a run plan of
-     this version, the `id` of the board description is the `board` of the
-     plan, and the recorded identity record is read as an identity record
-     is;
+   - each recorded text has its SHA-256; the recorded plan is a run plan of
+     this version, and the recorded description a board description of this
+     version whose `id` is `board_description.id`; the plan passes the
+     [checks of a run plan](#checks-of-a-run-plan) against that description
+     and the recorded pinned sets; and the recorded parameters keep the
+     rules of an instance configuration, the identity record, read as an
+     identity record is, its checks against the description included;
    - `reference` is that of the plan, and `entries` has one record for each
      entry of the plan, in order, with its index, `name`, `reference`,
      `payload_pin` as `payload.pin`, and the names of its payload files;
    - exactly one of `refusal` and `verdict` is not `null`, a refused run is
      recorded as [refused runs](#refused-runs) are, and `refusal.entry` is
-     the index of an entry;
+     the index of an entry of the plan;
    - only an entry is `"NOT RUN"`, and it has no cold boot; an entry has at
      most the cold boots of the plan's entry, numbered from 0;
-   - each `serial` has the `length` and an `index` of its bytes;
+   - each `serial` has the `length` and an `index` of its bytes, of at most
+     65536 chunks;
    - each check has `detail` exactly when it did not pass.
 
 Reading a receipt does not check the rule names of checks and refusals
@@ -1176,8 +1188,10 @@ replaced, so that the record of a run can be published from a bench. The
 library makes it from the receipt, the board description and the
 [values to hide](#values-to-hide) of the instance configuration, and gives it
 only when the [leak check](#the-leak-check) finds none of those values in it.
-It is written in the form of a receipt; the library has no reader for it. A
-public version is for reading: where bytes were replaced it no longer shows
+It is written in the form of a receipt and read as strictly, up to the rules
+that tie the parts of a receipt together: its `receipt` is read as JSON,
+since a replaced value need not keep the form of its key. A public version
+is for reading: where bytes were replaced it no longer shows
 what the board sent, and the receipt stays the record of the run.
 
 When the cold boot of a receipt received these lines, each ended by CR LF,
@@ -1281,7 +1295,12 @@ A public version must not show these values, each found under its rule:
 - the nonce, under the rule `nonce`.
 
 Values shorter than 4 bytes are not searched for, since they would be found
-in unrelated bytes; the span of a hit is replaced whatever its length.
+in unrelated bytes; the span of a hit is replaced whatever its length. A
+receipt with more than 1024 values to hide besides the nonce, a value
+counted once for each rule that finds it, or with more than 64 KiB of them
+in all, has no public version: the leak check fails under the rule
+`public.values_limit`, with the whole receipt, the empty pointer, as its
+field.
 
 ### Replacements
 
@@ -1293,7 +1312,10 @@ Each of these spans is replaced, every byte by `#`:
 - every `relay` of a `power` event, whole, under the rule
   `instance.local.power.relay`. A relay number is short, so a search for it
   would find unrelated bytes; it is replaced where the receipt records it
-  instead.
+  instead;
+- the unterminated last line of the console output of each cold boot, whole,
+  under the rule `console.unterminated_line`: a sensitive line cut short by
+  the end of a capture may not match its form, though it holds a value.
 
 Spans that overlap or are equal make one replacement, whose `rules` lists
 every rule that found them, once each, sorted. `offset` counts the decoded
@@ -1317,7 +1339,12 @@ Before the library gives a public version, it checks that:
   string of its receipt or in the decoded bytes of its streams, the recorded
   texts and the digests included;
 - the sensitive lines, matched again in its streams, hold nothing but `#`;
-- every `relay` holds nothing but `#`.
+- every `relay`, and the unterminated last line of the console output of
+  each cold boot, hold nothing but `#`;
+- no segment of `observations.segments` covers a replaced byte of its cold
+  boot's console output, from the first byte of the line of `from` up to
+  the first byte of the line of `to`; such a segment fails under the rule
+  `segment.covers_hidden`, at its `sha256`.
 
 When a check fails, the library gives no public version, only the rule and
 the field of each value found, never the value. A hit inside a digest, such
@@ -1333,4 +1360,7 @@ nonce, 128 random bits that the public version withholds, so the digest
 cannot be checked against guesses of the replaced values, however few they
 are, and reveals none of them. The digest of the instance configuration file
 in `inputs.instance.sha256` is protected in the same way by the
-[salt](#local-settings) of the configuration.
+[salt](#local-settings) of the configuration. The digest of a segment has no
+such secret: it covers bytes that the public version shows, but for those it
+replaced, which could be found by trying their values one by one against
+it. That is why the leak check refuses a segment over a replaced byte.

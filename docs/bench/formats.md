@@ -48,7 +48,7 @@ run needs another one. The exit status gives the result:
 | 3 | The run is `"BENCH FAULT"` |
 | 4 | The run was [refused](#refused-runs) before any power command; the receipt says why |
 | 5 | The receipt was written, but not its public version: the [leak check](#the-leak-check) refused it, and the error names the rule and the field of each value found, or it cannot be written, and the error says why. The receipt gives the verdict or the refusal |
-| 101 | The run stopped on an error of the tool itself, a panic. It switched the supply off once more and says on standard error whether readings confirmed it; no receipt is left, and the output directory is removed |
+| 101 | The run stopped on an error of the tool itself, a panic. A panic while the entries ran switched the supply off once more and says on standard error whether readings confirmed it; one before them sent no power command. No receipt is left, and the output directory is removed |
 
 A message or result that cannot be written, as when nothing reads standard
 output or standard error any more, changes no exit status.
@@ -418,7 +418,8 @@ each value. In short:
   but not under the default names, and passes when it holds the default
   names but not the files that the firmware then requests. The board is
   served the payload's files alone, so the firmware's request for a file
-  that is not in the payload is a failed read, which no rule judges.
+  that is not in the payload is a failed read, which no rule judges: such a
+  cold boot is judged by its markers, its end and its other checks only.
 - **Minimum bootloader.** The earliest releases with the manufacturing
   versions 1, 2 and 3 are those of 2026/05/11, 2026/09/23 and 2026/10/23. A
   board of PCB revision 4 needs a release of 2024/03/01 or later, as its

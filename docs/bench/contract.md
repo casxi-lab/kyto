@@ -50,7 +50,7 @@ functions on a receipt.
 | `evidence::eligibility` | `kyto-bench-core` | `assemble::start`; `rejudge::rejudge` | `PROV-R07` |
 | `receipt::Receipt::parse` | `kyto-bench-core` | readers of a receipt | `VERD-R03`, `VERD-R10`, `PROV-R07` |
 | `rejudge::rejudge` | `kyto-bench-core` | readers of a receipt | `VERD-R04`, `VERD-R12`, `PROV-R04` |
-| `run::run` | `kyto-bench` | `cli::run_plan` | `VERD-R04`, `PROV-R01`, `PROV-R02`, `POWER-R02`, `POWER-R04` |
+| `run::run` | `kyto-bench` | `cli::run_plan` | `VERD-R04`, `VERD-R06`, `PROV-R01`, `PROV-R02`, `POWER-R02`, `POWER-R04`, `POWER-R05` |
 | `run::switch_confirmed`, `run::power_off_confirmed` | `kyto-bench` | the flow of `run::run` | `POWER-R01`, `POWER-R02` |
 | `cli::run` | `kyto-bench` | `main::main`, the binary | `POWER-R05`, `POWER-R06` |
 | `provenance::ToolRevision::built`, with the build script | `kyto-bench` | `env::Env::tool` | `PROV-R08` |
@@ -331,18 +331,11 @@ it.
 
 ## Current deviations
 
-- **The variants list only the default file names** (`PROV-R06`). The
-  variants of the [Raspberry Pi 5 description](formats.md#the-raspberry-pi-5)
-  list files under the defaults of `upstream_kernel`, `os_prefix`,
-  `overlay_prefix` and `device_tree`, and `payload.variant_missing` compares
-  the payload with those names only. A payload whose `config.txt` sets one
-  of these properties is refused when it holds the files under the names
-  that it sets but not under the default names, and passes when it holds
-  the default names but not the files that the firmware then requests. The
-  board is served the payload's files alone, so the firmware's request for
-  a file that is not in the payload is a failed read, which no rule judges:
-  such a cold boot is judged by its markers, its end and its other checks
-  only.
+- **The variants list only the default file names** (`PROV-R06`).
+  `payload.variant_missing` compares a payload with the file names of the
+  variants under the defaults of the device tree properties only; the
+  [Raspberry Pi 5 description](formats.md#the-raspberry-pi-5) states what
+  follows for a payload whose `config.txt` changes them.
 - **The minimum bootloader is information only.**
   `bootloader::minimum` gives the earliest bootloader release that a board
   needs from its identity record, as

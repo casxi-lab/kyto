@@ -11,6 +11,7 @@ and the [tests of each requirement](contract.md#requirement-tests).
 A requirement is named by the prefix of its group, `-R` and two digits:
 `VERD` for verdicts, `PROV` for payload digests and the tool's revision, and
 `POWER` for powering off and reporting. Each group is numbered from `R01`.
+An id is never renumbered or given to another requirement.
 
 Every requirement is shown so far by tests on the host: unit tests of
 `kyto-bench-core` and `kyto-bench` on records and simulated devices built in
@@ -276,9 +277,10 @@ TFTP directory.
 whose value the identity record gives for the variant's field, ignoring
 ASCII case, or of any variant of a field that the record gives as unknown.
 The variants list files under the default names of the device tree
-properties; the contract's
-[current deviations](contract.md#current-deviations) state what follows for
-a payload that changes them.
+properties only, one of the contract's
+[current deviations](contract.md#current-deviations); the
+[Raspberry Pi 5 description](formats.md#the-raspberry-pi-5) states what
+follows for a payload that changes them.
 
 **Evidence.** Unit tests of payloads with and without the files of the C1
 and D0 variants, with the stepping known, unknown and written in lower
@@ -354,13 +356,14 @@ across entries in a re-derived receipt.
 
 ### POWER-R03
 
-**A fault of the bench is `BENCH FAULT`, never `PASS` and never a failure
-of the board.** A console that is not ready, a power on or power off that
+**A fault of the bench makes the verdict `BENCH FAULT`, never `PASS` and
+never `FAIL`.** A console that is not ready, a power on or power off that
 readings do not confirm, a step that starts within the off interval, events
 out of order, console output before the power on, and an error of a device
 are faults. A cold boot or an entry with a fault is `BENCH FAULT`, and so
 is the run, whatever the other checks give; the checks of the board and its
-payload are still made and recorded.
+payload are still made and recorded, and the failures that they record in
+such a cold boot do not make it `FAIL`.
 
 **Evidence.** Unit tests of each fault and of a cold boot whose console
 output came while the supply was off, which is `BENCH FAULT` while its end
@@ -381,10 +384,13 @@ power off sent again, its readings and the state of the supply.
 
 ### POWER-R05
 
-**A run that stops on an error of the tool switches the supply off and
-leaves no output.** When the run panics, the tool switches the supply off
-once more, says on standard error whether readings confirmed it, removes
-the output directory, leaves no receipt and exits with status 101.
+**An error of the tool while the entries run switches the supply off, and
+any error of the tool leaves no output.** When the run panics while it runs
+its entries, the tool switches the supply off once more and says on
+standard error whether readings confirmed it. A panic before then, while
+the payloads are checked and staged or the bench is opened, sends no power
+command and leaves the supply as it was. Any panic removes the output
+directory, leaves no receipt and exits with status 101.
 
 **Evidence.** A run on simulated devices that panics after the first power
 on: the power off sent again, a supply at 0 V, and no output directory.

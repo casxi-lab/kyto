@@ -24,24 +24,30 @@ base64 = { version = "=0.23.1", default-features = false, features = ["alloc"] }
 # short, so the literal and DFA optimisations of `perf` are left out; `std` is
 # required.
 regex = { version = "=1.13.1", default-features = false, features = ["std"] }
-# Documents are read into types that derive `Deserialize`, so only the derive
-# macros and the allocation support for strings, vectors and maps are needed.
+# Documents are read into types that derive `Deserialize`, and receipts and
+# their public versions are written from types that derive `Serialize`, so
+# only the derive macros and the allocation support for strings, vectors and
+# maps are needed.
 serde = { version = "=1.0.229", default-features = false, features = ["alloc", "derive"] }
-# The bench hardware revision is the SHA-256 of the canonical JSON of the
-# devices table of an instance configuration, written to a string in memory.
-# The tool inserts the keys of each object in sorted order, and
-# `preserve_order` keeps objects in the order their keys were inserted; it
-# brings the allocation support that writing to strings needs, so the
-# standard-library support of the default feature is left out.
+# Receipts and their public versions are JSON, rendered in the order of
+# their fields and read back from strings in memory; events, and the receipt
+# that a public version holds, pass through `serde_json::Value`, whose
+# objects keep the order in which their keys were inserted only with
+# `preserve_order`, so without it their keys would be sorted and the format
+# would change. The bench hardware revision is the SHA-256 of the canonical
+# JSON of the devices table of an instance configuration, whose keys the tool
+# inserts in sorted order. `preserve_order` brings the allocation support that
+# writing to strings needs, so the standard-library support of the default
+# feature is left out.
 serde_json = { version = "=1.0.154", default-features = false, features = ["preserve_order"] }
 # SHA-256 is computed over bytes held in memory, so the allocation and
 # object-identifier support of the default features is left out.
 sha2 = { version = "=0.11.1", default-features = false }
-# Board descriptions, identity records and instance configurations are TOML,
-# parsed from strings into types that derive `Deserialize` and into tables,
-# which needs the parser and the serde support; none is written, so the
-# writer and the standard-library support of the default features are left
-# out.
+# Board descriptions, identity records, instance configurations and run
+# plans are TOML, parsed from strings into types that derive `Deserialize` and
+# into tables, which needs the parser and the serde support; none is written,
+# so the writer and the standard-library support of the default features are
+# left out.
 toml = { version = "=1.2.1", default-features = false, features = ["parse", "serde"] }
 
 [workspace.lints.rust]

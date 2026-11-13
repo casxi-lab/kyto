@@ -1,9 +1,10 @@
 //! The checks of a run plan entry's payload (`docs/bench/formats.md`, payload
-//! checks). Before any power command, the digests of the source files and
-//! of the staged copy, the writes the files can cause and the files of the
-//! board's variants are checked, and a payload that breaks a rule refuses
-//! the run. After the switch to the entry's generation, the digests of the
-//! copy that the board is served are checked, and a mismatch is a fault.
+//! checks). Before any power command, the digests of the source files, the
+//! writes the files can cause and the files of the board's variants are
+//! checked, then the digests of the staged copy, and a payload that breaks a
+//! rule refuses the run. After the switch to the entry's generation, the
+//! digests of the copy that the board is served are checked, and a mismatch
+//! is a fault.
 
 use crate::board::Board;
 use crate::digest::Sha256;

@@ -619,10 +619,13 @@ firmware versions, values and segments of the transcript; and the writes
 that the entry enables. Whoever writes a plan keeps it with the record it is
 for. A plan holds no value of a bench, such as an address, a path prefix or a
 relay channel, not even in a comment: a receipt records the plan's text as it
-is, a [public version](#public-versions) never rewrites it, and the leak
+is, and a [public version](#public-versions) never rewrites it. The leak
 check refuses the public version of a receipt whose plan holds a value to
-hide. The library reads and checks plans and reads cold boots as their
-entries say; no command runs a plan yet.
+hide of at least 4 bytes, such as an address or a path prefix; a relay
+number shorter than that is not searched for, so nothing finds one in a
+plan, and it is for whoever writes the plan to keep it out. The library
+reads and checks plans and reads cold boots as their entries say; no command
+runs a plan yet.
 
 A plan is UTF-8 text; bytes that are not UTF-8 are not read as a plan. The
 library keeps the text that it reads a plan from without changing a byte:
@@ -635,8 +638,12 @@ the text and the plan of a receipt cannot differ.
 [`tools/examples/run-plan.toml`](../../tools/examples/run-plan.toml) is an
 example for the Raspberry Pi 5 with two entries. Their payloads are the small
 stand-in files under `tools/examples/payload/`, from which no board boots,
-and the digests of the plan are theirs. Its second entry, with the digests
-shortened here:
+and the payload digests of the plan are theirs. The digest of the segment
+`banner` is that of the two lines `Example echo payload` and
+`BUILD id=0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c`, each ended by CR LF,
+which come between the start of the operating system and `READY` in the
+console output that the tests of the library build for this entry. Its
+second entry, with the digests shortened here:
 
 ```toml
 [[entries]]
@@ -674,7 +681,7 @@ Each entry has these keys:
 | `name` | yes | A name |
 | `reference` | no | A [reference](#references) for the entry |
 | `payload_dir` | yes | The directory that holds the source files of the payload, below the payload root that a run is given: a relative path in the form of a payload name |
-| `payload` or `payload_pin` | one of the two | `payload`, the payload files, at least one `{ name, sha256 }` of a payload name and its SHA-256, whose names keep the rule for the names in one list; or `payload_pin`, the name of a pinned set of the [instance configuration](#instance-configurations), whose files are the payload |
+| `payload` or `payload_pin` | exactly one of the two | `payload`, the payload files, at least one `{ name, sha256 }` of a payload name and its SHA-256, whose names keep the rule for the names in one list; or `payload_pin`, the name of a pinned set of the [instance configuration](#instance-configurations), whose files are the payload. An empty `payload` is an error, beside `payload_pin` too |
 | `cold_boots` | yes | 1 to 100 |
 | `boot_timeout_ms` | yes | The longest cold boot, counted from the power-on command, 1 ms to one hour |
 | `end` | yes | When a cold boot [ends](#steps-and-the-end-of-a-cold-boot): `{ marker = "<marker>" }` or `"timeout"` |
@@ -685,7 +692,7 @@ Each entry has these keys:
 | `order` | no | Each `{ markers = [...] }`, at least two distinct markers whose first occurrences appear in this order |
 | `forbid` | no | Each `{ line, from, to }`: a line pattern that no line may match strictly between the first occurrences of the optional markers `from` and `to`; an end left out is the start or the end of the capture |
 | `before_first_send` | no | Markers whose lines end before the first byte sent; only in an entry with steps |
-| `steps` or `sends = false` | one of the two | `steps`, the [steps](#steps-and-the-end-of-a-cold-boot), each `{ after, send, expect, timeout_ms }`; or `sends = false`, for an entry that sends nothing; `sends` is never `true` |
+| `steps` or `sends = false` | exactly one of the two | `steps`, at least one of the [steps](#steps-and-the-end-of-a-cold-boot), each `{ after, send, expect, timeout_ms }`; or `sends = false`, for an entry that sends nothing; `sends` is never `true`, and an empty `steps` is an error, beside `sends = false` too |
 | `values` | no | Named values, each `{ field, line }`: `field`, a name that no other value of the entry has, and `line`, a line pattern with the group `value` |
 | `segments` | no | Each `{ name, from, to, sha256 }`: a name that no other segment of the entry has, two markers and the SHA-256 of the bytes between their lines |
 | `[entries.writes]` | no | `firmware`, `eeprom` and `storage`, each `false` unless written `true`: the [classes of writes](#write-triggers-and-refused-properties) that the entry enables |
@@ -746,7 +753,14 @@ instance configuration:
 ### Payload checks
 
 These checks of an entry's payload come before the board is powered, and a
-payload that fails one refuses the run, under the name of its rule:
+payload that fails one refuses the run, under the name of its rule. They are
+made in this order: for each entry in the order of the plan,
+`payload.source_digest`, `write.not_enabled`, `write.refused_property` and
+`payload.variant_missing`; then, once those pass for every entry, the payload
+of each entry is staged in the order of the plan and checked with
+`payload.staged_digest`. The first check that fails refuses the run, so a
+run is refused under one rule only, and the refusal names the first file
+found that fails it:
 
 - `payload.source_digest`: the SHA-256 of every source file equals that of
   the payload;
@@ -785,9 +799,9 @@ named by its offset. From the lines, in order, it takes:
   names a server, which is compared with the server address of the instance
   configuration. A line of the `read` form is a file read in full; its path
   gives its payload name after the path prefix, as
-  [firmware lines](#firmware-lines) describe, and a path outside the prefix
-  or one that gives no payload name names no payload file. Failed reads are
-  not reads.
+  [firmware lines](#firmware-lines) describe. A path outside the prefix, and
+  one whose rest after the prefix is not a payload name, name no payload
+  file; a read records which of the two it is. Failed reads are not reads.
 - **Firmware versions.** Every line of a firmware version gives the values of
   its named groups.
 - **Identity values.** Every line that a `firmware_log`,
@@ -956,7 +970,8 @@ The record of a cold boot has `index`, its number from 0; `events`;
 cold boot exactly as they arrived, with no line ending changed and nothing
 decoded:
 
-- `length`, the number of bytes;
+- `length`, the number of bytes, at most the `max_capture_bytes` of the
+  plan's entry;
 - `bytes_base64`, the bytes in base64, in the standard alphabet with `=`
   padding and without line breaks. The bytes of a `send` event are written
   the same way, and only this canonical encoding is read;
@@ -964,8 +979,7 @@ decoded:
   the offset of its first byte and the time it was received, as
   [lines](#lines) use them. Offsets start at 0, increase and stay below
   `length`, and times do not decrease; a cold boot without bytes has an
-  empty index. The index has at most 65536 chunks: a cold boot whose bytes
-  arrive in more ends with the reason `chunk_limit`.
+  empty index. The index has at most 65536 chunks.
 
 `observations` are what the cold boot shows, as
 [a cold boot is read](#how-a-cold-boot-is-read), each line named by its
@@ -980,7 +994,7 @@ server of the instance, and a read with its payload name.
 | `boot_modes` | Each boot mode line as `{ mode, line }` |
 | `firmware` | Each line of a firmware version as `{ name, line, groups }`, with `groups` the `[group, value]` pairs of the named groups that took part in the match, in the order of the pattern |
 | `identity` | Each identity field or part that lines give, as `{ field, values, lines }`: the field written `field` or `field.part`, every distinct value in the order it first appeared, and every line that gave one. The lines agree when `values` has one item |
-| `tftp` | `servers`, each line that names the TFTP server as `{ line, instance }`, with whether it names the server of `inputs.instance.parameters.tftp`; and `reads`, each file read in full as `{ line, name, bytes }`, with its payload name, or `null` when its path is outside the path prefix or gives none, and the size that the line gives, or `null` |
+| `tftp` | `servers`, each line that names the TFTP server as `{ line, instance }`, with whether it names the server of `inputs.instance.parameters.tftp`; and `reads`, each file read in full as `{ line, name, inside_prefix, bytes }`, with its payload name, or `null` when its path is outside the path prefix or its rest after the prefix is not a payload name; whether its path is inside the prefix; and the size that the line gives, or `null` |
 | `boot_files` | Each boot file as `{ name, sha256 }`, with the SHA-256 that the entry's payload gives for it, or `null` |
 | `values` | Each named value of the entry that lines give, as `{ field, values, lines }`, like `identity` |
 | `segments` | Each segment whose two lines appeared, as `{ name, from_line, to_line, sha256 }` |
@@ -1172,7 +1186,7 @@ The library reads a receipt strictly:
    - only an entry is `"NOT RUN"`, and it has no cold boot; an entry has at
      most the cold boots of the plan's entry, numbered from 0;
    - each `serial` has the `length` and an `index` of its bytes, of at most
-     65536 chunks;
+     65536 chunks, and at most the `max_capture_bytes` of the plan's entry;
    - each check has `detail` exactly when it did not pass.
 
 Reading a receipt does not check the rule names of checks and refusals
@@ -1185,14 +1199,14 @@ verdicts from a receipt is not defined yet.
 A public version holds a receipt with every value that identifies the board,
 the network or the bench replaced by `#`, byte for byte, and lists what was
 replaced, so that the record of a run can be published from a bench. The
-library makes it from the receipt, the board description and the
+library makes it from the receipt, with the sensitive lines of the board
+description that the receipt records, and the
 [values to hide](#values-to-hide) of the instance configuration, and gives it
 only when the [leak check](#the-leak-check) finds none of those values in it.
-It is written in the form of a receipt and read as strictly, up to the rules
-that tie the parts of a receipt together: its `receipt` is read as JSON,
-since a replaced value need not keep the form of its key. A public version
-is for reading: where bytes were replaced it no longer shows
-what the board sent, and the receipt stays the record of the run.
+It is written in the form of a receipt and
+[read as strictly](#reading-a-public-version). A public version is for
+reading: where bytes were replaced it no longer shows what the board sent,
+and the receipt stays the record of the run.
 
 When the cold boot of a receipt received these lines, each ended by CR LF,
 on a bench whose TFTP server is `192.0.2.10` and whose path prefix is empty:
@@ -1284,18 +1298,26 @@ nonce is never empty, so it is always withheld.
 A public version must not show these values, each found under its rule:
 
 - every hit: each recorded stream, the console output of a cold boot or the
-  bytes of a `send` event, is decoded and read in [lines](#lines), each line
-  is matched with the [sensitive lines](#sensitive-lines) of the board
-  description, and the bytes of each named group of the first match of each
-  form are a hit of the rule `board.<name>`, unless they are empty or one of
-  the `never` values of `[deidentify]`;
+  bytes of a `send` event, is decoded and cut into pieces at every LF and
+  every CR; each piece, without the bytes before its first printable ASCII
+  byte and after its last ASCII byte that is neither a space nor a control
+  character, is matched with the [sensitive lines](#sensitive-lines) of the
+  board description that the receipt records; and the bytes of each named
+  group of the first match of each form are a hit of the rule
+  `board.<name>`, unless they are empty or one of the `never` values of
+  `[deidentify]`. A CR left where an LF was lost, or a stray byte at either
+  end of a line, thus keeps no line from its form;
 - the TFTP server address and path prefix of
   `inputs.instance.parameters.tftp`;
+- the `relay` of each `power` event, under the rule
+  `instance.local.power.relay`;
 - the [values to hide](#values-to-hide) of the instance configuration;
 - the nonce, under the rule `nonce`.
 
 Values shorter than 4 bytes are not searched for, since they would be found
-in unrelated bytes; the span of a hit is replaced whatever its length. A
+in unrelated bytes; the span of a hit is replaced whatever its length. Values
+are found ignoring ASCII case, so a MAC address that a later line prints in
+upper case is found too. A
 receipt with more than 1024 values to hide besides the nonce, a value
 counted once for each rule that finds it, or with more than 64 KiB of them
 in all, has no public version: the leak check fails under the rule
@@ -1310,9 +1332,10 @@ Each of these spans is replaced, every byte by `#`:
 - in each stream and in every other string of the receipt, every occurrence
   of a value to hide of at least 4 bytes other than the nonce;
 - every `relay` of a `power` event, whole, under the rule
-  `instance.local.power.relay`. A relay number is short, so a search for it
-  would find unrelated bytes; it is replaced where the receipt records it
-  instead;
+  `instance.local.power.relay`. A relay number shorter than 4 bytes is not
+  searched for, since it would be found in unrelated bytes; it is replaced
+  where the receipt records it. A longer one is also a value to hide, found
+  wherever it occurs;
 - the unterminated last line of the console output of each cold boot, whole,
   under the rule `console.unterminated_line`: a sensitive line cut short by
   the end of a capture may not match its form, though it holds a value.
@@ -1335,10 +1358,14 @@ or a digest stays, and the leak check refuses the public version.
 
 Before the library gives a public version, it checks that:
 
-- no value to hide of at least 4 bytes, the nonce included, occurs in any
-  string of its receipt or in the decoded bytes of its streams, the recorded
-  texts and the digests included;
-- the sensitive lines, matched again in its streams, hold nothing but `#`;
+- the public version passes [its reading](#reading-a-public-version);
+  otherwise the check fails under the rule `public.form`, with the JSON
+  pointer, in the public version, of what reading refuses as its field;
+- no value to hide of at least 4 bytes, the nonce included, occurs, ignoring
+  ASCII case, in any string of its receipt or in the decoded bytes of its
+  streams, the recorded texts and the digests included;
+- the sensitive lines of the board description that it records, matched
+  again in its streams, hold nothing but `#`;
 - every `relay`, and the unterminated last line of the console output of
   each cold boot, hold nothing but `#`;
 - no segment of `observations.segments` covers a replaced byte of its cold
@@ -1351,7 +1378,39 @@ the field of each value found, never the value. A hit inside a digest, such
 as a board serial number that is part of a payload digest, and an instance
 value in the text of the run plan, such as the TFTP server address in a
 comment, both fail it: a run whose plan holds a value to hide has no public
-version.
+version. A receipt whose recorded board description cannot be read has none
+either: making it fails under `public.form`, with the field
+`/inputs/board_description/text`.
+
+### Reading a public version
+
+The library reads a public version as strictly as a receipt: its `format`
+and `format_version` first, every key with none missing or unknown, and a
+text that is exactly the rendering of what it holds. Then the parts must
+agree:
+
+- `placeholder` is `"#"`;
+- `withheld` lists exactly the [withheld fields](#withheld-fields) that
+  `receipt` holds as strings that are not empty, in their order and with
+  their lengths, `/nonce` among them, and each of those strings is all `#`;
+- each replacement names a string of `receipt` that a public version
+  rewrites, not a recorded text, a digest or a withheld field; its span is
+  not empty and lies within the decoded bytes of the stream, or the UTF-8
+  bytes of the string, and holds only `#`; it comes after the replacement
+  before it, in the order of the fields in `receipt` and of the offsets
+  within a field, without overlapping it; and its `rules` are not empty,
+  sorted and distinct;
+- `receipt`, read with `0` for each replaced byte of a string, such as a
+  payload name of which a hit replaced a part, is a receipt of version 1 in
+  the form of the format: every key, none missing or unknown, and every
+  value of its type and form. The rules that tie the parts of a receipt
+  together are not checked, since replaced values no longer show what the
+  run recorded; its board description must be one that the library reads.
+
+A replaced byte of a fixed word of the format, such as a check result,
+leaves `receipt` out of form, so its public version fails reading and the
+leak check: the library refuses such a public version rather than give one
+that cannot be read.
 
 ### Why the receipt digest can be published
 

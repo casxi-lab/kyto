@@ -1,7 +1,7 @@
 # An example run plan for the Raspberry Pi 5, with two entries. The payload
 # files under payload/ are small stand-ins from which no board boots; the
-# digests below are theirs. A plan holds no value of a bench, not even in a
-# comment: receipts record its text verbatim.
+# payload digests below are theirs. A plan holds no value of a bench, not even
+# in a comment: receipts record its text verbatim.
 format = "kyto-bench run plan"
 format_version = 1
 board = "raspberry-pi-5"
@@ -35,7 +35,8 @@ version = "v2.6(release):v2.6-241-g36761b276"
 
 # One cold boot of another kernel that answers a request once it is ready.
 # The segment covers the lines between the start of the operating system and
-# READY; the named value is the payload's build id.
+# READY; its digest is that of the two lines that the library's tests put
+# there. The named value is the payload's build id.
 [[entries]]
 name = "echo"
 payload_dir = "echo"

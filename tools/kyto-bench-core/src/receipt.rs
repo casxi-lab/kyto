@@ -9,11 +9,13 @@ use std::fmt;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use serde::de::DeserializeOwned;
 use serde::ser::{self, SerializeMap as _};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
+use crate::board::Board;
 use crate::digest::{Sha256, is_lower_hex};
-use crate::document::{Header, check, render_json};
+use crate::document::{Header, check};
 use crate::identity::{self, IdentityError, IdentityRecord, ReadMethod, UNKNOWN, Value};
 use crate::instance::{Parameters, Quantity, Role};
 use crate::lines;
@@ -26,6 +28,9 @@ pub const FORMAT: &str = "kyto-bench receipt";
 
 /// The `format_version` of a receipt that this tool reads and writes.
 pub const FORMAT_VERSION: i64 = 1;
+
+/// The most chunks that the `index` of a cold boot's console output lists.
+pub const MAX_CHUNKS: usize = 65_536;
 
 /// The rules that make a receipt not evidence, in the order that
 /// `evidence.reasons` lists them: the tool's commit is unknown, its working
@@ -335,6 +340,7 @@ pub enum EndReason {
     BootTimeout,
     StepTimeout,
     ByteLimit,
+    ChunkLimit,
     DeviceError,
 }
 
@@ -473,7 +479,7 @@ pub enum ReceiptError {
     /// The text is not JSON in UTF-8, or does not have the form of the
     /// format.
     Syntax(String),
-    /// The document is not a receipt of this version.
+    /// The document is not of the format and version read.
     Format(Header),
     /// The text is not the rendering of what it holds: it was edited.
     NotRendered,
@@ -488,6 +494,11 @@ fn invalid(at: impl Into<String>, reason: impl Into<String>) -> ReceiptError {
     }
 }
 
+/// Makes an error of the value at `at` the receipt's.
+fn fails<E: fmt::Display>(at: &'static str) -> impl Fn(E) -> ReceiptError {
+    move |error| invalid(at, error.to_string())
+}
+
 impl Receipt {
     /// The receipt as the tool writes it: the pretty JSON of its fields in
     /// order, with two spaces of indentation and a final newline.
@@ -495,19 +506,10 @@ impl Receipt {
         render_json(self)
     }
 
-    /// Reads a receipt strictly: the format and version are read first;
-    /// then every field, none unknown or missing; the text must be the
-    /// rendering of what it holds; and the rules of [`Receipt::check`] hold.
+    /// Reads a receipt strictly, as [`read_rendered`] reads a document, and
+    /// checks the rules of [`Receipt::check`].
     pub fn parse(text: &[u8]) -> Result<Self, ReceiptError> {
-        let syntax = |error: serde_json::Error| ReceiptError::Syntax(error.to_string());
-        let header: Header = serde_json::from_slice(text).map_err(syntax)?;
-        if !header.is(FORMAT, FORMAT_VERSION) {
-            return Err(ReceiptError::Format(header));
-        }
-        let receipt: Self = serde_json::from_slice(text).map_err(syntax)?;
-        if receipt.render().as_bytes() != text {
-            return Err(ReceiptError::NotRendered);
-        }
+        let receipt: Self = read_rendered(text, FORMAT)?;
         receipt.check()?;
         Ok(receipt)
     }
@@ -515,18 +517,25 @@ impl Receipt {
     /// Checks the rules that tie the fields of a receipt together: the forms
     /// of the nonce and the commit; `evidence` lists exactly the reasons that
     /// apply and is eligible exactly when it lists none; the recorded texts
-    /// have their digests; the reference, the board and every entry are
-    /// those of the run plan, with the payload files of the plan or of its
-    /// pinned set in order; a refused run has no run verdict, no event
-    /// before the first entry, and entries that were not run; every entry
-    /// not run has no cold boot, and a cold boot's console output is
-    /// described by its index; a check has a detail exactly when it did not
-    /// pass.
+    /// have their digests; the recorded plan, description and parameters are
+    /// read and checked as a run checks them; the reference, the board and
+    /// every entry are those of the run plan, with the payload files of the
+    /// plan or of its pinned set in order; a refused run has no run verdict,
+    /// no event before the first entry, entries that were not run and
+    /// checked nothing, and a refusal that names its entry; every entry not
+    /// run has no cold boot, and a cold boot's console output is described
+    /// by its index; a check has a detail exactly when it did not pass.
     pub fn check(&self) -> Result<(), ReceiptError> {
         let (tool, evidence, inputs) = (&self.tool, &self.evidence, &self.inputs);
         let (plan_text, board) = (&inputs.run_plan.text, &inputs.board_description);
-        let plan = RunPlan::parse(plan_text)
-            .map_err(|error| invalid("/inputs/run_plan/text", error.to_string()))?;
+        let (plan_at, parameters) = ("/inputs/run_plan/text", &inputs.instance.parameters);
+        let plan = RunPlan::parse(plan_text).map_err(fails(plan_at))?;
+        let read = Board::parse(&board.text).map_err(fails("/inputs/board_description/text"))?;
+        parameters
+            .check(&read)
+            .map_err(fails("/inputs/instance/parameters"))?;
+        let pins = &parameters.pins;
+        plan.check(&read, pins).map_err(fails(plan_at))?;
         let applies = [tool.commit.is_none(), !tool.clean, self.bench.simulated];
         let due = EVIDENCE_RULES
             .iter()
@@ -544,17 +553,16 @@ impl Receipt {
                 "the reasons are the rules that apply, once each, in order";
             "/inputs/run_plan/sha256" => inputs.run_plan.sha256.matches(plan_text.as_bytes()), DIGEST;
             "/inputs/board_description/sha256" => board.sha256.matches(board.text.as_bytes()), DIGEST;
-            "/inputs/board_description/id" => board.id == plan.board, "the board of the run plan";
+            "/inputs/board_description/id" => board.id == read.id, "the id of the recorded description";
             "/reference" => self.reference == plan.reference, "the reference of the run plan";
             "/entries" => self.entries.len() == plan.entries.len(), "one entry for each of the plan";
             "/verdict" => refused != self.verdict.is_some(), "exactly one of refusal and verdict";
             "/verdict" => self.verdict != Some(Verdict::NotRun), NOT_RUN;
-            "/refusal/entry" => self.refusal.as_ref().and_then(|refusal| refusal.entry)
-                .is_none_or(|entry| entry < self.entries.len()), "the index of an entry";
+            "/refusal/entry" => self.refusal.as_ref().is_none_or(|refusal| refusal.entry
+                .is_some_and(|entry| entry < self.entries.len())), "the index of an entry";
             "/start/events" => !refused || self.start.events.is_empty(),
                 "a run is refused before any power command";
         }
-        let pins = &inputs.instance.parameters.pins;
         for (index, (entry, planned)) in self.entries.iter().zip(&plan.entries).enumerate() {
             let at = |key: &str| format!("/entries/{index}/{key}");
             let files = planned
@@ -571,6 +579,7 @@ impl Receipt {
                 at("payload/files") => files.eq(entry.payload.files.iter().map(|file| &file.name)),
                     "the files of the entry's payload, in order";
                 at("verdict") => !refused || (not_run && entry.events.is_empty()), "a refused run runs no entry";
+                at("checks") => !refused || entry.checks.is_empty(), "a refused run checks no entry";
                 at("cold_boots") => !not_run || entry.cold_boots.is_empty(), "an entry not run has no cold boot";
                 at("cold_boots") => entry.cold_boots.len() <= planned.cold_boots as usize,
                     "at most the cold boots of the plan's entry";
@@ -584,6 +593,7 @@ impl Receipt {
                     at("index") => cold_boot.index == number, "the index of the cold boot";
                     at("serial/length") => serial.length == serial.bytes_base64.0.len() as u64,
                         "the number of bytes";
+                    at("serial/index") => serial.index.len() <= MAX_CHUNKS, "at most 65536 chunks";
                     at("serial/index") => chunks.is_ok(), chunks.err().map(|error| error.to_string()).unwrap_or_default();
                     at("verdict") => cold_boot.verdict != Verdict::NotRun, NOT_RUN;
                 }
@@ -606,6 +616,32 @@ fn check_results(at: &str, checks: &[Check]) -> Result<(), ReceiptError> {
     Ok(())
 }
 
+/// Reads a JSON document of `format` version 1 in the form of receipts:
+/// its `format` and `format_version` are read first; then every field, none
+/// unknown or missing; and the text must be the rendering of what it holds.
+pub(crate) fn read_rendered<T: Serialize + DeserializeOwned>(
+    text: &[u8],
+    format: &str,
+) -> Result<T, ReceiptError> {
+    let syntax = |error: serde_json::Error| ReceiptError::Syntax(error.to_string());
+    let header: Header = serde_json::from_slice(text).map_err(syntax)?;
+    if !header.is(format, FORMAT_VERSION) {
+        return Err(ReceiptError::Format(header));
+    }
+    let document: T = serde_json::from_slice(text).map_err(syntax)?;
+    if render_json(&document).as_bytes() != text {
+        return Err(ReceiptError::NotRendered);
+    }
+    Ok(document)
+}
+
+/// The pretty JSON of `value`, the form of receipts: two spaces of
+/// indentation, object keys in the order of their fields, a final newline.
+pub(crate) fn render_json(value: &impl Serialize) -> String {
+    let json = serde_json::to_string_pretty(value).expect("a document is JSON without map keys");
+    json + "\n"
+}
+
 const DIGEST: &str = "the SHA-256 of the recorded text";
 const NOT_RUN: &str = "only an entry is NOT RUN";
 
@@ -613,8 +649,8 @@ impl fmt::Display for ReceiptError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Syntax(message) => write!(f, "cannot read the receipt: {message}"),
-            Self::Format(found) => write!(f, "{found} is not \"{FORMAT}\" version 1"),
-            Self::NotRendered => write!(f, "the receipt is not as the tool wrote it"),
+            Self::Format(found) => write!(f, "{found} is not a format that this reader reads"),
+            Self::NotRendered => write!(f, "the document is not as the tool wrote it"),
             Self::Invalid { at, reason } => write!(f, "the receipt at {at}: {reason}"),
         }
     }
@@ -1027,6 +1063,23 @@ steps = [{ after = "ready", send = "?\r", expect = '^STATS seq=1', timeout_ms = 
             receipt.entries[0].cold_boots[0].serial.index = index;
             assert_eq!(invalid_at(&receipt), format!("{at}index"));
         }
+        // At most 65536 chunks, one byte each at most here.
+        let bytes = vec![b'x'; MAX_CHUNKS + 1];
+        let index: Vec<[u64; 2]> = (0..bytes.len() as u64)
+            .map(|offset| [offset, offset])
+            .collect();
+        let mut receipt = example();
+        receipt.entries[0].cold_boots[0].serial = Serial {
+            length: bytes.len() as u64,
+            bytes_base64: Base64(bytes),
+            index,
+        };
+        assert_eq!(invalid_at(&receipt), format!("{at}index"));
+        receipt.entries[0].cold_boots[0]
+            .serial
+            .index
+            .truncate(MAX_CHUNKS);
+        assert!(Receipt::parse(receipt.render().as_bytes()).is_ok());
     }
 
     #[test]
@@ -1124,6 +1177,14 @@ steps = [{ after = "ready", send = "?\r", expect = '^STATS seq=1', timeout_ms = 
         let mut outside = refused();
         outside.refusal.as_mut().unwrap().entry = Some(1);
         assert_eq!(invalid_at(&outside), "/refusal/entry");
+        // Every rule that refuses a run names its entry, and served copies
+        // are checked only after the switch.
+        let mut unnamed = refused();
+        unnamed.refusal.as_mut().unwrap().entry = None;
+        assert_eq!(invalid_at(&unnamed), "/refusal/entry");
+        let mut checked = refused();
+        checked.entries[0].checks = example().entries[0].checks.clone();
+        assert_eq!(invalid_at(&checked), "/entries/0/checks");
     }
 
     #[test]
@@ -1197,8 +1258,51 @@ steps = [{ after = "ready", send = "?\r", expect = '^STATS seq=1', timeout_ms = 
         let pins = &mut receipt.inputs.instance.parameters.pins;
         pins[0].files[0].name = PayloadName::parse("cmdline.txt").unwrap();
         assert_eq!(invalid_at(&receipt), "/entries/0/payload/files");
+        // A pin that names no recorded set is refused, whatever the files.
         receipt.inputs.instance.parameters.pins.clear();
-        assert_eq!(invalid_at(&receipt), "/entries/0/payload/files");
+        assert_eq!(invalid_at(&receipt), "/inputs/run_plan/text");
+        receipt.entries[0].payload.files.clear();
+        assert_eq!(invalid_at(&receipt), "/inputs/run_plan/text");
+    }
+
+    #[test]
+    fn recorded_inputs_are_read_and_checked_as_a_run_reads_them() {
+        let record = |text: &str| Text {
+            sha256: Sha256::of(text.as_bytes()),
+            text: text.into(),
+        };
+        // A board description that is not one, or not of the recorded id.
+        let mut receipt = example();
+        let text = record("anything at all");
+        (
+            receipt.inputs.board_description.sha256,
+            receipt.inputs.board_description.text,
+        ) = (text.sha256, text.text);
+        assert_eq!(invalid_at(&receipt), "/inputs/board_description/text");
+        let mut receipt = example();
+        receipt.inputs.board_description.id = "other".into();
+        assert_eq!(invalid_at(&receipt), "/inputs/board_description/id");
+        // A plan that names a firmware version line the board does not have.
+        let mut receipt = example();
+        let plan = PLAN.replace(
+            "cold_boots = 1\n",
+            "cold_boots = 1\nfirmware.bl32 = { hash = \"1accd665\" }\n",
+        );
+        receipt.inputs.run_plan = record(&plan);
+        assert_eq!(invalid_at(&receipt), "/inputs/run_plan/text");
+        // Parameters that an instance configuration could not hold.
+        type Edit = fn(&mut Parameters);
+        let edits: [Edit; 4] = [
+            |p| p.tftp.path_prefix = "ab".into(),
+            |p| p.confirmation.consecutive = 0,
+            |p| p.confirmation.off_at_most_micro = 9_000_000,
+            |p| p.pins[0].files.clear(),
+        ];
+        for edit in edits {
+            let mut receipt = example();
+            edit(&mut receipt.inputs.instance.parameters);
+            assert_eq!(invalid_at(&receipt), "/inputs/instance/parameters");
+        }
     }
 
     #[test]

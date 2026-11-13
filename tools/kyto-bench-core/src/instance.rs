@@ -195,15 +195,17 @@ impl Instance {
         // The revision covers what `[devices]` holds, as written.
         let json = canonical_json(&raw.devices)
             .map_err(|error| invalid(format!("devices{}", error.at), error.to_string()))?;
+        let parameters = Parameters {
+            tftp: raw.tftp,
+            confirmation: raw.confirmation,
+            console: raw.console,
+            identity,
+            pins: raw.pins,
+        };
+        parameters.check_values()?;
         Ok(Self {
             board: raw.board,
-            parameters: Parameters {
-                tftp: raw.tftp,
-                confirmation: raw.confirmation,
-                console: raw.console,
-                identity,
-                pins: raw.pins,
-            },
+            parameters,
             devices,
             local: raw.local,
             hardware_revision: Sha256::of(json.as_bytes()),
@@ -305,9 +307,16 @@ fn is_searchable(text: &str) -> bool {
         && text.bytes().all(|byte| byte.is_ascii_graphic())
 }
 
-impl RawInstance {
+impl Parameters {
+    /// Checks the rules of every value, as reading a configuration does, and
+    /// the identity record against the description of the board.
+    pub fn check(&self, board: &Board) -> Result<(), InstanceError> {
+        self.check_values()?;
+        self.identity.check(board).map_err(InstanceError::Identity)
+    }
+
     /// Checks the rules of every value but those of the identity record.
-    fn check(&self, devices: &Devices) -> Result<(), InstanceError> {
+    fn check_values(&self) -> Result<(), InstanceError> {
         let (tftp, conf, console) = (&self.tftp, &self.confirmation, &self.console);
         let prefix = &tftp.path_prefix;
         let timeout = |ms: u64| (1..=MAX_TIMEOUT_MS).contains(&ms);
@@ -335,6 +344,13 @@ impl RawInstance {
             names::check_distinct(pin.files.iter().map(|file| &file.name))
                 .map_err(|error| invalid(&at, error.to_string()))?;
         }
+        Ok(())
+    }
+}
+
+impl RawInstance {
+    /// Checks the rules of `[local]` and `[devices]`.
+    fn check(&self, devices: &Devices) -> Result<(), InstanceError> {
         let salt = self.local.get("salt").and_then(toml::Value::as_str);
         check! {
             "local.salt" => salt.is_some_and(|salt| is_lower_hex(salt, SALT_DIGITS)),
@@ -360,9 +376,23 @@ impl RawInstance {
                     "both ends of a connection are lines of text";
             }
         }
+        let simulated = Role::ALL
+            .iter()
+            .all(|role| devices.device(*role).kind == "simulated");
+        check! {
+            "local.salt" => simulated || salt.is_none_or(|salt| !PUBLISHED_SALTS.contains(&salt)),
+                "kyto publishes this salt; generate one with openssl rand -hex 16";
+        }
         Ok(())
     }
 }
+
+/// The salts that kyto publishes, in its documentation and its tests, which
+/// only a configuration of simulated devices may use.
+const PUBLISHED_SALTS: [&str; 2] = [
+    "9c1f5e0a7b3d48e2a6c0f4b8d2e71a35",
+    "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+];
 
 const SEARCHABLE: &str = "the value is 4 to 255 printable ASCII characters without spaces";
 const TIMEOUT: &str = "the timeout is 1 ms to 1 h";
@@ -857,6 +887,27 @@ B = { z = "", y = "q\"b\\c\n\t\u0001é/" }
         let no_local = &EXAMPLE[..start];
         let error = Instance::parse(no_local).unwrap_err().to_string();
         assert!(error.contains("missing field `local`"), "{error}");
+    }
+
+    #[test]
+    fn a_salt_that_kyto_publishes_is_only_for_simulated_devices() {
+        let power = "power = { kind = \"simulated\", model = \"simulated\" }";
+        let real = edited(power, "power = { kind = \"relay-board\", model = \"R4\" }");
+        assert_eq!(at_of(&real), "local.salt");
+        let documented = real.replace(
+            "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+            "9c1f5e0a7b3d48e2a6c0f4b8d2e71a35",
+        );
+        assert_eq!(at_of(&documented), "local.salt");
+        // A salt of the bench's own, made here so that no text holds it.
+        let salt = Sha256::of(b"a bench").to_string();
+        let own = real.replace("0f1e2d3c4b5a69788796a5b4c3d2e1f0", &salt[..32]);
+        assert_eq!(
+            Instance::parse(&own).unwrap().devices().power.kind,
+            "relay-board"
+        );
+        // The documented example, of simulated devices, keeps its salt.
+        assert!(Instance::parse(documented_example()).is_ok());
     }
 
     #[test]

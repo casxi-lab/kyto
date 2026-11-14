@@ -174,9 +174,10 @@ response, and of a send in an entry that declares none; a run on simulated
 devices whose response has no LF; a run on a console that holds a line that
 came after the trigger line but before the send, which is no response; a
 receipt whose send, the first of its cold boot or a second one, was moved
-inside a chunk, which reading refuses at that send; a fuzz test in which the steps that the record of a run gives are
-those that the rules give from its lines and sends; and a fuzz test that
-moves the first send of each written receipt inside a chunk.
+inside a chunk, which reading refuses at that send; a fuzz test in which the
+steps that the record of a run gives are those that the rules give from its
+lines and sends; and a fuzz test that moves the first send of each written
+receipt inside a chunk.
 
 ### VERD-R10
 

@@ -975,6 +975,17 @@ steps = [{ after = "ready", send = "?\r", expect = '^STATS seq=1', timeout_ms = 
                 assert_eq!(invalid_at(&receipt), at, "{received}");
             }
         }
+        // A second send of the cold boot inside a chunk is refused too, and
+        // read at the end of the output.
+        let mut receipt = example();
+        let events = &mut receipt.entries[0].cold_boots[0].events;
+        let mut second = events[3].clone();
+        (second.at_ns, second.received) = (7_650_000_000, 50);
+        events.insert(4, second);
+        let second_at = "/entries/0/cold_boots/0/events/4/received";
+        assert_eq!(invalid_at(&receipt), second_at);
+        receipt.entries[0].cold_boots[0].events[4].received = 61;
+        assert!(Receipt::parse(receipt.render().as_bytes()).is_ok());
         // Another event inside a chunk is read.
         let mut receipt = example();
         receipt.entries[0].cold_boots[0].events[4].received = 50;

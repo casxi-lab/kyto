@@ -176,6 +176,10 @@ mod tests {
                 "[local.power]: unknown field `extra`, expected `port` or `relay`",
             ),
             (
+                format!("{POWER}{CONSOLE}extra = \"x\"\n"),
+                "[local.console]: unknown field `extra`, expected `port`",
+            ),
+            (
                 format!("{POWER}{}", CONSOLE.replace("/dev/", "dev/")),
                 "[local.console] port: an absolute path without a NUL byte",
             ),
@@ -202,9 +206,18 @@ mod tests {
             let checked = serial_settings(&pi5, &instance(&local));
             assert_eq!(checked.unwrap_err(), error, "{local}");
         }
-        let even = board(&RASPBERRY_PI_5.replacen("parity = \"none\"", "parity = \"even\"", 1));
-        let checked = serial_settings(&even, &instance(&format!("{POWER}{CONSOLE}")));
-        assert_eq!(checked.unwrap_err(), ONLY_8N1);
+        // Every setting of the board's console line other than 115200 8N1
+        // is refused.
+        for (line, other) in [
+            ("parity = \"none\"", "parity = \"even\""),
+            ("baud = 115200", "baud = 9600"),
+            ("data_bits = 8", "data_bits = 7"),
+            ("stop_bits = 1", "stop_bits = 2"),
+        ] {
+            let other = board(&RASPBERRY_PI_5.replacen(line, other, 1));
+            let checked = serial_settings(&other, &instance(&format!("{POWER}{CONSOLE}")));
+            assert_eq!(checked.unwrap_err(), ONLY_8N1, "{line}");
+        }
     }
 
     #[test]
@@ -243,6 +256,27 @@ mod tests {
         }
         let kept = device_error(Role::Console, missing, &hidden);
         assert_eq!(kept.detail, missing);
+        // A port that is a link also hides the path that it resolves to,
+        // with the file name of that path and its twin.
+        let name = format!("hidden-forms-{}", std::process::id());
+        let dir = std::env::current_exe().unwrap().with_file_name(name);
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir(&dir).unwrap();
+        let target = dir.join("cu.usbserial-EF56GH");
+        fs::write(&target, b"").unwrap();
+        let link = dir.join("console-alias");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let hidden = Hidden::of(&[link.to_str().unwrap()]);
+        let resolved = fs::canonicalize(&target).unwrap();
+        for detail in [
+            format!("open: {}: busy", resolved.display()),
+            "read: CU.USBSERIAL-EF56GH went away".to_string(),
+            "read: the adapter tty.usbserial-ef56gh went away".to_string(),
+        ] {
+            let error = device_error(Role::Console, &detail, &hidden);
+            assert_eq!(error.detail, format!("{}: {withheld}", &detail[..4]));
+        }
+        fs::remove_dir_all(&dir).unwrap();
         // A form shorter than 4 bytes is not hidden, as the public version
         // of a receipt does not search for it.
         assert_eq!(Hidden::of(&["/a"]), Hidden::default());

@@ -25,11 +25,14 @@ const DEPENDENCY_KEYS: [&str; 3] = ["version", "default-features", "features"];
 const UNSAFE_MEMBER: &str = "kyto-bench-os";
 
 /// The lints that lift a ban of the workspace when they are allowed: unsafe
-/// code, and the bans of `clippy.toml`.
-const ESCAPES: [&str; 3] = [
+/// code, the bans of `clippy.toml`, and the groups that hold those bans.
+const ESCAPES: [&str; 6] = [
     "unsafe_code",
     "clippy::disallowed_methods",
     "clippy::disallowed_types",
+    "clippy::style",
+    "clippy::all",
+    "warnings",
 ];
 
 /// The files apart from the crate root of `kyto-bench-os` that allow a lint

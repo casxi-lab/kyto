@@ -2334,7 +2334,11 @@ fn the_publish_command_publishes_one_entry_without_a_power_command() {
 
 #[test]
 fn the_publish_command_reports_a_served_copy_that_differs() {
+    // The board is served an earlier generation first, so that a switch
+    // back to it would show.
     let env = TestEnv::example();
+    assert_eq!(publish(&env, "firmware-only"), cli::PASS);
+    env.script.replace(Some(script(None, STATS)));
     env.world.knobs().tftp.corrupts_served = true;
     assert_eq!(publish(&env, "echo"), cli::BENCH_FAULT);
     assert!(env.world.power_commands().is_empty(), "no power command");
@@ -2350,14 +2354,14 @@ fn the_publish_command_reports_a_served_copy_that_differs() {
         let copy = format!("the served copy of {file} has the SHA-256 ");
         assert!(line.starts_with(&copy), "{line}");
     }
-    let last = "the board is served g000001, whose copy differs from the run plan; a run \
+    let last = "the board is served g000002, whose copy differs from the run plan; a run \
                 switches the supply on only for a generation that it published and checked itself";
     assert_eq!(said[4], last);
-    // Nothing switched back: the board is served the one generation staged.
+    // Nothing switched back: the board is served the echo generation.
     env.world.knobs().tftp.corrupts_served = false;
     let kernel = example("payload/echo/kernel.img");
     assert_eq!(served(&env, "kernel.img").unwrap(), kernel);
-    assert!(!env.staged(2, "kernel.img"));
+    assert!(!env.staged(3, "kernel.img"));
 }
 
 #[test]

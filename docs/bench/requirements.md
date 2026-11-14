@@ -192,7 +192,8 @@ digest of its own bytes. Fuzz tests of changed console output read in
 chunks of any size, whose lines put back together are its bytes and each of
 whose segments is the SHA-256 of the raw bytes between its lines, and of
 the receipts of runs on simulated devices whose board writes changed
-output, which hold the bytes that the console gave.
+output, which hold the bytes that the console gave, up to the capture
+limit.
 
 ### VERD-R11
 

@@ -219,46 +219,61 @@ boot is not powered.
   cases written as a constant:
   - `fuzz_transcripts`, 1000 cases (`TRANSCRIPT_CASES`): changed console
     output of at most 4 KiB, read in chunks of any size by a run that sends
-    each armed step after a chunk. The observations that `verdict::judge`
-    gives from the record are those that the run's matcher gave, and other
-    chunks that keep every send where it came give the same but for the
-    times of markers; their markers and steps are those that the test finds
-    from the lines and the sends without a matcher, by the rules of
-    [steps](formats.md#steps-and-the-end-of-a-cold-boot); the lines put
-    back together are the bytes, and none keeps the CR before its LF; every
-    segment is the SHA-256 of the raw bytes between its lines; what a cold
-    boot shows is bounded by its lines; the checks of a cold boot are of its
-    rules, in their order, the same in every reading, also for events in any
-    order; and an index of any offsets and times describes the bytes exactly
-    when it keeps the rules of an index;
-  - `fuzz_run_plans`, 4000 cases (`PLAN_CASES`): changed run plans are read
-    or refused with a `PlanError`, never with a panic; a plan that is read
-    keeps its text byte for byte and the limits of a plan, and checking it
-    against the board description does not panic;
+    each armed step after a chunk, and fails as soon as a step that it sent is
+    armed again. The observations that `verdict::judge` gives from the record
+    are those that the run's matcher gave, and other chunks that keep every
+    send where it came give the same but for the times of markers; their
+    markers and steps are those that the test finds from the lines and the
+    sends without a matcher, by the rules of
+    [steps](formats.md#steps-and-the-end-of-a-cold-boot); the lines put back
+    together are the bytes, and none keeps the CR before its LF; every segment
+    is the SHA-256 of the raw bytes between its lines; what a cold boot shows
+    is bounded by its lines; the checks of a cold boot are of its rules, in
+    their order, the same in every reading, also for events in any order, and
+    `console.byte_limit` fails exactly when the record ends the cold boot at a
+    limit of the capture; and an index of any offsets and times describes the
+    bytes exactly when it keeps the rules of an index;
+  - `fuzz_run_plans`, 4000 cases (`PLAN_CASES`): changed run plans are read or
+    refused with a `PlanError`, never with a panic; a plan that is read keeps
+    its text byte for byte and the limits of a plan, its reference and those
+    of its entries included, and checking it against the board description
+    does not panic; a plan whose only change sets a `cold_boots`,
+    `boot_timeout_ms`, `max_capture_bytes`, `timeout_ms`, `send` or
+    `reference` at or just past a limit of a run plan is read exactly when the
+    limit allows the value;
   - `fuzz_receipts`, 100 cases (`RECEIPT_CASES`): runs of the example run
     plan, with one cold boot of each entry, on simulated devices whose board
-    writes changed example console output. In one case of ten, staging
-    writes a changed copy, and the run is refused; in another, the relay
-    contacts never close, the supply meter reads the voltage of a supply
-    that is on whatever the supply does, or the board is served a changed
-    copy, and the run is BENCH FAULT. Each receipt is read back as written,
-    re-derives to itself and holds the bytes that the console gave, bytes
-    that are not UTF-8, CR and LF included; a receipt with typed fields
-    changed is read as it is or refused at a JSON pointer, and re-deriving
-    one that is read gives a receipt or an error at a JSON pointer; when
-    only judgements that re-deriving makes again were changed, the rule,
-    entry, subject or detail of a refusal among them, re-deriving gives
-    back the receipt that the run wrote; and re-deriving a receipt in which
-    an entry after a bench fault was given the events or cold boots of that
-    entry fails at the JSON pointer of the entry.
+    writes changed example console output; in one case of five, each entry has
+    a capture limit of 1 to 1024 bytes. In one case of ten, staging writes a
+    changed copy, and the run is refused; in another, the relay contacts never
+    close, the supply meter reads the voltage of a supply that is on whatever
+    the supply does, or the board is served a changed copy, and the run is
+    BENCH FAULT. A case fails as soon as its run makes more sends than its
+    cold boots have steps. Each receipt is read back as written, re-derives to
+    itself and holds the bytes that the console gave, bytes that are not
+    UTF-8, CR and LF included, up to the capture limit: a cold boot ends at
+    its limit, and fails `console.byte_limit`, exactly when the console gave
+    more. A receipt with typed fields changed is read as it is or refused at a
+    JSON pointer, and re-deriving one that is read gives a receipt or an error
+    at a JSON pointer; one with a nonce or a commit of another form, an
+    unknown commit that its evidence does not give as a reason, a changed
+    eligibility, or console output shortened inside its last chunk but not its
+    length is refused; when only judgements that re-deriving makes again were
+    changed, the rule, entry, subject or detail of a refusal among them,
+    re-deriving gives back the receipt that the run wrote; and re-deriving a
+    receipt in which an entry after a bench fault was given the events or cold
+    boots of that entry fails at the JSON pointer of the entry.
 
   Each target also fails when too few of its cases reach what it checks,
   such as sends, segments, a CR and its LF in two chunks, lone CR bytes,
-  bytes that are not UTF-8, an index read and one refused under each rule
-  of an index, a run of each verdict and a refused run, forged judgements
-  that re-deriving undoes, forged refusals among them, and entries that
-  ran after a bench fault, or, for the run plans, when too few or too many
-  of the changed plans are read. `fuzz_deeper`, which `#[ignore]` keeps out
+  bytes that are not UTF-8, records that end at a limit of the capture, an
+  index read and one refused under each rule of an index, a run of each
+  verdict and a refused run, cold boots that reach their capture limit,
+  forged receipts that reading refuses, forged judgements that re-deriving
+  undoes, forged refusals among them, and entries that ran after a bench
+  fault, or, for the run plans, when too few or too many of the changed
+  plans are read, or too few with a value at a limit are read or with a
+  value just past one refused. `fuzz_deeper`, which `#[ignore]` keeps out
   of the check, runs a hundred times as many cases of each target, for a
   deeper search:
 

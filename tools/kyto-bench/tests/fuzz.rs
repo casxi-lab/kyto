@@ -591,6 +591,12 @@ fn online(rng: &mut Rng, context: &Context, chunks: Vec<(u64, Vec<u8>)>) -> Onli
         transcript.extend_from_slice(&bytes);
         matcher.push(at, &bytes);
         if let Some(step) = matcher.armed() {
+            // A step is sent once; a step armed again would be sent, and
+            // answered, without end.
+            assert!(
+                sends.iter().all(|sent: &Sent| sent.step != step),
+                "step {step} armed again after its send"
+            );
             let event = FIRST_SEND + sends.len();
             let received = matcher.received();
             sends.push(Sent {
@@ -632,9 +638,9 @@ fn event(at_ns: u64, received: u64, event: EventKind) -> Event {
 
 /// The events of a cold boot of `entry` whose console was ready and supply
 /// switched on at [`ON`], confirmed 1 ms later, with the sends of
-/// `online`, which ended once its last chunk was read and was switched off
-/// and confirmed off then.
-fn events(entry: &Entry, online: &Online) -> Vec<Event> {
+/// `online`, which ended for `reason` once its last chunk was read and was
+/// switched off and confirmed off then.
+fn events(entry: &Entry, online: &Online, reason: EndReason) -> Vec<Event> {
     let reading = |micro| EventKind::Reading {
         quantity: Quantity::SupplyVoltage,
         micro,
@@ -656,11 +662,6 @@ fn events(entry: &Entry, online: &Online) -> Vec<Event> {
     }
     let last = online.index.last().map_or(ON + MS, |chunk| chunk[1]);
     let received = online.transcript.len() as u64;
-    let reason = if online.ended {
-        EndReason::EndCondition
-    } else {
-        EndReason::BootTimeout
-    };
     events.extend([
         event(last, received, EventKind::End { reason }),
         event(last, received, power(Command::Off)),
@@ -919,6 +920,7 @@ struct TranscriptCover {
     sent: u64,
     answered: u64,
     ended: u64,
+    limited: u64,
     segments: u64,
     split_line_end: u64,
     not_utf8: u64,
@@ -953,10 +955,23 @@ fn transcript_case(
     // Its lines, put back together with their line ends, are the bytes.
     let lines = lines::split(chunks.iter().copied());
     assert_lines(transcript, &lines);
+    // The run ended at its end marker or at the boot timeout; now and then
+    // its record says that it ended for another reason: a step timeout, a
+    // limit of the capture or a device error.
+    let reason = match (rng.chance(80), run.ended) {
+        (true, true) => EndReason::EndCondition,
+        (true, false) => EndReason::BootTimeout,
+        (false, _) => *rng.pick(&[
+            EndReason::StepTimeout,
+            EndReason::ByteLimit,
+            EndReason::ChunkLimit,
+            EndReason::DeviceError,
+        ]),
+    };
     // The rules read the record as the run read the bytes: the
     // observations are those of the matcher, and the checks are of the
     // rules of a cold boot, in their order, the same in every reading.
-    let events = events(entry, &run);
+    let events = events(entry, &run, reason);
     let cold_boot = ColdBoot {
         board,
         entry,
@@ -970,6 +985,18 @@ fn transcript_case(
     let (seen, checks) = verdict::judge(&cold_boot).unwrap();
     assert_eq!(seen, run.seen, "online and offline");
     assert_rules(&checks);
+    // The capture limit fails exactly when the capture ended at a limit.
+    let limit = checks
+        .iter()
+        .find(|check| check.rule == "console.byte_limit");
+    let limited = [EndReason::ByteLimit, EndReason::ChunkLimit].contains(&reason);
+    let failed = if limited {
+        Outcome::Fail
+    } else {
+        Outcome::Pass
+    };
+    assert_eq!(limit.map(|check| check.result), Some(failed), "{reason:?}");
+    cover.limited += u64::from(limited);
     let result = verdict::cold_boot(&checks);
     assert!([Verdict::Pass, Verdict::Fail, Verdict::BenchFault].contains(&result));
     assert_eq!(verdict::judge(&cold_boot), Ok((seen.clone(), checks)));
@@ -1052,18 +1079,19 @@ fn transcript_case(
     cover.not_utf8 += u64::from(std::str::from_utf8(transcript).is_err());
 }
 
-/// The transcripts: changed example console output, recordings, corpus
-/// files and lines of the seeds with line ends of every kind, read in chunks
-/// of any size by a run that sends each armed step after a chunk and whose
+/// The transcripts: changed example console output, recordings, corpus files
+/// and lines of the seeds with line ends of every kind, read in chunks of any
+/// size by a run that sends each armed step after a chunk, once, and whose
 /// board answers most sends. The record of what the run read gives the
 /// observations of its matcher, whose markers and steps are those that the
-/// rules give from the lines and the sends; other chunks that keep every
-/// send where it came give the same, but for the times of markers; the
-/// lines put back together are the bytes; segments are digests of the raw
-/// bytes; what a cold boot shows is bounded by its lines; the checks of a
-/// cold boot are of its rules, in their order, the same in every reading,
-/// also of events in any order; and an index of any offsets and times
-/// describes the bytes exactly when it keeps the rules of an index.
+/// rules give from the lines and the sends; other chunks that keep every send
+/// where it came give the same, but for the times of markers; the lines put
+/// back together are the bytes; segments are digests of the raw bytes; what a
+/// cold boot shows is bounded by its lines; the checks of a cold boot are of
+/// its rules, in their order, the same in every reading, also of events in any
+/// order, and the capture limit fails exactly when the record ends the cold
+/// boot at a limit; and an index of any offsets and times describes the bytes
+/// exactly when it keeps the rules of an index.
 fn transcripts(cases: u64) {
     let board = pi5();
     let (seeds, contexts) = (Seeds::new(&board), Context::all(&board));
@@ -1080,6 +1108,7 @@ fn transcripts(cases: u64) {
         cover.sent,
         cover.answered,
         cover.ended,
+        cover.limited,
         cover.segments,
         cover.split_line_end,
         cover.not_utf8,
@@ -1177,11 +1206,105 @@ fn boundaries(text: &str) -> Vec<usize> {
     starts.chain([text.len()]).collect()
 }
 
+/// The keys of run plans whose values have limits.
+const LIMITED_KEYS: [&str; 6] = [
+    "cold_boots",
+    "boot_timeout_ms",
+    "max_capture_bytes",
+    "timeout_ms",
+    "send",
+    "reference",
+];
+
+/// Values of `key`, one of [`LIMITED_KEYS`], at and just past its limits,
+/// each with whether a run plan allows it.
+fn limit_values(key: &str) -> Vec<(String, bool)> {
+    let numbers = |values: [(u64, bool); 4]| {
+        let values = values.map(|(value, allowed)| (value.to_string(), allowed));
+        values.to_vec()
+    };
+    let quoted = |length: usize, allowed| (format!("\"{}\"", "x".repeat(length)), allowed);
+    match key {
+        "cold_boots" => numbers([(0, false), (1, true), (100, true), (101, false)]),
+        "boot_timeout_ms" | "timeout_ms" => {
+            numbers([(0, false), (1, true), (3_600_000, true), (3_600_001, false)])
+        }
+        "max_capture_bytes" => {
+            let max = plan::MAX_CAPTURE_BYTES;
+            numbers([(0, false), (1, true), (max, true), (max + 1, false)])
+        }
+        "send" => [(0, false), (1, true), (4096, true), (4097, false)]
+            .map(|(length, allowed)| quoted(length, allowed))
+            .to_vec(),
+        _ => vec![
+            quoted(0, true),
+            quoted(1024, true),
+            quoted(1025, false),
+            ("\"a\\u0007\"".into(), false),
+        ],
+    }
+}
+
+/// The values of the keys of [`LIMITED_KEYS`] in `lines`, outside
+/// comments: for each, its line, its key and the span of its value.
+fn limited_values(lines: &[String]) -> Vec<(usize, &'static str, usize, usize)> {
+    let mut found = Vec::new();
+    for (number, line) in lines.iter().enumerate() {
+        if line.trim_start().starts_with('#') {
+            continue;
+        }
+        for key in LIMITED_KEYS {
+            let pattern = format!("{key} = ");
+            for (at, _) in line.match_indices(&pattern) {
+                let before = line[..at].chars().next_back();
+                if before.is_some_and(|c| !matches!(c, ' ' | '{' | ',')) {
+                    continue;
+                }
+                let start = at + pattern.len();
+                if let Some(end) = value_end(&line[start..]) {
+                    found.push((number, key, start, start + end));
+                }
+            }
+        }
+    }
+    found
+}
+
+/// The length of the value at the start of `rest`: a string between `"`,
+/// or what comes before a space, `,` or `}`.
+fn value_end(rest: &str) -> Option<usize> {
+    if let Some(string) = rest.strip_prefix('"') {
+        let mut escaped = false;
+        for (at, c) in string.char_indices() {
+            match c {
+                '"' if !escaped => return Some(at + 2),
+                '\\' => escaped = !escaped,
+                _ => escaped = false,
+            }
+        }
+        return None;
+    }
+    let end = rest.find([' ', ',', '}']).unwrap_or(rest.len());
+    (end > 0).then_some(end)
+}
+
 /// Makes one change to `text`, a run plan, with `seeds` to take lines from.
-fn change_plan(rng: &mut Rng, text: &mut String, seeds: &[String]) {
+/// When it sets a value at or just past a limit of a run plan, it says
+/// whether a run plan allows that value.
+fn change_plan(rng: &mut Rng, text: &mut String, seeds: &[String]) -> Option<bool> {
     let mut lines: Vec<String> = text.split('\n').map(String::from).collect();
     let line = rng.below(lines.len());
-    match rng.below(10) {
+    let mut allowed = None;
+    match rng.below(12) {
+        10 | 11 => {
+            let values = limited_values(&lines);
+            if !values.is_empty() {
+                let (line, key, start, end) = *rng.pick(&values);
+                let (value, within) = rng.pick(&limit_values(key)).clone();
+                lines[line].replace_range(start..end, &value);
+                allowed = Some(within);
+            }
+        }
         0 => {
             lines.remove(line);
         }
@@ -1226,6 +1349,7 @@ fn change_plan(rng: &mut Rng, text: &mut String, seeds: &[String]) {
         }
     }
     *text = lines.join("\n");
+    allowed
 }
 
 /// The spans of the runs of characters of `class` in `line`.
@@ -1285,32 +1409,43 @@ fn assert_plan_limits(plan: &RunPlan) {
         assert!(lists.iter().all(|items| *items <= 100), "{lists:?}");
         patterns += entry.markers.len() + entry.forbid.len() + entry.steps().len();
         patterns += entry.values.len();
-        assert!(
-            entry
-                .reference
-                .as_ref()
-                .is_none_or(|text| text.len() <= 1024)
-        );
+        assert!(entry.reference.as_deref().is_none_or(reference));
     }
+    assert!(plan.reference.as_deref().is_none_or(reference));
     assert!(patterns <= plan::MAX_PATTERNS);
+}
+
+/// Whether `text` keeps the limits of a reference: at most 1024 bytes and
+/// no control character.
+fn reference(text: &str) -> bool {
+    text.len() <= 1024 && !text.chars().any(char::is_control)
 }
 
 /// The run plans: the example run plan and those of the corpus, changed
 /// line by line and character by character, are read or refused with a
 /// `PlanError` without a panic; a plan that is read keeps its text byte for
 /// byte and keeps the limits of a run plan, and its check against the board
-/// description and the pinned sets does not panic.
+/// description and the pinned sets does not panic. A plan whose only change
+/// sets a value at or just past a limit is read exactly when the limit
+/// allows the value.
 fn run_plans(cases: u64) {
     let (board, seeds) = (pi5(), seed_plans());
     let instance = Instance::parse(&instance_text()).unwrap();
     let pins = &instance.parameters().pins;
-    let mut read = 0;
+    let (mut read, mut at_limits) = (0, [0; 2]);
     fuzz("run_plans", cases, |rng| {
         let mut text = rng.pick(&seeds).clone();
-        for _ in 0..rng.within(1..=4) {
-            change_plan(rng, &mut text, &seeds);
+        let changes = rng.within(1..=4);
+        let limits: Vec<Option<bool>> = (0..changes)
+            .map(|_| change_plan(rng, &mut text, &seeds))
+            .collect();
+        let parsed = RunPlan::parse(&text);
+        if let [Some(allowed)] = limits[..] {
+            let error = parsed.as_ref().err();
+            assert_eq!(parsed.is_ok(), allowed, "{error:?}");
+            at_limits[usize::from(allowed)] += 1;
         }
-        match RunPlan::parse(&text) {
+        match parsed {
             Ok(plan) => {
                 // A plan keeps the text it was read from, byte for byte.
                 assert_eq!(plan.text(), text);
@@ -1324,6 +1459,11 @@ fn run_plans(cases: u64) {
     });
     // Some of the changed plans are read, but not most.
     assert!(read > cases / 20 && read < cases / 2, "{read} read");
+    // Values just past a limit were refused, and values at one read.
+    assert!(
+        at_limits.iter().all(|count| *count > cases / 200),
+        "{at_limits:?}"
+    );
 }
 
 #[test]
@@ -1336,22 +1476,27 @@ const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 const NONCE: &str = "f0e1d2c3b4a5968778695a4b3c2d1e0f";
 
 /// A console that keeps a copy of the bytes that it gives in each cold
-/// boot, from each time it is opened.
-struct Played(Box<dyn Console>, Rc<RefCell<Vec<Vec<u8>>>>);
+/// boot, from each time it is opened, and that fails the case once it is
+/// sent more than `sends` times.
+struct Played {
+    console: Box<dyn Console>,
+    played: Rc<RefCell<Vec<Vec<u8>>>>,
+    sends: usize,
+}
 
 impl Console for Played {
     fn open(&mut self, deadline: Nanos) -> Result<Nanos, DeviceError> {
-        let opened = self.0.open(deadline);
+        let opened = self.console.open(deadline);
         if opened.is_ok() {
-            self.1.borrow_mut().push(Vec::new());
+            self.played.borrow_mut().push(Vec::new());
         }
         opened
     }
 
     fn receive(&mut self, deadline: Nanos) -> Result<Received, DeviceError> {
-        let received = self.0.receive(deadline)?;
+        let received = self.console.receive(deadline)?;
         if let (Received::Bytes { bytes, .. }, Some(played)) =
-            (&received, self.1.borrow_mut().last_mut())
+            (&received, self.played.borrow_mut().last_mut())
         {
             played.extend_from_slice(bytes);
         }
@@ -1359,21 +1504,29 @@ impl Console for Played {
     }
 
     fn send(&mut self, bytes: &[u8]) -> Result<Nanos, DeviceError> {
-        self.0.send(bytes)
+        // A run sends each step at most once in a cold boot; one that sends
+        // more could send without end.
+        assert!(
+            self.sends > 0,
+            "more sends than the steps of the cold boots"
+        );
+        self.sends -= 1;
+        self.console.send(bytes)
     }
 
     fn close(&mut self) -> Result<(), DeviceError> {
-        self.0.close()
+        self.console.close()
     }
 }
 
 /// A bench of simulated devices, with a fault set on them if any, whose
-/// console plays a script and keeps what it gives, of a tool of a fixed
-/// revision that gives a fixed nonce, so that a case makes the same receipt
-/// in every run.
+/// console plays a script, keeps what it gives and takes at most `sends`
+/// sends, of a tool of a fixed revision that gives a fixed nonce, so that a
+/// case makes the same receipt in every run.
 struct FuzzEnv {
     script: RefCell<Option<ScriptProvider>>,
     played: Rc<RefCell<Vec<Vec<u8>>>>,
+    sends: usize,
     fault: Option<fn(&mut Knobs)>,
 }
 
@@ -1385,7 +1538,11 @@ impl Env for FuzzEnv {
             fault(&mut world.knobs());
         }
         let mut bench = env::simulated(&world, script);
-        bench.console = Box::new(Played(bench.console, Rc::clone(&self.played)));
+        bench.console = Box::new(Played {
+            console: bench.console,
+            played: Rc::clone(&self.played),
+            sends: self.sends,
+        });
         Ok(bench)
     }
 
@@ -1400,12 +1557,18 @@ impl Env for FuzzEnv {
 }
 
 /// The inputs of the runs of the receipts: the example run plan with one
-/// cold boot of each entry, the example instance configuration and
-/// payloads.
-fn receipt_inputs(board: &Board) -> Inputs {
+/// cold boot of each entry, and with `limit` as the capture limit of each
+/// entry if there is one, the example instance configuration and payloads.
+fn receipt_inputs(board: &Board, limit: Option<usize>) -> Inputs {
     let example = text(fs::read(tools().join("examples/run-plan.toml")).unwrap());
-    let plan_text = example.replacen("cold_boots = 3", "cold_boots = 1", 1);
+    let mut plan_text = example.replacen("cold_boots = 3", "cold_boots = 1", 1);
     assert_ne!(plan_text, example);
+    if let Some(limit) = limit {
+        let timeout = "boot_timeout_ms = 60000\n";
+        assert_eq!(plan_text.matches(timeout).count(), 2);
+        let limited = format!("{timeout}max_capture_bytes = {limit}\n");
+        plan_text = plan_text.replace(timeout, &limited);
+    }
     let instance_text = instance_text();
     let instance = Instance::parse(&instance_text).unwrap();
     let plan = RunPlan::parse(&plan_text).unwrap();
@@ -1615,6 +1778,10 @@ enum Forgery {
     /// it was a bench fault, was given the events, checks, cold boots and
     /// verdict of that entry.
     RanAfterFault(usize),
+    /// A change that breaks a rule of a receipt, which reading refuses: a
+    /// nonce or a commit of another form, a changed eligibility, or console
+    /// output shortened inside its last chunk without its length.
+    Refused,
     /// Anything else.
     Other,
 }
@@ -1705,9 +1872,17 @@ fn forge(rng: &mut Rng, receipt: &mut Receipt, plans: &[String]) -> Forgery {
                     bytes[at] ^= 1 << rng.below(8);
                 }
                 if rng.chance(30) {
-                    bytes.truncate(rng.position(bytes));
                     if rng.chance(50) {
+                        bytes.truncate(rng.position(bytes));
                         serial.length = bytes.len() as u64;
+                    } else if let Some(&[last, _]) = serial.index.last() {
+                        // Shortened inside its last chunk, so that only its
+                        // length does not describe it.
+                        let after = last as usize + 1;
+                        if after < bytes.len() {
+                            bytes.truncate(rng.within(after..=bytes.len() - 1));
+                            return Forgery::Refused;
+                        }
                     }
                 }
             }
@@ -1745,7 +1920,8 @@ fn forge(rng: &mut Rng, receipt: &mut Receipt, plans: &[String]) -> Forgery {
     }
     match choice {
         0 => {
-            let nonce: Vec<char> = receipt.nonce.chars().collect();
+            let original = receipt.nonce.clone();
+            let nonce: Vec<char> = original.chars().collect();
             let at = rng.below(nonce.len() + 1);
             let edited = [
                 &nonce[..at],
@@ -1754,15 +1930,26 @@ fn forge(rng: &mut Rng, receipt: &mut Receipt, plans: &[String]) -> Forgery {
             ];
             receipt.nonce = edited.concat().into_iter().collect();
             receipt.nonce.truncate(rng.within(31..=33));
+            // A G among its digits, or 31 digits, is not a nonce.
+            if receipt.nonce != original {
+                return Forgery::Refused;
+            }
         }
         1 => {
+            // A commit that is unknown, or not 40 lowercase hexadecimal
+            // digits; an unknown one is a reason that the evidence does
+            // not list.
             receipt.tool.commit = rng
                 .pick(&[None, Some(COMMIT.to_uppercase()), Some("0123".into())])
                 .clone();
             receipt.tool.clean = *rng.pick(&[None, Some(false), Some(true)]);
             receipt.bench.simulated = rng.chance(50);
+            return Forgery::Refused;
         }
-        2 => receipt.evidence.eligible = !receipt.evidence.eligible,
+        2 => {
+            receipt.evidence.eligible = !receipt.evidence.eligible;
+            return Forgery::Refused;
+        }
         3 => {
             let mut plan = receipt.inputs.run_plan.text.clone();
             change_plan(rng, &mut plan, plans);
@@ -1823,33 +2010,43 @@ struct ReceiptCover {
     verdicts: BTreeSet<String>,
     sent: u64,
     undone: u64,
+    refused: u64,
     refusals_undone: u64,
     ran_after_fault: u64,
+    limited: u64,
     not_utf8: u64,
     lone_cr: u64,
 }
 
-/// The receipts: runs of the example plan on simulated devices whose board
-/// writes changed example console output, some refused or with a fault of
-/// the bench, write receipts that are read back as written, re-derive to
-/// themselves and hold the bytes that the console gave, CR, LF and bytes
-/// that are not UTF-8 among them, exactly. A receipt with a typed field
-/// changed is read as it is, or refused at a JSON pointer, and re-deriving
-/// one that is read does not panic; when only its judgements were changed,
-/// its refusal among them, re-deriving gives back the receipt as written;
-/// and re-deriving finds an entry that ran after a bench fault.
+/// The receipts: runs of the example plan, some with a small capture limit,
+/// on simulated devices whose board writes changed example console output,
+/// some refused or with a fault of the bench, send each step at most once
+/// in a cold boot and write receipts that are read back as written,
+/// re-derive to themselves and hold the bytes that the console gave, CR,
+/// LF and bytes that are not UTF-8 among them, exactly, up to the capture
+/// limit, at which a cold boot ends and fails `console.byte_limit`. A
+/// receipt with a typed field changed is read as it is, or refused at a
+/// JSON pointer, and re-deriving one that is read does not panic; one
+/// changed against a rule of receipts is refused; when only its judgements
+/// were changed, its refusal among them, re-deriving gives back the receipt
+/// as written; and re-deriving finds an entry that ran after a bench fault.
 fn receipts(cases: u64) {
     let board = pi5();
-    let (seeds, plans, inputs) = (Seeds::new(&board), seed_plans(), receipt_inputs(&board));
+    let (seeds, plans) = (Seeds::new(&board), seed_plans());
     let outputs = Outputs::new();
     let mut cover = ReceiptCover::default();
     fuzz("receipts", cases, |rng| {
+        let limit = rng.chance(20).then(|| rng.within(1..=1024));
+        let inputs = receipt_inputs(&board, limit);
+        let entries = inputs.plan.entries.iter();
+        let sends = entries.map(|entry| entry.cold_boots as usize * entry.steps().len());
         let played = Rc::new(RefCell::new(Vec::new()));
         let script = receipt_script(rng, &seeds, &outputs);
         let fault = fault_of(rng);
         let env = FuzzEnv {
             script: RefCell::new(Some(script)),
             played: Rc::clone(&played),
+            sends: sends.sum(),
             fault: fault.map(|(set, _)| set),
         };
         let receipt = run::run(&env, &inputs).unwrap();
@@ -1862,15 +2059,43 @@ fn receipts(cases: u64) {
         assert_eq!(read, receipt);
         assert_eq!(rejudge(&read).as_ref(), Ok(&read));
         // Each cold boot holds the bytes that the console gave, exactly as
-        // it gave them.
-        let held: Vec<&[u8]> = read
+        // it gave them, up to the capture limit of its entry; it ended at
+        // that limit, and failed it, exactly when the console gave more.
+        let limits = inputs
+            .plan
             .entries
             .iter()
-            .flat_map(|entry| &entry.cold_boots)
-            .map(|cold_boot| &cold_boot.serial.bytes_base64.0[..])
+            .map(|entry| entry.max_capture_bytes);
+        let boots: Vec<_> = read
+            .entries
+            .iter()
+            .zip(limits)
+            .flat_map(|(entry, limit)| entry.cold_boots.iter().map(move |boot| (boot, limit)))
             .collect();
         let played = played.borrow();
-        assert_eq!(held, played.iter().map(Vec::as_slice).collect::<Vec<_>>());
+        assert_eq!(boots.len(), played.len());
+        for ((cold_boot, limit), played) in boots.iter().zip(played.iter()) {
+            let kept = played.len().min(*limit as usize);
+            assert_eq!(cold_boot.serial.bytes_base64.0, played[..kept]);
+            let ends = cold_boot
+                .events
+                .iter()
+                .filter_map(|event| match event.event {
+                    EventKind::End { reason } => Some(reason),
+                    _ => None,
+                });
+            let over = kept < played.len();
+            assert_eq!(ends.eq([EndReason::ByteLimit]), over);
+            let checks = cold_boot.checks.iter();
+            let limited = checks.filter(|check| check.rule == "console.byte_limit");
+            let results: Vec<Outcome> = limited.map(|check| check.result).collect();
+            assert_eq!(results.contains(&Outcome::Fail), over, "{results:?}");
+            cover.limited += u64::from(over);
+        }
+        let held: Vec<&[u8]> = boots
+            .iter()
+            .map(|(cold_boot, _)| &cold_boot.serial.bytes_base64.0[..])
+            .collect();
         for _ in 0..FORGERIES {
             let mut forged = read.clone();
             let forgery = forge(rng, &mut forged, &plans);
@@ -1895,6 +2120,11 @@ fn receipts(cases: u64) {
                         cover.ran_after_fault += 1;
                     }
                 }
+                Forgery::Refused => {
+                    let refused = Receipt::parse(forged.render().as_bytes());
+                    assert!(refused.is_err(), "a receipt that breaks a rule is read");
+                    cover.refused += 1;
+                }
                 Forgery::Other => {}
             }
         }
@@ -1912,9 +2142,15 @@ fn receipts(cases: u64) {
     });
     let verdicts = ["None", "Some(BenchFault)", "Some(Fail)", "Some(Pass)"];
     assert!(cover.verdicts.iter().eq(verdicts), "{:?}", cover.verdicts);
-    let counts = [cover.sent, cover.undone, cover.not_utf8, cover.lone_cr];
+    let counts = [
+        cover.sent,
+        cover.undone,
+        cover.refused,
+        cover.not_utf8,
+        cover.lone_cr,
+    ];
     assert!(counts.iter().all(|count| *count > cases / 10), "{counts:?}");
-    let rare = [cover.refusals_undone, cover.ran_after_fault];
+    let rare = [cover.refusals_undone, cover.ran_after_fault, cover.limited];
     assert!(rare.iter().all(|count| *count > cases / 50), "{rare:?}");
 }
 

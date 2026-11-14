@@ -84,7 +84,7 @@ const SOURCES: [(&str, &str); 53] = sources![
 /// tests and of rule names. A change that adds or removes a requirement, a
 /// row or a rule changes these in the same change.
 const REQUIREMENT_COUNTS: [(&str, usize); 3] = [("POWER", 7), ("PROV", 8), ("VERD", 12)];
-const REQUIREMENT_TEST_ROWS: usize = 132;
+const REQUIREMENT_TEST_ROWS: usize = 133;
 const RULE_ROWS: usize = 32;
 
 /// The constructors that name a rule as their first argument, called in

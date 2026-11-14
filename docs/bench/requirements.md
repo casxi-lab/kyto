@@ -119,9 +119,12 @@ has no LF, and of an entry that ends at the timeout; runs on simulated
 devices whose end marker has no LF or never comes, which end at the boot
 timeout and fail, and whose console reports deadlines early or never; a run
 on a console that holds a response stamped before the deadline of its step
-when that deadline has passed, which is read and answers the step; and a
-run on a console that hands a chunk stamped after a boot timeout that has
-passed, which ends the cold boot at its boot timeout.
+when that deadline has passed, which is read and answers the step; a run
+on a console that hands a chunk stamped after a boot timeout that has
+passed, which ends the cold boot at its boot timeout; and a run on a
+console that hands the line that arms a step, stamped before the boot
+timeout, once the boot timeout has passed, which sends no step and ends
+the cold boot at its boot timeout.
 
 ### VERD-R07
 

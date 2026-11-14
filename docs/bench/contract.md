@@ -362,6 +362,7 @@ it.
 | [VERD-R06](requirements.md#verd-r06) | `a_boot_timeout_fails_and_the_supply_is_confirmed_off` | `tools/kyto-bench/tests/run.rs` | negative |
 | [VERD-R06](requirements.md#verd-r06) | `a_deadline_that_the_console_reports_early_ends_no_cold_boot` | `tools/kyto-bench/tests/run.rs` | positive |
 | [VERD-R06](requirements.md#verd-r06) | `a_chunk_held_from_before_a_passed_deadline_is_read` | `tools/kyto-bench/tests/run.rs` | positive |
+| [VERD-R06](requirements.md#verd-r06) | `a_step_armed_after_the_boot_deadline_is_not_sent` | `tools/kyto-bench/tests/run.rs` | negative |
 | [VERD-R07](requirements.md#verd-r07) | `firmware_versions_and_segments_are_those_of_the_entry` | `tools/kyto-bench-core/src/verdict.rs` | negative |
 | [VERD-R07](requirements.md#verd-r07) | `a_firmware_version_other_than_expected_fails` | `tools/kyto-bench-core/src/verdict.rs` | negative |
 | [VERD-R07](requirements.md#verd-r07) | `the_checks_of_the_example_runs_are_fixed` | `tools/kyto-bench/tests/run.rs` | positive |

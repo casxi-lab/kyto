@@ -2659,6 +2659,41 @@ fn a_chunk_stamped_after_a_passed_deadline_ends_the_cold_boot() {
 }
 
 #[test]
+fn a_step_armed_after_the_boot_deadline_is_not_sent() {
+    // Readings every 1 ms confirm the power on 1 ms after it, and the echo
+    // entry's READY line, which arms its step, is stamped before a boot
+    // timeout of 28 ms; the console, which the run reads late, hands it
+    // after that deadline. The step is not sent, and the cold boot ends at
+    // its boot timeout.
+    let dir = scratch("armed-past-the-deadline");
+    let plan = plan_with(&dir, |text| {
+        let end = "boot_timeout_ms = 60000\nend = { marker = \"ready\" }";
+        text.replacen(end, "boot_timeout_ms = 28\nend = { marker = \"ready\" }", 1)
+    });
+    let instance = dir.join("instance.toml");
+    let text = String::from_utf8(example("instance.toml")).unwrap();
+    fs::write(&instance, text.replacen("poll_ms = 100", "poll_ms = 1", 1)).unwrap();
+    let mut env = TestEnv::example();
+    env.lagging = true;
+    let ran = run_with(&dir, &plan, &instance, &examples().join("payload"), &env);
+    assert_eq!(ran.status, cli::FAIL);
+    let receipt = ran.receipt();
+    let cold_boot = &receipt.entries[1].cold_boots[0];
+    let t = times(&receipt, &cold_boot.events);
+    let boot = t.on.0 + 28 * MS;
+    let bytes = &cold_boot.serial.bytes_base64.0;
+    let ready = bytes.windows(7).position(|w| w == b"READY\r\n").unwrap();
+    let chunk = (cold_boot.serial.index.iter()).find(|chunk| chunk[0] == ready as u64);
+    assert!(chunk.is_some_and(|chunk| chunk[1] < boot), "{chunk:?}");
+    assert_eq!(t.send, None, "not sent");
+    assert_eq!(end(&cold_boot.events), Some(EndReason::BootTimeout));
+    assert!(t.end.0 > boot, "handed after the deadline");
+    let response = cold_boot.checks.iter().find(|c| c.rule == "step.response");
+    let failure = response.map(|c| (c.result, c.detail.as_deref()));
+    assert_eq!(failure, Some((Outcome::Fail, Some("not sent"))));
+}
+
+#[test]
 fn a_step_armed_at_the_boot_deadline_is_sent() {
     // Readings every 1 ms confirm the power on 1 ms after it, and the echo
     // entry's READY line, which arms its step, comes 19 ms after it, at the

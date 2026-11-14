@@ -1536,31 +1536,61 @@ steps = [{ after = "ready", send = "?\r", expect = '^STATS seq=1', timeout_ms = 
         .unwrap()
     }
 
+    /// `receipt` with `bytes` as the console output of its cold boot, its
+    /// length theirs, and each offset of its index and the bytes received
+    /// before each event moved by `moved`.
+    fn replaced(receipt: &Receipt, bytes: Vec<u8>, moved: impl Fn(u64) -> u64) -> Receipt {
+        let mut receipt = receipt.clone();
+        let cold_boot = &mut receipt.entries[0].cold_boots[0];
+        for chunk in &mut cold_boot.serial.index {
+            chunk[0] = moved(chunk[0]);
+        }
+        for event in &mut cold_boot.events {
+            event.received = moved(event.received);
+        }
+        cold_boot.serial.length = bytes.len() as u64;
+        cold_boot.serial.bytes_base64 = Base64(bytes);
+        receipt
+    }
+
     /// `receipt` with each chunk of the console output of its cold boot
     /// changed by `change`, and its length, its index and the bytes received
     /// before each event made to agree with the changed bytes.
     fn rewritten(receipt: &Receipt, change: impl Fn(&[u8]) -> Vec<u8>) -> Receipt {
-        let mut receipt = receipt.clone();
-        let cold_boot = &mut receipt.entries[0].cold_boots[0];
-        let serial = &cold_boot.serial;
-        let (mut bytes, mut index, mut ends) = (Vec::new(), Vec::new(), vec![(0, 0)]);
-        for (at_ns, chunk) in lines::chunks(&serial.bytes_base64.0, &serial.index).unwrap() {
-            index.push([bytes.len() as u64, at_ns]);
+        let serial = &receipt.entries[0].cold_boots[0].serial;
+        let (mut bytes, mut ends) = (Vec::new(), vec![(0, 0)]);
+        for (_, chunk) in lines::chunks(&serial.bytes_base64.0, &serial.index).unwrap() {
             bytes.extend(change(chunk));
             let end = ends.last().map_or(0, |(end, _)| *end) + chunk.len() as u64;
             ends.push((end, bytes.len() as u64));
         }
-        for event in &mut cold_boot.events {
-            let moved = ends.iter().find(|(end, _)| *end == event.received);
-            event.received = moved.unwrap().1;
+        let moved = |offset| ends.iter().find(|(end, _)| *end == offset).unwrap().1;
+        replaced(receipt, bytes, moved)
+    }
+
+    /// `bytes` with every line end made an LF alone: each CR that comes
+    /// before an LF, or before such a CR, is left out. With them, for each
+    /// offset of `bytes` up to its length, the offset in what is left of
+    /// the byte there.
+    fn line_ends_lf(bytes: &[u8]) -> (Vec<u8>, Vec<u64>) {
+        let mut dropped = vec![false; bytes.len()];
+        let mut ends_line = false;
+        for (at, byte) in bytes.iter().enumerate().rev() {
+            match byte {
+                b'\n' => ends_line = true,
+                b'\r' => dropped[at] = ends_line,
+                _ => ends_line = false,
+            }
         }
-        let length = bytes.len() as u64;
-        cold_boot.serial = Serial {
-            length,
-            bytes_base64: Base64(bytes),
-            index,
-        };
-        receipt
+        let (mut kept, mut offsets) = (Vec::new(), Vec::new());
+        for (byte, left_out) in bytes.iter().zip(dropped) {
+            offsets.push(kept.len() as u64);
+            if !left_out {
+                kept.push(*byte);
+            }
+        }
+        offsets.push(kept.len() as u64);
+        (kept, offsets)
     }
 
     /// The offset of the first `line` in `bytes`.
@@ -1637,15 +1667,15 @@ steps = [{ after = "ready", send = "?\r", expect = '^STATS seq=1', timeout_ms = 
         assert_eq!(read, receipt);
         assert_eq!(read.entries[0].cold_boots[0].serial.bytes_base64.0, bytes);
         assert_eq!(observed(&read), *recorded);
-        // Line ends normalised to LF, in place of the bytes as read, break
-        // the recorded length.
-        let normalised = |bytes: &[u8]| -> Vec<u8> {
-            let text = String::from_utf8(bytes.to_vec()).unwrap();
-            text.replace("\r\n", "\n").into_bytes()
-        };
+        // Line ends normalised to LF over the whole output, the CR and LF
+        // that arrived apart among them, in place of the bytes as read,
+        // break the recorded length.
+        let (normalised, offsets) = line_ends_lf(&bytes);
+        assert!(!normalised.windows(2).any(|pair| pair == b"\r\n"));
+        assert_eq!(normalised.iter().filter(|byte| **byte == b'\r').count(), 1);
         let mut changed = receipt.clone();
         let serial = &mut changed.entries[0].cold_boots[0].serial;
-        serial.bytes_base64 = Base64(normalised(&bytes));
+        serial.bytes_base64 = Base64(normalised.clone());
         assert_eq!(
             invalid_at(&changed),
             "/entries/0/cold_boots/0/serial/length"
@@ -1653,11 +1683,16 @@ steps = [{ after = "ready", send = "?\r", expect = '^STATS seq=1', timeout_ms = 
         // With the length, the index and the events made to agree, the
         // receipt is read, but its lines have moved: the observations that
         // its bytes give are not those it records.
-        let changed = Receipt::parse(rewritten(&receipt, normalised).render().as_bytes()).unwrap();
+        let moved = |offset: u64| offsets[offset as usize];
+        let changed = replaced(&receipt, normalised.clone(), moved);
+        let changed = Receipt::parse(changed.render().as_bytes()).unwrap();
+        assert_eq!(
+            changed.entries[0].cold_boots[0].serial.bytes_base64.0,
+            normalised
+        );
         let moved = observed(&changed);
         assert_ne!(moved, *recorded);
-        let bytes = &changed.entries[0].cold_boots[0].serial.bytes_base64.0;
         let ready = moved.markers.iter().find(|m| m.name == "ready");
-        assert_eq!(ready.map(|m| m.line), Some(offset(bytes, b"READY")));
+        assert_eq!(ready.map(|m| m.line), Some(offset(&normalised, b"READY")));
     }
 }

@@ -6,14 +6,15 @@
 //!
 //! Each payload is staged as a new generation `releases/gNNNNNN` below the
 //! directory, of files of the mode `0644` and directories of `0755`; a name
-//! that `releases` holds already, in any letter case, is never used again,
-//! and nothing in `releases` is changed or removed, whoever made it. A
-//! switch makes a new link to the relative path `releases/gNNNNNN`, which a
-//! server that serves from a changed root resolves as the tool does, and
-//! renames it over the old link, so that the board reads the old generation
-//! or the new one, never neither; on macOS a read through the link at the
-//! moment of the rename can fail, which is why the tool switches only while
-//! readings confirm the supply off. It switches only to a generation that
+//! that `releases` holds already, in any letter case, or that the link
+//! names, is never used again, and nothing in `releases` is changed or
+//! removed, whoever made it. A switch makes a new link to the relative path
+//! `releases/gNNNNNN`, which a server that serves from a changed root
+//! resolves as the tool does, and renames it over the old link, so that the
+//! link's name stays present and names the old generation or the new one;
+//! on macOS a lookup through the link that meets the rename can fail with
+//! `EINVAL`, which is why the tool switches only while readings confirm the
+//! supply off. It switches only to a generation that
 //! the same driver staged whole. From its first staging or switch until the
 //! bench closes, the driver holds a lock on the directory, so that no other
 //! run or publication stages or switches there meanwhile. Its errors name
@@ -153,7 +154,7 @@ impl TftpDirectory {
     }
 
     /// Stages `files` as a new generation below `releases`, made first if
-    /// it is not there.
+    /// it is not there, after every one that it holds or the link names.
     fn stage(&mut self, files: &[(PayloadName, Vec<u8>)]) -> Result<GenerationName, String> {
         self.hold()?;
         let releases = self.dir.join(RELEASES);
@@ -176,6 +177,8 @@ impl TftpDirectory {
                 .to_ascii_lowercase();
             taken.extend(GenerationName::parse(&name).ok());
         }
+        let served = fs::read_link(self.dir.join(&self.link)).ok();
+        taken.extend(served.as_deref().and_then(generation_of));
         let generation = GenerationName::next_after(taken).ok_or("no generation name is left")?;
         let root = releases.join(generation.to_string());
         DirBuilder::new()
@@ -382,10 +385,10 @@ mod tests {
         assert_eq!(stage(&mut tftp, &[("config.txt", b"b")]), Ok(generation(4)));
         assert_eq!(tftp.switch_to(&generation(4)), Ok(Some(generation(3))));
         // A reader of the served file finds the one generation or the
-        // other at every switch, never neither: the name is never missing
-        // and the bytes are never mixed. On macOS a lookup that meets the
-        // rename of the link at that instant fails with EINVAL instead,
-        // which is why the tool switches only while the board is off.
+        // other at every switch: the name is never missing and the bytes
+        // are never mixed. On macOS a lookup that meets the rename of the
+        // link at that instant can fail with EINVAL instead, which is why
+        // the tool switches only while the board is off.
         let (start, done) = (Barrier::new(2), AtomicBool::new(false));
         let served = dir.join("current/config.txt");
         thread::scope(|scope| {
@@ -518,6 +521,19 @@ mod tests {
         let taken = format!("the name of the new link, {SWITCH}, is taken");
         refused(second.switch_to(&generation(2)).unwrap_err().detail, &taken);
         assert_eq!(fs::read(dir.join(SWITCH)).unwrap(), b"mine");
+        // A link left there by a switch that stopped before its rename is
+        // replaced.
+        fs::remove_file(dir.join(SWITCH)).unwrap();
+        symlink("releases/g000001", dir.join(SWITCH)).unwrap();
+        assert_eq!(second.switch_to(&generation(2)), Ok(None));
+        let target = fs::read_link(dir.join("current")).unwrap();
+        assert_eq!(target, Path::new("releases/g000002"));
+        assert!(fs::symlink_metadata(dir.join(SWITCH)).is_err());
+        // The generation that the link names is not staged again, also when
+        // it is gone.
+        fs::remove_file(dir.join("current")).unwrap();
+        symlink("releases/g000003", dir.join("current")).unwrap();
+        assert_eq!(stage(&mut second, &files), Ok(generation(4)));
         // No name is used again, in any letter case, nor one after the last.
         fs::create_dir(dir.join("releases/G999999")).unwrap();
         refused(

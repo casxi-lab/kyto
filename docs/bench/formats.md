@@ -776,12 +776,13 @@ name is not `releases` in any letter case: the board is served through a
 symbolic link of that name in `dir`. Each staged generation is a new
 directory `releases/<generation>` below `dir`, with files of the mode `0644`
 and directories of `0755`; a name that `releases` holds already, in any
-letter case, is never used again, and nothing in `releases` is changed or
-removed. Switching makes a new link whose target is the relative path
-`releases/<generation>`, so that a server that serves from a changed root
-resolves it as the tool does, and renames it over the old link, so that the
-board finds the old generation or the new one, never neither; on macOS a
-read through the link at that moment can fail, and the tool switches only
+letter case, or that the link names, is never used again, and nothing in
+`releases` is changed or removed. Switching makes a new link whose target
+is the relative path `releases/<generation>`, so that a server that serves
+from a changed root resolves it as the tool does, and renames it over the
+old link, so that the link's name stays present and names the old
+generation or the new one. On macOS a lookup through the link that meets
+the rename can fail with `EINVAL`, which is why the tool switches only
 while readings confirm the supply off. A link to anything else, such as one
 that another publisher left, is replaced the same way; a file or directory
 of that name is refused. The tool switches only to a generation that the

@@ -23,7 +23,8 @@ pub struct CommandTiming {
     pub settle: Duration,
     /// The wait on the clock after the frame left the port.
     pub hold: Duration,
-    /// The longest time the port may take to accept the frame for writing.
+    /// The longest time on the clock, from the end of the settle wait, that
+    /// the port may take to accept the whole frame for writing.
     pub write: Duration,
 }
 
@@ -42,11 +43,6 @@ impl PortError {
             text: text.into(),
         }
     }
-
-    /// A failure of `step` with the last operating-system error.
-    fn last(step: &'static str) -> Self {
-        Self::new(step, os_error(last_errno()))
-    }
 }
 
 impl fmt::Display for PortError {
@@ -60,6 +56,17 @@ const FLAGS: libc::c_int = libc::O_RDWR | libc::O_NOCTTY | libc::O_NONBLOCK | li
 
 fn last_errno() -> i32 {
     io::Error::last_os_error().raw_os_error().unwrap_or(0)
+}
+
+/// The result of the step `name`, whose call returned `status`: a failure
+/// with the last operating-system error when the status is negative. The
+/// tests read the steps that a command took, in order.
+fn step(name: &'static str, status: libc::c_int) -> Result<(), PortError> {
+    let error = || PortError::new(name, os_error(last_errno()));
+    let result = (status >= 0).then_some(()).ok_or_else(error);
+    #[cfg(test)]
+    tests::STEPS.with_borrow_mut(|steps| steps.push(name));
+    result
 }
 
 /// The raw 8N1 attributes of the copied transport, derived from `original`,
@@ -91,9 +98,7 @@ pub fn send_frame<C: StampClock>(
     // returns, and the call only reads it; no mode argument is needed
     // without `O_CREAT`.
     let fd = unsafe { libc::open(name.as_ptr(), FLAGS) };
-    if fd < 0 {
-        return Err(PortError::last("open"));
-    }
+    step("open", fd)?;
     let mut port = Port {
         fd,
         locked: false,
@@ -102,15 +107,18 @@ pub fn send_frame<C: StampClock>(
     };
     port.configure()?;
     let settle = timing.settle.as_nanos() as u64;
-    clock.wait_until_ns(clock.now_ns().saturating_add(settle));
-    port.write(frame, timing.write)?;
-    // SAFETY: tcdrain takes a descriptor and touches no memory of this
-    // process. A signal ends it early with `EINTR`, and it is repeated.
-    while unsafe { libc::tcdrain(port.fd) } != 0 {
-        if last_errno() != libc::EINTR {
-            return Err(PortError::last("drain"));
+    let ready = clock.wait_until_ns(clock.now_ns().saturating_add(settle));
+    let end = ready.saturating_add(timing.write.as_nanos() as u64);
+    port.write(frame, end, clock)?;
+    let drained = loop {
+        // SAFETY: tcdrain takes a descriptor and touches no memory of this
+        // process. A signal ends it early with `EINTR`, and it is repeated.
+        let drained = unsafe { libc::tcdrain(port.fd) };
+        if drained == 0 || last_errno() != libc::EINTR {
+            break drained;
         }
-    }
+    };
+    step("drain", drained)?;
     let sent = clock.now_ns();
     clock.wait_until_ns(sent.saturating_add(timing.hold.as_nanos() as u64));
     Ok(sent)
@@ -134,23 +142,20 @@ impl Port {
         }
         // SAFETY: flock takes a descriptor and an operation and touches no
         // memory of this process; `fd` is open and owned by this port.
-        if unsafe { libc::flock(self.fd, libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-            return Err(PortError::last("lock"));
-        }
+        let locked = unsafe { libc::flock(self.fd, libc::LOCK_EX | libc::LOCK_NB) };
+        step("lock", locked)?;
         self.locked = true;
         // SAFETY: TIOCEXCL takes no argument, so the call passes no pointer
         // and touches no memory of this process.
-        if unsafe { libc::ioctl(self.fd, libc::TIOCEXCL as libc::c_ulong) } != 0 {
-            return Err(PortError::last("exclusive access"));
-        }
+        let exclusive = unsafe { libc::ioctl(self.fd, libc::TIOCEXCL as libc::c_ulong) };
+        step("exclusive access", exclusive)?;
         self.exclusive = true;
         let mut original = std::mem::MaybeUninit::<libc::termios>::zeroed();
         // SAFETY: `original` is storage for one termios value on this frame,
         // properly aligned and exclusively borrowed for the call, which
         // writes at most one termios value into it.
-        if unsafe { libc::tcgetattr(self.fd, original.as_mut_ptr()) } != 0 {
-            return Err(PortError::last("attributes"));
-        }
+        let read = unsafe { libc::tcgetattr(self.fd, original.as_mut_ptr()) };
+        step("attributes", read)?;
         // SAFETY: the storage was zero-initialized, which is a valid termios
         // value, and tcgetattr succeeded, so it holds the attributes.
         let original = unsafe { original.assume_init() };
@@ -158,23 +163,20 @@ impl Port {
         let configured = command_attributes(&original);
         // SAFETY: `configured` is an initialized, properly aligned termios
         // value that the call only reads while the borrow keeps it alive.
-        if unsafe { libc::tcsetattr(self.fd, libc::TCSANOW, &configured) } != 0 {
-            return Err(PortError::last("attributes"));
-        }
+        let set = unsafe { libc::tcsetattr(self.fd, libc::TCSANOW, &configured) };
+        step("attributes", set)?;
         // SAFETY: tcflush takes a descriptor and a queue selector and
         // touches no memory of this process.
-        if unsafe { libc::tcflush(self.fd, libc::TCIOFLUSH) } != 0 {
-            return Err(PortError::last("flush"));
-        }
-        Ok(())
+        step("flush", unsafe { libc::tcflush(self.fd, libc::TCIOFLUSH) })
     }
 
-    /// Writes all of `frame`, waiting at most `bound` each time for the
-    /// port to accept bytes.
-    fn write(&self, frame: &[u8], bound: Duration) -> Result<(), PortError> {
-        let millis = libc::c_int::try_from(bound.as_millis()).unwrap_or(libc::c_int::MAX);
+    /// Writes all of `frame` by the time `end` on `clock`, waiting for the
+    /// port to accept bytes at most until then.
+    fn write<C: StampClock>(&self, frame: &[u8], end: u64, clock: &C) -> Result<(), PortError> {
         let mut sent = 0;
         while sent < frame.len() {
+            let left = end.saturating_sub(clock.now_ns());
+            let millis = libc::c_int::try_from(left.div_ceil(1_000_000));
             let mut poll = libc::pollfd {
                 fd: self.fd,
                 events: libc::POLLOUT,
@@ -183,8 +185,8 @@ impl Port {
             // SAFETY: `poll` is one initialized, properly aligned pollfd on
             // this frame, exclusively borrowed for the call, so the pointer
             // and the count 1 describe valid memory that the call may write.
-            let ready = unsafe { libc::poll(&mut poll, 1, millis) };
-            if ready == 0 {
+            let ready = unsafe { libc::poll(&mut poll, 1, millis.unwrap_or(libc::c_int::MAX)) };
+            if ready == 0 || left == 0 {
                 return Err(PortError::new("write", "the port accepted no byte in time"));
             }
             let rest = &frame[sent..];
@@ -200,10 +202,10 @@ impl Port {
                 Ok(0) => return Err(PortError::new("write", "the port took no byte")),
                 Ok(count) => sent += count,
                 Err(_) if matches!(last_errno(), libc::EINTR | libc::EAGAIN) => {}
-                Err(_) => return Err(PortError::last("write")),
+                Err(_) => return step("write", -1),
             }
         }
-        Ok(())
+        step("write", 0)
     }
 }
 
@@ -216,38 +218,44 @@ impl Drop for Port {
             // SAFETY: `original` is an initialized, properly aligned termios
             // value that tcgetattr filled in; the call only reads it while
             // the borrow keeps it alive.
-            unsafe { libc::tcsetattr(self.fd, libc::TCSANOW, original) };
+            let restored = unsafe { libc::tcsetattr(self.fd, libc::TCSANOW, original) };
+            let _ = step("restore", restored);
         }
         if self.exclusive {
             // SAFETY: TIOCNXCL takes no argument, so the call passes no
             // pointer and touches no memory of this process.
-            unsafe { libc::ioctl(self.fd, libc::TIOCNXCL as libc::c_ulong) };
+            let released = unsafe { libc::ioctl(self.fd, libc::TIOCNXCL as libc::c_ulong) };
+            let _ = step("release", released);
         }
         if self.locked {
             // SAFETY: flock takes a descriptor and an operation and touches
             // no memory of this process; `fd` is open and owned by this port.
-            unsafe { libc::flock(self.fd, libc::LOCK_UN) };
+            let _ = step("unlock", unsafe { libc::flock(self.fd, libc::LOCK_UN) });
         }
         // SAFETY: close takes a descriptor and touches no memory of this
         // process; `fd` is owned by this port and closed exactly once, here.
-        unsafe { libc::close(self.fd) };
+        let _ = step("close", unsafe { libc::close(self.fd) });
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Failure;
     use crate::TEST_WAIT;
     use crate::clock::stepped::TestClock;
     use crate::console::tests::opened;
     use crate::pty::{Attributes, Pty, exclusive_open_refused, lock_refused};
     use crate::scratch::Scratch;
-    use std::cell::Cell;
+    use crate::tty::TtyPort;
+    use std::cell::{Cell, RefCell};
 
     thread_local! {
         /// Whether a command on this thread leaves its port's attributes
         /// unrestored, as a failed restoration does.
         pub(super) static RESTORE_FAILS: Cell<bool> = const { Cell::new(false) };
+        /// The steps that the commands on this thread took, in order.
+        pub(super) static STEPS: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
     }
 
     const ON: [u8; 4] = [0xA0, 0x01, 0x01, 0xA2];
@@ -261,29 +269,95 @@ mod tests {
         write: TEST_WAIT,
     };
 
+    /// The steps of a command whose port is restored: the clock is read
+    /// for the end of the settle wait, read again for the bound of the
+    /// write, and read for the time when the frame left the port, after the
+    /// drain and before the hold.
+    const COMMAND: [&str; 17] = [
+        "open",
+        "lock",
+        "exclusive access",
+        "attributes",
+        "attributes",
+        "flush",
+        "time",
+        "wait",
+        "time",
+        "write",
+        "drain",
+        "time",
+        "wait",
+        "restore",
+        "release",
+        "unlock",
+        "close",
+    ];
+
+    /// The test clock, noting each reading as the step `time` and each wait
+    /// as the step `wait`.
+    #[derive(Clone, Copy)]
+    struct Noted(TestClock);
+
+    impl StampClock for Noted {
+        fn now_ns(&self) -> u64 {
+            STEPS.with_borrow_mut(|steps| steps.push("time"));
+            self.0.now_ns()
+        }
+
+        fn wait_until_ns(&self, deadline: u64) -> u64 {
+            STEPS.with_borrow_mut(|steps| steps.push("wait"));
+            self.0.wait_until_ns(deadline)
+        }
+    }
+
+    /// What a command on `pty` gives: its result, the attributes of the
+    /// port during the wait after the flush, the bytes that the board read
+    /// and the steps that the command took.
+    struct Command {
+        sent: Result<u64, PortError>,
+        during: Attributes,
+        received: Vec<u8>,
+        steps: Vec<&'static str>,
+    }
+
+    /// What a second port of the copied transport meets on `pty` while a
+    /// port holds it: a refused open where the kernel refuses it, and a
+    /// refused lock elsewhere.
+    fn held(pty: &Pty) -> Failure {
+        if exclusive_open_refused() {
+            let busy = os_error(libc::EBUSY);
+            Failure::new(format!("{:?}: {busy}", pty.path()))
+        } else {
+            lock_refused()
+        }
+    }
+
     /// Sends `frame` on `pty` on another thread and moves `clock` through
-    /// the command's waits as they come: the result, the attributes of the
-    /// port during the wait after the flush, and the bytes that the board
-    /// read.
-    fn command(
-        pty: &Pty,
-        clock: TestClock,
-        frame: [u8; 4],
-        restore_fails: bool,
-    ) -> (Result<u64, PortError>, Attributes, Vec<u8>) {
+    /// the command's waits as they come; during the wait after the flush,
+    /// the port is held.
+    fn command(pty: &Pty, clock: TestClock, frame: [u8; 4], restore_fails: bool) -> Command {
         let start = clock.now_ns();
         std::thread::scope(|scope| {
             let command = scope.spawn(|| {
                 RESTORE_FAILS.set(restore_fails);
-                send_frame(pty.path(), &frame, &TIMING, &clock)
+                let sent = send_frame(pty.path(), &frame, &TIMING, &Noted(clock));
+                (sent, STEPS.take())
             });
             clock.await_wait(start + SETTLE);
             let during = pty.attributes();
+            let second = TtyPort::open(pty.path()).err();
+            assert_eq!(second, Some(held(pty)), "the command holds the port");
             clock.advance_to(start + SETTLE);
             let received = pty.read(frame.len());
             clock.await_wait(start + SETTLE + HOLD);
             clock.advance_to(start + SETTLE + HOLD);
-            (command.join().unwrap(), during, received)
+            let (sent, steps) = command.join().unwrap();
+            Command {
+                sent,
+                during,
+                received,
+                steps,
+            }
         })
     }
 
@@ -302,9 +376,15 @@ mod tests {
         let clock = TestClock::at_zero();
         for (frame, start) in [(ON, 0), (OFF, SECOND)] {
             clock.advance_to(start);
-            let (sent, during, received) = command(&pty, clock, frame, false);
+            let Command {
+                sent,
+                during,
+                received,
+                steps,
+            } = command(&pty, clock, frame, false);
             assert_eq!(sent, Ok(start + SETTLE), "stamped when the frame left");
             assert_eq!(received, frame);
+            assert_eq!(steps, COMMAND);
             assert_eq!((during.ispeed, during.ospeed), (libc::B9600, libc::B9600));
             let parity = libc::PARENB | libc::CSTOPB | libc::CRTSCTS;
             assert_eq!(during.cflag & (libc::CSIZE | parity), libc::CS8);
@@ -316,12 +396,17 @@ mod tests {
         // A restoration that fails after the frame left the port still
         // gives the time of the command, and the next command works.
         clock.advance_to(2 * SECOND);
-        let (sent, ..) = command(&pty, clock, ON, true);
-        assert_eq!(sent, Ok(2 * SECOND + SETTLE));
+        let unrestored = command(&pty, clock, ON, true);
+        assert_eq!(unrestored.sent, Ok(2 * SECOND + SETTLE));
+        let steps = COMMAND.into_iter().filter(|step| *step != "restore");
+        assert_eq!(unrestored.steps, steps.collect::<Vec<_>>());
         assert_ne!(restorable(&pty), before, "not restored");
         clock.advance_to(3 * SECOND);
-        let (sent, _, received) = command(&pty, clock, OFF, false);
-        assert_eq!((sent, received), (Ok(3 * SECOND + SETTLE), OFF.to_vec()));
+        let next = command(&pty, clock, OFF, false);
+        assert_eq!(
+            (next.sent, next.received),
+            (Ok(3 * SECOND + SETTLE), OFF.to_vec())
+        );
     }
 
     #[test]
@@ -330,13 +415,18 @@ mod tests {
         let clock = TestClock::at_zero();
         let mut console = opened(&pty, clock);
         let held = pty.attributes();
-        let refused = send_frame(pty.path(), &ON, &TIMING, &clock);
-        let expected = if exclusive_open_refused() {
-            PortError::new("open", "Device or resource busy (os error 16)")
+        let refused = send_frame(pty.path(), &ON, &TIMING, &Noted(clock));
+        // Neither the console's exclusive access nor its attributes are
+        // touched: the command stops at the open or at the lock.
+        let (expected, steps) = if exclusive_open_refused() {
+            let busy = os_error(libc::EBUSY);
+            (PortError::new("open", busy), vec!["open"])
         } else {
-            PortError::new("lock", lock_refused().0)
+            let lock = PortError::new("lock", lock_refused().0);
+            (lock, vec!["open", "lock", "close"])
         };
         assert_eq!(refused, Err(expected));
+        assert_eq!(STEPS.take(), steps);
         assert_eq!(pty.attributes(), held, "the console's port is unchanged");
         // The board reads the console's byte first: no frame came before.
         console.send(b"!").unwrap();
@@ -356,8 +446,10 @@ mod tests {
             error.to_string(),
             "open: No such file or directory (os error 2)"
         );
+        assert_eq!(STEPS.take(), ["open"]);
         let error = send_frame("/dev/cu.x\0y", &ON, &TIMING, &clock).unwrap_err();
         assert_eq!(error.to_string(), "open: a NUL byte in the name");
+        assert_eq!(STEPS.take(), Vec::<&str>::new());
     }
 
     #[test]
@@ -367,6 +459,7 @@ mod tests {
         let clock = TestClock::at_zero();
         let error = send_frame(path.to_str().unwrap(), &ON, &TIMING, &clock).unwrap_err();
         assert_eq!(error, PortError::new("open", "not a terminal"));
+        assert_eq!(STEPS.take(), ["open", "close"]);
         assert_eq!(scratch.read("plain"), b"", "nothing written");
     }
 }

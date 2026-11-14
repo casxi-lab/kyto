@@ -515,25 +515,30 @@ the supply off or publish, which say so on standard output.
 ### POWER-R07
 
 **An interrupt stops a run on real devices with the supply off.** When
-SIGINT, SIGTERM or SIGHUP reaches a run on a bench of real devices, the run
-sends no further power on: the cold boot under way ends with its power off,
-confirmed by readings as after any cold boot. If the run has sent any power
-command, it then switches the supply off once more and says on standard
-error whether readings confirmed it. It leaves no receipt and no output
-directory and exits with 130, also when staging the payloads refused the
-run before its first power command. `kyto-bench publish` stopped by one
-before its switch leaves what the board is served unchanged and exits with
-130, also when staging or the readings would have refused it;
-`kyto-bench power-off` finishes its command and confirmation.
+SIGINT, SIGTERM or SIGHUP reaches a run on a bench of real devices after the
+run opened the bench, the run sends no further power on: the cold boot under
+way ends with its power off, confirmed by readings as after any cold boot.
+If the run has sent any power command, it then switches the supply off once
+more and says on standard error whether readings confirmed it. It leaves no
+receipt and no output directory and exits with 130, also when staging the
+payloads refused the run before its first power command, and when it came
+after the last cold boot, before the receipt is written. One that comes
+before the run opens the bench, while its inputs and payload sources are
+checked, is not caught and ends the process as the signal does by default.
+`kyto-bench publish` stopped by one before its switch leaves what the board
+is served unchanged and exits with 130, also when staging or the readings
+would have refused it; `kyto-bench power-off` finishes its command and
+confirmation.
 
 **Evidence.** Runs on simulated devices, whose bench takes the flag of an
 interrupt without catching a signal: an interrupt after the first power on,
 after which the capture stops at once, the cold boot is switched off and the
 supply once more, also when the power off of the cold boot sticks, with no
-output directory and the message on standard error; one during the power
-off before the first entry, after which no cold boot starts; one before
-the first power command, after which none is sent, also when staging then
-refuses the run; a publication that an interrupt stops before its switch,
-which serves nothing new, also when the supply is on or the staged copy
-differs; and the power-off command, which finishes when an interrupt came
-first.
+output directory and the message on standard error; one during the power off
+before the first entry, after which no cold boot starts; one during the
+power off that follows a fault of the last cold boot, after the run's last
+check of the flag; one before the first power command, after which none is
+sent, also when staging then refuses the run; a publication that an
+interrupt stops before its switch, which serves nothing new, also when the
+supply is on or the staged copy differs; and the power-off command, which
+finishes when an interrupt came first.

@@ -108,6 +108,8 @@ pub fn run(env: &dyn Env, inputs: &Inputs) -> Result<Receipt, NoReceipt> {
     // A run that unwinds, or that an interrupt stops, leaves the supply
     // off, as far as the devices let it.
     let ran = panic::catch_unwind(AssertUnwindSafe(|| flow.run_entries()));
+    // An interrupt caught after the run's last check of it counts too.
+    flow.interrupted |= flow.bench.interrupt.caught();
     if ran.is_err() || flow.interrupted {
         let why = match ran {
             Err(_) => "the run stopped",

@@ -274,14 +274,15 @@ impl PowerSwitch for Sticking {
     }
 }
 
-/// A power switch that sets the flag of an interrupt once it has sent a
-/// command of the state given, as SIGINT does.
-struct Interrupting(Box<dyn PowerSwitch>, &'static AtomicI32, PowerState);
+/// A power switch that sets the flag of an interrupt once it has sent its
+/// command of the number given, from 1, as SIGINT does.
+struct Interrupting(Box<dyn PowerSwitch>, &'static AtomicI32, u32, u32);
 
 impl PowerSwitch for Interrupting {
     fn command(&mut self, state: PowerState) -> Result<Nanos, DeviceError> {
+        self.2 += 1;
         let sent = self.0.command(state)?;
-        if state == self.2 {
+        if self.2 == self.3 {
             self.1.store(2, Ordering::SeqCst);
         }
         Ok(sent)
@@ -304,7 +305,8 @@ impl HidOpen for NoBridge {
 enum Interrupts {
     Never,
     AtOpen,
-    After(PowerState),
+    /// Once the switch has sent its command of the number given, from 1.
+    After(u32),
 }
 
 /// Surroundings whose bench is a simulated device of each role on `world`,
@@ -425,8 +427,8 @@ impl Env for TestEnv {
         }
         match self.interrupts {
             Interrupts::AtOpen => self.flag.store(15, Ordering::SeqCst),
-            Interrupts::After(state) => {
-                bench.power = Box::new(Interrupting(bench.power, self.flag, state));
+            Interrupts::After(command) => {
+                bench.power = Box::new(Interrupting(bench.power, self.flag, 0, command));
             }
             Interrupts::Never => {}
         }
@@ -2463,7 +2465,7 @@ fn an_interrupted_run_switches_the_supply_off_and_leaves_no_output() {
         text.replacen(end, "boot_timeout_ms = 60000\nend = \"timeout\"", 1)
     });
     let mut env = TestEnv::example();
-    env.interrupts = Interrupts::After(PowerState::On);
+    env.interrupts = Interrupts::After(2);
     let ran = run(&dir, &plan, &examples().join("payload"), &env);
     assert_eq!(ran.status, cli::INTERRUPTED);
     assert!(!ran.out.exists(), "no receipt and no output directory");
@@ -2484,7 +2486,7 @@ fn an_interrupted_run_switches_the_supply_off_and_leaves_no_output() {
     // An interrupt during the power off before the first entry: no cold
     // boot starts, and the supply is switched off once more.
     let mut env = TestEnv::example();
-    env.interrupts = Interrupts::After(PowerState::Off);
+    env.interrupts = Interrupts::After(1);
     let ran = run_example("interrupted-at-the-start", &env);
     assert_eq!(ran.status, cli::INTERRUPTED);
     assert!(!ran.out.exists(), "no receipt and no output directory");
@@ -2493,7 +2495,7 @@ fn an_interrupted_run_switches_the_supply_off_and_leaves_no_output() {
     // An interrupt after a power on whose power off sticks: the supply is
     // switched off once more, once.
     let mut env = TestEnv::example();
-    (env.interrupts, env.sticking) = (Interrupts::After(PowerState::On), Some(3));
+    (env.interrupts, env.sticking) = (Interrupts::After(2), Some(3));
     let ran = run_example("interrupted-and-stuck", &env);
     assert_eq!(ran.status, cli::INTERRUPTED);
     let sent = [
@@ -2505,6 +2507,26 @@ fn an_interrupted_run_switches_the_supply_off_and_leaves_no_output() {
     assert_eq!(commands(&env), sent);
     assert_eq!(supply(&env.world), 0);
     assert_eq!(env.said(), [said]);
+    // An interrupt while the supply is switched off once more after the
+    // fault that ends the run, past the run's last check of it: no receipt
+    // either, and the supply is switched off once more again.
+    let mut env = TestEnv::example();
+    (env.interrupts, env.sticking) = (Interrupts::After(4), Some(3));
+    let ran = run_example("interrupted-after-the-last", &env);
+    assert_eq!(ran.status, cli::INTERRUPTED);
+    assert!(!ran.out.exists(), "no receipt and no output directory");
+    let sent = [
+        PowerState::Off,
+        PowerState::On,
+        PowerState::Off,
+        PowerState::Off,
+        PowerState::Off,
+    ];
+    assert_eq!(commands(&env), sent);
+    assert_eq!(supply(&env.world), 0);
+    let again = "the supply was switched off again after a fault; readings did confirm the \
+                 power off";
+    assert_eq!(env.said(), [again, said]);
 }
 
 #[test]

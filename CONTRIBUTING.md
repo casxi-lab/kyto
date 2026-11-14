@@ -218,17 +218,18 @@ cargo run --locked --release --manifest-path tools/Cargo.toml -- run \
 Its exit status is 0 for `PASS`, 1 for `FAIL`, 2 for a usage or input error
 or a receipt that cannot be written, with no receipt left, 3 for
 `BENCH FAULT`, 4 for a run refused before any power command, 5 when the
-receipt was written but its public version was refused or cannot be
-written, 101 when the tool stopped on an error of its own, and 130 when
-SIGINT, SIGTERM or SIGHUP stopped a run on a bench of real devices, with no
-receipt left in either case. A run acts on an interrupt within 100 ms while
-it reads the console, and otherwise when the step under way ends: the
-longest steps wait the off interval of the board description, the
-console's `ready_timeout_ms` or a confirmation timeout, and a relay command
-whose port never sends its frame does not end, as
+receipt was written but its public version was refused or cannot be written,
+101 when the tool stopped on an error of its own, and 130 when SIGINT,
+SIGTERM or SIGHUP stopped a run on a bench of real devices after the run
+opened the bench, with no receipt left in either case; one that comes before
+then ends the process as the signal does by default. A run acts on an
+interrupt within 100 ms while it reads the console, and otherwise when the
+step under way ends: the longest steps wait the off interval of the board
+description, the console's `ready_timeout_ms` or a confirmation timeout, and
+a relay command whose port never sends its frame does not end, as
 [wiring a bench](#wiring-a-bench) says. The cold boot under way is then
-switched off and confirmed as usual, which takes up to `off_timeout_ms`,
-and the supply is switched off once more.
+switched off and confirmed as usual, which takes up to `off_timeout_ms`, and
+the supply is switched off once more.
 
 Two more commands use a bench without a run, and write no receipt; with
 the instance configuration, plan, payload root and entry of a bench in

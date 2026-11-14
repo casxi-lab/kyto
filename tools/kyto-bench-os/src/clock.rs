@@ -148,8 +148,8 @@ mod tests {
         let deadline = clock.now_ns() + 1_000_000;
         let woke = clock.wait_until_ns(deadline);
         assert!(woke >= deadline && clock.now_ns() >= woke);
-        // A deadline that has passed returns at once, with the time now.
+        // A deadline that has passed returns the time now.
         let now = clock.wait_until_ns(0);
-        assert!(now >= woke);
+        assert!(now >= woke && clock.now_ns() >= now);
     }
 }

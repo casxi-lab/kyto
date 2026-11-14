@@ -16,8 +16,10 @@ a krepi file byte for byte, between a line
 patched, reformatted or renamed: the declarations of the copied modules tell
 `rustfmt` to skip them, and kyto's own modules beside them, `clock.rs`,
 `command_port.rs` and `console.rs` in `tools/kyto-bench-os/src/`, add what
-kyto needs. A later change to a copied file or span copies it again from
-another commit of krepi and updates its row.
+kyto needs. The spans in `lib.rs` are not skipped: `rustfmt` leaves them as
+krepi formatted them, and `copied_files_have_the_digests_of_their_record`
+fails if it ever changes one. A later change to a copied file or span copies
+it again from another commit of krepi and updates its row.
 
 - **Module**: the file in this repository, or the span of lines in it.
 - **Source**: the krepi file that it is copied from.

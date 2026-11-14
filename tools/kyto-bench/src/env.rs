@@ -2,23 +2,26 @@
 //! configuration describes, the revision of the tool, the board
 //! descriptions it knows, and the nonce of each receipt.
 //!
-//! This build knows one kind of device, `simulated`, for every role, and a
-//! bench of simulated devices only. The simulated console replays the files
-//! that `[local.console]` lists in `replay`, paths relative to the instance
-//! configuration: the `n`-th power-on replays the `n`-th file, one line per
-//! millisecond, and after the last file the board writes nothing. It never
-//! answers what it is sent. The other simulated devices take no settings.
+//! A bench's devices are all of the kind `simulated` or all real, of the
+//! kinds that [`crate::drivers`] drives. The simulated console replays the
+//! files that `[local.console]` lists in `replay`, paths relative to the
+//! instance configuration: the `n`-th power-on replays the `n`-th file, one
+//! line per millisecond, and after the last file the board writes nothing.
+//! It never answers what it is sent. The other simulated devices take no
+//! settings.
 
 use std::fs;
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicI32, Ordering};
 
 use serde::Deserialize;
 
 use kyto_bench_core::board::{Board, EMBEDDED};
-use kyto_bench_core::instance::{Instance, Role, SIMULATED};
+use kyto_bench_core::instance::{Instance, Role};
 
 use crate::device::{Clock, Console, Delivery, MeterConfirm, PowerConfirm, PowerSwitch};
+use crate::drivers::{self, tftp};
 use crate::provenance::ToolRevision;
 use crate::sim::{self, ScriptProvider, SimConsole, SimRelay, SimSupplyMeter, SimTftp, SimWorld};
 
@@ -32,6 +35,31 @@ pub struct Bench {
     /// The relay that power events name, from this machine's settings of
     /// the power device; `None` for a simulated one.
     pub relay: Option<String>,
+    /// The flag of the interrupts that a bench of real devices catches.
+    pub interrupt: Interrupt,
+}
+
+/// The flag that SIGINT, SIGTERM and SIGHUP set, instead of ending the
+/// process, once a bench of real devices is open; a simulated bench has
+/// none, and a signal ends its run as it would end any process.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Interrupt(Option<&'static AtomicI32>);
+
+impl Interrupt {
+    /// No flag: nothing is caught.
+    pub const fn none() -> Self {
+        Self(None)
+    }
+
+    /// `flag`, which holds the number of the first signal caught, or 0.
+    pub const fn of(flag: &'static AtomicI32) -> Self {
+        Self(Some(flag))
+    }
+
+    /// Whether a signal has been caught.
+    pub fn caught(&self) -> bool {
+        self.0.is_some_and(|flag| flag.load(Ordering::SeqCst) != 0)
+    }
 }
 
 /// What a run takes from its surroundings.
@@ -57,6 +85,12 @@ pub trait Env {
     fn nonce(&self) -> Result<String, String> {
         nonce()
     }
+
+    /// Whether a run or a publication holds the bench of `instance` now. A
+    /// simulated bench is never held.
+    fn bench_in_use(&self, _instance: &Instance) -> bool {
+        false
+    }
 }
 
 /// The surroundings of the `kyto-bench` command.
@@ -71,16 +105,13 @@ struct ReplaySettings {
 }
 
 impl Env for HostEnv {
-    fn open_bench(&self, _: &Board, instance: &Instance, base: &Path) -> Result<Bench, String> {
+    fn open_bench(&self, board: &Board, instance: &Instance, base: &Path) -> Result<Bench, String> {
+        if drivers::real(instance)? {
+            return drivers::open(drivers::settings(board, instance)?);
+        }
         let mut recordings = Vec::new();
         for role in Role::ALL {
-            let (kind, local) = (&instance.devices().device(role).kind, instance.local(role));
-            if kind != SIMULATED {
-                return Err(format!(
-                    "this build has no {role} device of the kind {kind}"
-                ));
-            }
-            let Some(local) = local.filter(|local| !local.is_empty()) else {
+            let Some(local) = instance.local(role).filter(|local| !local.is_empty()) else {
                 continue;
             };
             if role != Role::Console {
@@ -99,6 +130,12 @@ impl Env for HostEnv {
         }
         Ok(simulated(&SimWorld::new(), sim::replay(recordings)))
     }
+
+    /// Whether a run or a publication holds the TFTP directory of a bench
+    /// of real devices: its lock is tried without waiting.
+    fn bench_in_use(&self, instance: &Instance) -> bool {
+        tftp::in_use(instance)
+    }
 }
 
 /// The bench of a simulated device of each role on `world`, whose console
@@ -111,6 +148,7 @@ pub fn simulated(world: &SimWorld, script: ScriptProvider) -> Bench {
         console: Box::new(SimConsole::new(world, script)),
         delivery: Box::new(SimTftp::new(world)),
         relay: None,
+        interrupt: Interrupt::none(),
     }
 }
 
@@ -124,6 +162,8 @@ pub fn nonce() -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    use kyto_bench_core::instance::SIMULATED;
+
     use super::*;
     use crate::device::{Nanos, PowerState, Received};
 
@@ -156,6 +196,21 @@ mod tests {
             );
         }
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn only_a_bench_of_real_devices_catches_interrupts_or_is_in_use() {
+        static FLAG: AtomicI32 = AtomicI32::new(0);
+        let interrupt = Interrupt::of(&FLAG);
+        assert!(!interrupt.caught());
+        FLAG.store(2, Ordering::SeqCst);
+        assert!(interrupt.caught() && !Interrupt::none().caught());
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples");
+        let board = Board::parse(kyto_bench_core::board::RASPBERRY_PI_5).unwrap();
+        let simulated = instance(SIMULATED, "");
+        let bench = HostEnv.open_bench(&board, &simulated, &base).unwrap();
+        assert!(!bench.interrupt.caught());
+        assert!(!HostEnv.bench_in_use(&simulated));
     }
 
     #[test]

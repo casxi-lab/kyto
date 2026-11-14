@@ -24,7 +24,7 @@ macro_rules! sources {
 /// Every source of the library and of the command, and the test files that
 /// the contract may name. The modules that any source of the crates
 /// declares are checked against this list, so a new module joins it.
-const SOURCES: [(&str, &str); 47] = sources![
+const SOURCES: [(&str, &str); 52] = sources![
     "tools/kyto-bench-core/src/board.rs",
     "tools/kyto-bench-core/src/bootloader.rs",
     "tools/kyto-bench-core/src/digest.rs",
@@ -51,8 +51,12 @@ const SOURCES: [(&str, &str); 47] = sources![
     "tools/kyto-bench/src/device.rs",
     "tools/kyto-bench/src/drivers/clock.rs",
     "tools/kyto-bench/src/drivers/console.rs",
+    "tools/kyto-bench/src/drivers/hid.rs",
+    "tools/kyto-bench/src/drivers/ina228.rs",
+    "tools/kyto-bench/src/drivers/mcp2221.rs",
     "tools/kyto-bench/src/drivers/mod.rs",
     "tools/kyto-bench/src/drivers/relay.rs",
+    "tools/kyto-bench/src/drivers/tftp.rs",
     "tools/kyto-bench/src/env.rs",
     "tools/kyto-bench/src/gate.rs",
     "tools/kyto-bench/src/inputs.rs",
@@ -63,6 +67,7 @@ const SOURCES: [(&str, &str); 47] = sources![
     "tools/kyto-bench/src/record.rs",
     "tools/kyto-bench/src/run.rs",
     "tools/kyto-bench/src/sim/console.rs",
+    "tools/kyto-bench/src/sim/ina228.rs",
     "tools/kyto-bench/src/sim/meter.rs",
     "tools/kyto-bench/src/sim/mod.rs",
     "tools/kyto-bench/src/sim/relay.rs",

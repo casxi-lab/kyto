@@ -10,6 +10,9 @@
 //!
 //! [`Knobs`] inject faults into each device; a knob changes what a device
 //! does, never its interface. Every knob is off by default.
+//!
+//! For the tests alone, `ina228` simulates the USB bridge and the INA228
+//! that the driver of the real supply meter reads, with knobs of its own.
 
 mod console;
 mod meter;
@@ -22,3 +25,6 @@ pub use meter::{MeterKnobs, SimSupplyMeter};
 pub use relay::{RelayKnobs, SimRelay};
 pub use tftp::{SimTftp, TftpKnobs};
 pub use world::{Knobs, ON_MICRO, SimWorld, SupplyKnobs};
+
+#[cfg(test)]
+pub mod ina228;

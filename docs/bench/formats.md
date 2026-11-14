@@ -921,7 +921,9 @@ file; a file that differs is a fault of the bench.
 The library reads the transcript of a cold boot in [lines](#lines), with the
 line patterns of the board description and of the entry. It reads a
 transcript the same way while it is received and when a record of it is read
-back, with each send placed after the bytes received before it; the
+back, with each send placed after the bytes received before it (a send that
+a receipt records inside a chunk is placed after that chunk, one of the
+contract's [current deviations](contract.md#current-deviations)); the
 unterminated last line of a capture is read when the capture ends, but not
 for [steps or the end](#steps-and-the-end-of-a-cold-boot). A line is
 named by its offset. From the lines, in order, it takes:

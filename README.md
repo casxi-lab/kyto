@@ -109,26 +109,26 @@ the key count and the arrangement within each form are open. Nothing has been
 designed or modelled yet: there are no design files and no models, and nothing
 to build, order, print or assemble. The bench tool in `tools/` is partly
 written: it runs [run plans](docs/bench/formats.md#run-plans) on a bench of
-the devices that it has drivers for and on simulated devices, and writes
-their receipts and the receipts' public versions. Its library reads [board descriptions, identity records, instance
-configurations and run plans](docs/bench/formats.md), with the Raspberry Pi 5
-description built in, checks payloads, reads what a cold boot shows, judges
-cold boots, entries and runs, writes and reads receipts and their public
-versions, and derives the verdicts of a receipt again from what it records.
-The tool has the interfaces of four kinds of device, each with a simulated
-device and a driver for one real device: an LCUS-1 USB relay module for
-power commands; a TI INA228 power monitor read through a Microchip MCP2221A
-USB bridge, which confirms power-on and power-off by the supply voltage; a
-USB serial adapter for the serial console; and the directory of a TFTP
-server for payload delivery. Its commands run a plan, switch a bench's
-supply off and confirm it, and publish a payload without powering the
-board. It has no bench self-test, input injection or display capture yet. A
-receipt is evidence only when a clean, known revision of the tool wrote it
-on real devices. Apart from the bench tool, the board descriptions
-and the formats of run plans and receipts, none of the items above exists
-today. Until a power circuit exists, the development boards, a whole
-Raspberry Pi 5 board and a Compute Module 5 in its official IO board, run
-from a stable external supply.
+the devices that it has drivers for and on simulated devices, and writes their
+receipts and the receipts' public versions. Its library reads [board
+descriptions, identity records, instance configurations and run
+plans](docs/bench/formats.md), with the Raspberry Pi 5 description built in,
+checks payloads, reads what a cold boot shows, judges cold boots, entries and
+runs, writes and reads receipts and their public versions, and derives the
+verdicts of a receipt again from what it records. The tool has the interfaces
+of four kinds of device, each with a simulated device and a driver for one
+real device: an LCUS-1 USB relay module for power commands; a TI INA228 power
+monitor read through a Microchip MCP2221A USB bridge, which confirms power-on
+and power-off by the supply voltage; a USB serial adapter for the serial
+console; and the directory of a TFTP server for payload delivery. Its commands
+run a plan, switch a bench's supply off and confirm it, and publish a payload
+without powering the board. It has no bench self-test, input injection or
+display capture yet. A receipt is evidence only when a clean, known revision
+of the tool wrote it on real devices. Apart from the bench tool, the board
+descriptions and the formats of run plans and receipts, none of the items
+above exists today. Until a power circuit exists, the development boards, a
+whole Raspberry Pi 5 board and a Compute Module 5 in its official IO board,
+run from a stable external supply.
 
 The repository checks run from the repository root:
 

@@ -523,7 +523,10 @@ If the run has sent any power command, it then switches the supply off once
 more and says on standard error whether readings confirmed it. It leaves no
 receipt and no output directory and exits with 130, also when staging the
 payloads refused the run before its first power command, and when it came
-after the last cold boot, before the receipt is written. One that comes
+after the last cold boot but before the run's last check of it, which
+follows the run's last power command and comes before the receipt is put
+together. One that comes after that check is not acted on: the receipt is
+written and the run exits with the status of its result. One that comes
 before the run opens the bench, while its inputs and payload sources are
 checked, is not caught and ends the process as the signal does by default.
 `kyto-bench publish` stopped by one before its switch leaves what the board

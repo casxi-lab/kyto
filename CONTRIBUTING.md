@@ -229,7 +229,9 @@ description, the console's `ready_timeout_ms` or a confirmation timeout, and
 a relay command whose port never sends its frame does not end, as
 [wiring a bench](#wiring-a-bench) says. The cold boot under way is then
 switched off and confirmed as usual, which takes up to `off_timeout_ms`, and
-the supply is switched off once more.
+the supply is switched off once more, whose readings take up to another
+`off_timeout_ms`; each power command adds about 400 ms of relay timing, a
+wait of 250 ms before its frame and 150 ms after it.
 
 Two more commands use a bench without a run, and write no receipt; with
 the instance configuration, plan, payload root and entry of a bench in
@@ -389,17 +391,17 @@ change that adds it.
   simulated devices, whose salt is published, so that no bench may use it.
 - **Safety.** Power-on and power-off are each confirmed by readings of the
   supply, never by the relay's own reply. A run switches the supply off and
-  waits for readings to confirm it before the first cold boot and after
-  every cold boot that started, one that failed or faulted too, and its
-  receipt records the commands and the readings; a run that a fault ends
-  before readings confirmed the last power off, and a run that stops on an
-  error of the tool or an interrupt, switch the supply off once more and
-  say whether readings confirmed it. Operations that write firmware, EEPROM contents or
+  waits for readings to confirm it before the first cold boot and after every
+  cold boot that started, one that failed or faulted too, and its receipt
+  records the commands and the readings; a run that a fault ends before
+  readings confirmed the last power off, and a run that stops on an error of
+  the tool or an interrupt, switch the supply off once more and say whether
+  readings confirmed it. Operations that write firmware, EEPROM contents or
   storage media are off by default: a run refuses a payload file that the
   board description lists as letting the firmware make such a write, before
-  anything is staged or powered, unless its run plan entry enables that
-  class of write explicitly. An enable is needed for a write but does not
-  authorize one; that is decided outside the tool.
+  anything is staged or powered, unless its run plan entry enables that class
+  of write explicitly. An enable is needed for a write but does not authorize
+  one; that is decided outside the tool.
 - **Receipts.** A receipt records the tool revision, the bench hardware
   revision, the digest of every payload file, the commands sent, the console
   transcript and every observation, with checks and verdicts. The tool writes

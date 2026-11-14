@@ -96,9 +96,10 @@ from the examples in `tools/examples/`, the recordings in
 `tools/kyto-bench/tests/data/recorded/` and the corpus in
 `tools/kyto-bench/tests/data/corpus/`. A test fails when the corpus, the
 recordings or the example console output holds a file, at any depth, that
-is not a seed of the fuzz tests or a `.gitattributes` file, or a file that
-holds an IPv4 address, a MAC address, a board serial number or a value of a
-sensitive line of a board description that is not a documentation value.
+is not a seed of the fuzz tests, a `.gitattributes` file or a `.DS_Store`
+file, which it skips, or a file that holds an IPv4 address, an IPv6
+address, a MAC address, a board serial number or a value of a sensitive
+line of a board description that is not a documentation value.
 The contract's [testing obligations](docs/bench/contract.md#testing-obligations)
 give the seeds, the documentation values, the number of cases of each fuzz
 test and what it checks. A deeper search, of a hundred times as many cases,

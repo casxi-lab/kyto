@@ -20,6 +20,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeSet, VecDeque};
 use std::fs;
+use std::net::Ipv6Addr;
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -2042,13 +2043,67 @@ fn shapes<'a>(
     found
 }
 
+/// Whether `address` is an IPv6 address of the documentation prefix
+/// 2001:db8::/32, the unspecified address `::` or the loopback address
+/// `::1`.
+fn documentation_ipv6(address: &Ipv6Addr) -> bool {
+    let [first, second, ..] = address.segments();
+    (first, second) == (0x2001, 0x0db8) || address.is_unspecified() || address.is_loopback()
+}
+
+/// The places in `bytes` of every IPv6 address: each longest run of
+/// hexadecimal digits, colons and dots, without a dot or a colon that is
+/// not part of `::` at either end, that holds at least two colons, that no
+/// letter, digit or `_` touches and that reads as an IPv6 address.
+fn ipv6_addresses(bytes: &[u8]) -> Vec<(usize, Ipv6Addr)> {
+    let part = |byte: &u8| byte.is_ascii_hexdigit() || matches!(byte, b':' | b'.');
+    let word =
+        |byte: Option<&u8>| byte.is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_');
+    let (mut found, mut at) = (Vec::new(), 0);
+    while at < bytes.len() {
+        if !part(&bytes[at]) {
+            at += 1;
+            continue;
+        }
+        let mut start = at;
+        while at < bytes.len() && part(&bytes[at]) {
+            at += 1;
+        }
+        let mut end = at;
+        let lone = |at: usize, other: Option<usize>| {
+            bytes[at] == b'.'
+                || (bytes[at] == b':' && other.is_none_or(|other| bytes[other] != b':'))
+        };
+        while start < end && lone(start, (start + 1 < end).then_some(start + 1)) {
+            start += 1;
+        }
+        while start < end && lone(end - 1, (end - 1 > start).then(|| end - 2)) {
+            end -= 1;
+        }
+        let run = &bytes[start..end];
+        let colons = run.iter().filter(|byte| **byte == b':').count();
+        let touched =
+            word(start.checked_sub(1).map(|before| &bytes[before])) || word(bytes.get(end));
+        let address = std::str::from_utf8(run)
+            .ok()
+            .and_then(|text| text.parse().ok());
+        if let Some(address) = address
+            && colons >= 2
+            && !touched
+        {
+            found.push((start, address));
+        }
+    }
+    found
+}
+
 /// The places in `bytes` of values that are not documentation values: of
 /// each value that the sensitive lines of `boards` hold, of every dotted
-/// quad and every MAC address shape, and of every run of exactly eight
-/// hexadecimal digits that `serial ` comes before or `/` after, the shape of
-/// the serial number of a Raspberry Pi 5 on its boot mode line and as the
-/// path prefix of its TFTP reads; each named by what it is and its offset,
-/// never by its value.
+/// quad, every MAC address shape and every IPv6 address, and of every run
+/// of exactly eight hexadecimal digits that `serial ` comes before or `/`
+/// after, the shape of the serial number of a Raspberry Pi 5 on its
+/// `BOOTMODE` line and as the path prefix of its TFTP reads; each named by
+/// what it is and its offset, never by its value.
 fn undocumented(boards: &[Board], bytes: &[u8]) -> Vec<String> {
     let mut found = Vec::new();
     for (span, rule, value) in observe::sensitive_values(boards, bytes) {
@@ -2064,6 +2119,11 @@ fn undocumented(boards: &[Board], bytes: &[u8]) -> Vec<String> {
     for (at, mac) in shapes(bytes, b":-", 6, 2..=2, u8::is_ascii_hexdigit) {
         if !documentation_mac(mac) {
             found.push(format!("a MAC address at {at}"));
+        }
+    }
+    for (at, address) in ipv6_addresses(bytes) {
+        if !documentation_ipv6(&address) {
+            found.push(format!("an IPv6 address at {at}"));
         }
     }
     for (at, serial) in shapes(bytes, b"", 1, 8..=8, u8::is_ascii_hexdigit) {
@@ -2116,9 +2176,14 @@ fn the_corpus_and_recordings_hold_documentation_values_only() {
         };
         name == ".gitattributes" || seeds.iter().any(seed)
     };
+    // A `.DS_Store` file, which Finder writes and Git ignores, is skipped.
+    let skipped = |path: &str| path.ends_with("/.DS_Store");
     let mut checked = Vec::new();
     for dir in [CORPUS, RECORDED, "examples/captures"] {
         for (path, bytes) in every_file(dir) {
+            if skipped(&path) {
+                continue;
+            }
             assert!(known(&path), "{path} is not a seed of the fuzz tests");
             let found = undocumented(&boards, &bytes);
             assert!(found.is_empty(), "{path}: {found:?}");
@@ -2138,10 +2203,13 @@ fn the_corpus_and_recordings_hold_documentation_values_only() {
         format!("{CORPUS}/plans/plan.bin"),
         format!("{CORPUS}/boot.bin"),
         format!("{RECORDED}/boot.raw"),
+        format!("{CORPUS}/transcripts/DS_Store"),
+        format!("{CORPUS}/transcripts/boot.DS_Store"),
     ];
     for path in others {
-        assert!(!known(&path), "{path}");
+        assert!(!known(&path) && !skipped(&path), "{path}");
     }
+    assert!(skipped(&format!("{CORPUS}/transcripts/.DS_Store")));
     // The recordings hold documentation values of each kind, which the
     // gate finds and lets through; a value one step outside each is found.
     let recorded = files(RECORDED, "bin");
@@ -2189,4 +2257,11 @@ fn the_corpus_and_recordings_hold_documentation_values_only() {
         b"x 192.0.3.1 y 0:1:2:3:4:5 z 02:00:00:00:00:01\r\n",
     );
     assert_eq!(bare, ["a dotted quad at 2", "a MAC address at 28"]);
+    // IPv6 addresses outside 2001:db8::/32 are found, among them one that
+    // holds a MAC address, and times and paths are none.
+    let ipv6 = undocumented(
+        &boards,
+        b"x fe80::da3a:ddff:fe12:3456 y 2a02:1234:5678::1 z 2001:db8::1 :: ::1 15:59:09 std::fs.\r\n",
+    );
+    assert_eq!(ipv6, ["an IPv6 address at 2", "an IPv6 address at 30"]);
 }

@@ -184,22 +184,25 @@ boot is not powered.
   `tools/kyto-bench/tests/fuzz.rs`, reads every file, at any depth, below
   the corpus of the fuzz tests and the recordings in
   `tools/kyto-bench/tests/data/` and the example console output in
-  `tools/examples/captures/`. It fails on any file but a `.gitattributes`
-  file and the seeds of the fuzz tests, which are the `.bin` files directly
-  in `transcripts/` of the corpus, in the recordings and in the example
-  console output and the `.toml` files directly in `plans/` of the corpus,
-  and fails unless every value that a sensitive line of the Raspberry Pi 5
-  description or of `tools/kyto-bench/tests/data/synthetic-board.toml`
-  holds, every dotted quad, every six pairs of hexadecimal digits joined by
-  colons or hyphens, the shape of a MAC address, and every run of exactly
-  eight hexadecimal digits that `serial ` comes before or `/` after, the
-  shape of a Raspberry Pi 5 serial number on its boot mode line and in the
-  default path prefix of its TFTP reads, is a documentation value: an IPv4
-  address of 192.0.2.0/24 or 198.51.100.0/24, 0.0.0.0, a network mask that
-  starts with 255, a MAC address from 00:00:5e:00:53:00 to
-  00:00:5e:00:53:ff, a serial number chosen for the examples or the
-  recordings, the SD card identifier, card-specific data or partition UUID
-  chosen for the recordings, or `#` alone.
+  `tools/examples/captures/`, but a `.DS_Store` file, which it skips. It
+  fails on any other file but a `.gitattributes` file and the seeds of the
+  fuzz tests, which are the `.bin` files directly in `transcripts/` of the
+  corpus, in the recordings and in the example console output and the
+  `.toml` files directly in `plans/` of the corpus, and fails unless every
+  value that a sensitive line of the Raspberry Pi 5 description or of
+  `tools/kyto-bench/tests/data/synthetic-board.toml` holds, every dotted
+  quad, every six pairs of hexadecimal digits joined by colons or hyphens,
+  the shape of a MAC address, every run of hexadecimal digits, colons and
+  dots that holds two colons or more, that no letter, digit or `_` touches
+  and that reads as an IPv6 address, and every run of exactly eight
+  hexadecimal digits that `serial ` comes before or `/` after, the shape of
+  a Raspberry Pi 5 serial number on its `BOOTMODE` line and in the default
+  path prefix of its TFTP reads, is a documentation value: an IPv4 address
+  of 192.0.2.0/24 or 198.51.100.0/24, 0.0.0.0, a network mask that starts
+  with 255, a MAC address from 00:00:5e:00:53:00 to 00:00:5e:00:53:ff, an
+  IPv6 address of 2001:db8::/32, `::` or `::1`, a serial number chosen for
+  the examples or the recordings, the SD card identifier, card-specific
+  data or partition UUID chosen for the recordings, or `#` alone.
 - `tools/kyto-bench/tests/fuzz.rs` fuzz tests the parsing of untrusted
   input. A SplitMix64 generator written in that file makes each case from
   the constant `SEED`, the name of its target without `fuzz_` and its

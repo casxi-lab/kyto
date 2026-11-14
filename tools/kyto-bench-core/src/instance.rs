@@ -101,7 +101,9 @@ pub struct Device {
     pub model: String,
 }
 
-/// A connection between devices or between a device and the board.
+/// A connection of the bench: between devices, between a device and the
+/// board or its supply, or between two points of the board, such as a
+/// jumper.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Connection {

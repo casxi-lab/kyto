@@ -10,6 +10,7 @@ rust-version.workspace = true
 [dependencies]
 clap = { workspace = true }
 getrandom = { workspace = true }
+hidapi = { workspace = true }
 kyto-bench-core = { path = "../kyto-bench-core" }
 kyto-bench-os = { path = "../kyto-bench-os" }
 serde = { workspace = true }

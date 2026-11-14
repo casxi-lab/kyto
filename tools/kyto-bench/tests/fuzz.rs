@@ -2016,6 +2016,33 @@ struct ReceiptCover {
     limited: u64,
     not_utf8: u64,
     lone_cr: u64,
+    inside_chunk: u64,
+}
+
+/// `receipt` with the first send of the first cold boot that has a send and
+/// a chunk of at least two bytes moved into the middle of that chunk, with
+/// the JSON pointer of its `received`.
+fn send_inside_a_chunk(receipt: &Receipt) -> Option<(String, Receipt)> {
+    let mut moved = receipt.clone();
+    for (number, entry) in moved.entries.iter_mut().enumerate() {
+        for (boot, cold_boot) in entry.cold_boots.iter_mut().enumerate() {
+            let send = |event: &Event| matches!(event.event, EventKind::Send { .. });
+            let Some(event) = cold_boot.events.iter().position(send) else {
+                continue;
+            };
+            let serial = &cold_boot.serial;
+            let ends = serial.index.iter().skip(1).map(|chunk| chunk[0]);
+            let ends = ends.chain([serial.length]);
+            let mut chunks = serial.index.iter().map(|chunk| chunk[0]).zip(ends);
+            let Some((start, end)) = chunks.find(|(start, end)| end - start >= 2) else {
+                continue;
+            };
+            cold_boot.events[event].received = start + (end - start) / 2;
+            let at = format!("/entries/{number}/cold_boots/{boot}/events/{event}/received");
+            return Some((at, moved));
+        }
+    }
+    None
 }
 
 /// The receipts: runs of the example plan, some with a small capture limit,
@@ -2059,6 +2086,14 @@ fn receipts(cases: u64) {
         let read = Receipt::parse(receipt.render().as_bytes()).unwrap();
         assert_eq!(read, receipt);
         assert_eq!(rejudge(&read).as_ref(), Ok(&read));
+        // The first send moved inside a chunk is refused at its `received`.
+        // Nothing is drawn from `rng`, so the rest of the case is as it was.
+        if let Some((pointer, moved)) = send_inside_a_chunk(&read) {
+            let error = Receipt::parse(moved.render().as_bytes()).unwrap_err();
+            let refused = matches!(&error, ReceiptError::Invalid { at, .. } if *at == pointer);
+            assert!(refused, "{error}");
+            cover.inside_chunk += 1;
+        }
         // Each cold boot holds the bytes that the console gave, exactly as
         // it gave them, up to the capture limit of its entry; it ended at
         // that limit, and failed it, exactly when the console gave more.
@@ -2149,6 +2184,7 @@ fn receipts(cases: u64) {
         cover.refused,
         cover.not_utf8,
         cover.lone_cr,
+        cover.inside_chunk,
     ];
     assert!(counts.iter().all(|count| *count > cases / 10), "{counts:?}");
     let rare = [cover.refusals_undone, cover.ran_after_fault, cover.limited];
@@ -2390,6 +2426,65 @@ fn every_file(dir: &str) -> Vec<(String, Vec<u8>)> {
     }
     found.sort();
     found
+}
+
+/// The places in the text `bytes` of an instance configuration of values
+/// that are not documentation values, as [`undocumented`] finds them, and of
+/// absolute paths: a line, a word or a quoted value that starts with `/`.
+fn undocumented_settings(bytes: &[u8]) -> Vec<String> {
+    let mut found = undocumented(&[pi5()], bytes);
+    for (number, line) in bytes.split(|byte| *byte == b'\n').enumerate() {
+        let starts = [&b" /"[..], b"\"/", b"=/"];
+        let path = starts
+            .iter()
+            .any(|start| line.windows(2).any(|pair| pair == *start));
+        if line.starts_with(b"/") || path {
+            found.push(format!("an absolute path on line {}", number + 1));
+        }
+    }
+    found
+}
+
+#[test]
+fn the_instance_template_and_the_bench_example_hold_documentation_values_only() {
+    for path in ["templates/instance.toml", "examples/bench-instance.toml"] {
+        let bytes = fs::read(tools().join(path)).unwrap();
+        assert_eq!(undocumented_settings(&bytes), [""; 0], "{path}");
+        let text = String::from_utf8(bytes).unwrap();
+        let table: toml::Table = toml::from_str(&text).unwrap();
+        let tftp = &table["tftp"];
+        assert_eq!(
+            tftp["server_address"].as_str(),
+            Some("192.0.2.10"),
+            "{path}"
+        );
+        assert_eq!(tftp["path_prefix"].as_str(), Some("example/"), "{path}");
+        // A salt that is not one, and settings that are key names alone.
+        let local = table["local"].as_table().unwrap();
+        let salt = local["salt"].as_str().unwrap();
+        let hex = salt
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'));
+        assert!(!(salt.len() == 32 && hex), "{path}");
+        for (role, settings) in local.iter().filter(|(key, _)| *key != "salt") {
+            let values = settings.as_table().unwrap().values();
+            assert!(
+                values.into_iter().all(|value| value.as_str() == Some("")),
+                "{role}"
+            );
+        }
+        // A value of a machine written into either is found.
+        for (from, to) in [
+            ("# The", "# 198.51.101.13 The"),
+            ("dir = \"\"", "dir = \"/kyto-test/tftp\""),
+        ] {
+            let changed = text.replacen(from, to, 1);
+            assert!(
+                !undocumented_settings(changed.as_bytes()).is_empty(),
+                "{to}"
+            );
+        }
+    }
 }
 
 #[test]

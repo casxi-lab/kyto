@@ -48,12 +48,7 @@ impl Inputs {
         let run_plan = RunPlan::parse(&text).map_err(|error| at(plan, error))?;
         let (instance_sha256, text) = read_text(instance)?;
         let config = Instance::parse(&text).map_err(|error| at(instance, error))?;
-        let id = &run_plan.board;
-        let board = boards
-            .iter()
-            .filter_map(|text| Board::parse(text).ok())
-            .find(|board| &board.id == id)
-            .ok_or_else(|| format!("no board description of this tool has the id {id}"))?;
+        let board = board(boards, &run_plan.board)?;
         config
             .check_board(&board)
             .map_err(|error| at(instance, error))?;
@@ -91,6 +86,43 @@ impl Inputs {
     }
 }
 
+/// An instance configuration read on its own, for a command without a run
+/// plan.
+#[derive(Clone, Debug)]
+pub struct InstanceInputs {
+    pub instance: Instance,
+    pub instance_sha256: Sha256,
+    /// The directory of the instance configuration.
+    pub instance_dir: PathBuf,
+    /// The description of the board that the instance names.
+    pub board: Board,
+}
+
+/// Reads the instance configuration at `instance`, takes the description of
+/// its board from `boards` and checks the instance against it, as
+/// [`Inputs::read`] does.
+pub fn read_instance(instance: &Path, boards: &[&str]) -> Result<InstanceInputs, String> {
+    let (instance_sha256, text) = read_text(instance)?;
+    let config = Instance::parse(&text).map_err(|error| at(instance, error))?;
+    let board = board(boards, config.board())?;
+    config
+        .check_board(&board)
+        .map_err(|error| at(instance, error))?;
+    Ok(InstanceInputs {
+        instance: config,
+        instance_sha256,
+        instance_dir: instance.parent().map(Path::to_path_buf).unwrap_or_default(),
+        board,
+    })
+}
+
+/// The description in `boards` of the board `id`.
+fn board(boards: &[&str], id: &str) -> Result<Board, String> {
+    let mut parsed = boards.iter().filter_map(|text| Board::parse(text).ok());
+    let board = parsed.find(|board| board.id == id);
+    board.ok_or_else(|| format!("no board description of this tool has the id {id}"))
+}
+
 /// `error` in the file at `path`.
 fn at(path: &Path, error: impl std::fmt::Display) -> String {
     format!("{}: {error}", path.display())
@@ -103,4 +135,28 @@ fn read_text(path: &Path) -> Result<(Sha256, String), String> {
     let sha256 = Sha256::of(&bytes);
     let text = String::from_utf8(bytes).map_err(|_| format!("{} is not UTF-8", path.display()))?;
     Ok((sha256, text))
+}
+
+#[cfg(test)]
+mod tests {
+    use kyto_bench_core::board::EMBEDDED;
+
+    use super::*;
+
+    #[test]
+    fn an_instance_is_read_on_its_own_with_the_description_of_its_board() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/instance.toml");
+        let read = read_instance(&path, &EMBEDDED).unwrap();
+        assert_eq!(read.board.id, "raspberry-pi-5");
+        assert_eq!(read.instance.board(), "raspberry-pi-5");
+        assert_eq!(read.instance_sha256, Sha256::of(&fs::read(&path).unwrap()));
+        assert_eq!(read.instance_dir, path.parent().unwrap());
+        let unknown = read_instance(&path, &[]).unwrap_err();
+        assert_eq!(
+            unknown,
+            "no board description of this tool has the id raspberry-pi-5"
+        );
+        let absent = read_instance(&path.with_file_name("absent.toml"), &EMBEDDED);
+        assert!(absent.unwrap_err().starts_with("cannot read "));
+    }
 }

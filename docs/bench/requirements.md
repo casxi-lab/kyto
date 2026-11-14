@@ -3,10 +3,10 @@
 This page states what the rules of the kyto bench tool in
 [`tools/`](../../tools) must do in three groups: the rules that decide a
 verdict, those that check payload digests and the tool's own revision, and
-those that power the board off and report after a failure. The
-[formats page](formats.md) gives the exact condition of every rule, and the
-[contract](contract.md) gives the rule names, the functions that apply them
-and the [tests of each requirement](contract.md#requirement-tests).
+those that power the board off and report after a failure or an interrupt.
+The [formats page](formats.md) gives the exact condition of every rule, and
+the [contract](contract.md) gives the rule names, the functions that apply
+them and the [tests of each requirement](contract.md#requirement-tests).
 
 A requirement is named by the prefix of its group, `-R` and two digits:
 `VERD` for verdicts, `PROV` for payload digests and the tool's revision, and
@@ -109,10 +109,22 @@ appeared within `boot_timeout_ms` of the power on. With `end = "timeout"`,
 it fails when the cold boot ended before the boot timeout. A run ends a cold
 boot at its boot timeout on the bench clock, whatever the console reports.
 
+Past that time it still reads a chunk that the console stamped before it,
+and a chunk stamped at that time or later ends the cold boot as the time
+does. A chunk stamped exactly at a deadline is thus kept only when the run
+was already waiting for it before its bench clock reached that deadline.
+
 **Evidence.** A unit test of an end marker that comes late, never comes or
 has no LF, and of an entry that ends at the timeout; runs on simulated
 devices whose end marker has no LF or never comes, which end at the boot
-timeout and fail, and whose console reports deadlines early or never.
+timeout and fail, and whose console reports deadlines early or never; a run
+on a console that holds a response stamped before the deadline of its step
+when that deadline has passed, which is read and answers the step; a run
+on a console that hands a chunk stamped after a boot timeout that has
+passed, which ends the cold boot at its boot timeout; and a run on a
+console that hands the line that arms a step, stamped before the boot
+timeout, once the boot timeout has passed, which sends no step and ends
+the cold boot at its boot timeout.
 
 ### VERD-R07
 
@@ -151,16 +163,21 @@ failing ones included, are fixed.
 sends sends nothing.** `step.response` fails for a step that its trigger
 line did not arm, that was not sent, or whose response line was not
 complete within its `timeout_ms` of the send. In an entry with
-`sends = false`, `step.declared_none` fails when a byte was sent. A send
-that a receipt records inside a chunk is read after that chunk, one of the
-contract's [current deviations](contract.md#current-deviations).
+`sends = false`, `step.declared_none` fails when a byte was sent. A run
+reads every chunk that the console holds before it sends a step, and records
+every send between two chunks of its cold boot; reading a receipt refuses a
+send inside a chunk.
 
 **Evidence.** Unit tests of a slow, missing, unsent and unarmed response, of
 a line that the board began before the send and that is therefore no
 response, and of a send in an entry that declares none; a run on simulated
-devices whose response has no LF; and a fuzz test in which the steps that
-the record of a run gives are those that the rules give from its lines and
-sends.
+devices whose response has no LF; a run on a console that holds a line that
+came after the trigger line but before the send, which is no response; a
+receipt whose send, the first of its cold boot or a second one, was moved
+inside a chunk, which reading refuses at that send; a fuzz test in which the
+steps that the record of a run gives are those that the rules give from its
+lines and sends; and a fuzz test that moves the first send of each written
+receipt inside a chunk.
 
 ### VERD-R10
 
@@ -251,8 +268,11 @@ whose plan gives another digest for a payload file, refused under
 opened, so that nothing is staged and no power command is sent; a run on
 simulated devices whose staged copy differs while its source files keep
 their digests, which is refused under `payload.staged_digest` only after
-the copy was staged; and a test that re-deriving gives the same refusal
-from the recorded digests.
+the copy was staged; a test that re-deriving gives the same refusal from
+the recorded digests; and publications on simulated devices refused in the
+same way, whose source file differs, whose staged copy differs or whose
+TFTP directory cannot be staged, which serve nothing new and send no power
+command.
 
 ### PROV-R02
 
@@ -275,11 +295,17 @@ shows that the board is served the entry's payload, `payload.served_digest`
 checks every file of the copy that the board is served, read through the
 served generation, one check for each file. A file that differs or was not
 read is a fault: the entry is `BENCH FAULT`, the board is not switched on
-for it, and the run ends.
+for it, and the run ends. `kyto-bench publish` checks the copy that the
+board is served after its switch in the same way, reports a copy of another
+digest as a fault of the bench, with the exit status 3, every file that
+differs and the generation now served, and does not switch the board back.
 
-**Evidence.** A unit test of one check for each file, and a run on
-simulated devices whose TFTP directory serves changed files: four faults,
-no cold boot and only the power off at the start.
+**Evidence.** A unit test of one check for each file; a run on simulated
+devices whose TFTP directory serves changed files: four faults, no cold
+boot and only the power off at the start; and publications on simulated
+devices of one entry, whose served copy has the digests of the plan, and
+whose TFTP directory serves changed files, a fault with every file
+reported and no power command.
 
 ### PROV-R04
 
@@ -385,8 +411,13 @@ it sent a command confirms nothing.
 **Evidence.** Unit tests of the count, the thresholds, the timeout, stale
 readings and the readings up to the next command; tests of the simulated
 meter, which reads the supply and not the command, and fails on its own;
-and a run on simulated devices whose supply keeps a voltage above the off
-threshold.
+a run on simulated devices whose supply keeps a voltage above the off
+threshold; the power-off command on simulated devices, whose power off
+readings confirm, and whose meter reads a supply that is on whatever the
+supply does, or cannot be opened, each then a fault of the bench with the
+one power off sent; and a test of the INA228 driver on a simulated bridge,
+in which a relay whose contacts stick and a supply that keeps a voltage
+above the off threshold confirm nothing.
 
 ### POWER-R02
 
@@ -396,14 +427,18 @@ entry and after every cold boot that started, one that failed or faulted
 included, and waits for readings to confirm it. A cold boot starts only
 once the supply was confirmed off, and its steps after the off interval
 begin once `off_interval_ms` has passed since that confirmation.
+`kyto-bench publish` switches the served generation only while readings
+confirm the supply off, and sends no power command.
 
 **Evidence.** Runs on simulated devices: the commands and readings of a
 passing run, the off interval and the switch of every entry, a cold boot
 that fails at its boot timeout, one that fails because the network boot
 marker of the board is missing while its end marker comes, and one whose
 power on is not confirmed, each switched off and confirmed off, and a
-supply that is never confirmed off, after which no cold boot starts; and a
-test of the off interval across entries in a re-derived receipt.
+supply that is never confirmed off, after which no cold boot starts; a
+test of the off interval across entries in a re-derived receipt; and a
+publication on simulated devices whose supply is on, which is refused
+without a switch and without a power command.
 
 ### POWER-R03
 
@@ -434,7 +469,9 @@ standard error whether readings confirmed it.
 
 **Evidence.** Runs on simulated devices whose power device fails to send
 the first or third command, and whose supply is never confirmed off: the
-power off sent again, its readings and the state of the supply.
+power off sent again, its readings, the state of the supply and what the
+run says on standard error, once confirmed and once not; and a unit test of
+the exact bytes of a message on standard error.
 
 ### POWER-R05
 
@@ -447,17 +484,69 @@ command and leaves the supply as it was. Any panic removes the output
 directory, leaves no receipt and exits with status 101.
 
 **Evidence.** A run on simulated devices that panics after the first power
-on: the power off sent again, a supply at 0 V, and no output directory.
+on: the power off sent again, a supply at 0 V, the message on standard
+error, and no output directory; and a unit test of the exact bytes of a
+message on standard error.
 
 ### POWER-R06
 
-**The exit status gives the result.** `kyto-bench run` exits with 0 for
-`PASS`, 1 for `FAIL`, 2 for a usage or input error or a receipt that
-cannot be written, 3 for `BENCH FAULT`, 4 for a run refused before any power
-command, 5 when the receipt was written but not its public version, and 101
-for an error of the tool itself. A message or result that cannot be written
-changes no exit status.
+**Each command's exit status gives its result.** `kyto-bench run` exits
+with 0 for `PASS`, 1 for `FAIL`, 2 for a usage or input error or a receipt
+that cannot be written, 3 for `BENCH FAULT`, 4 for a run refused before any
+power command, 5 when the receipt was written but not its public version,
+101 for an error of the tool itself and 130 for an interrupt.
+`kyto-bench power-off` exits with 0 when readings confirmed the power off, 2
+for a usage or input error, 3 for `BENCH FAULT`, when readings did not
+confirm the power off or a device failed, and 101 for an error of the tool.
+`kyto-bench publish` exits with 0 when the board is served the new
+generation and its copy has the digests of the run plan, 2 for a usage or
+input error, 3 for `BENCH FAULT`, when the meter, the switch or the read of
+the served copy failed or the copy that the board is served after the
+switch differs, 4 when a payload check, the staging of the payload or the
+readings refused it, leaving what the board is served unchanged, 101 for an
+error of the tool and 130 for an interrupt before the switch. A message or
+result that cannot be written changes no exit status.
 
-**Evidence.** Tests of the values of the statuses and of the usage errors;
-runs on simulated devices whose output files cannot be written; and runs of
-the built binary that pass, are refused, or have no reader of their output.
+**Evidence.** Tests of the values of the statuses, of the three commands
+and of the usage errors; runs on simulated devices whose output files
+cannot be written, or that an interrupt stops; the power-off command whose
+power off readings do not confirm, or whose meter cannot be opened, and a
+publication whose served copy differs or whose meter cannot be opened,
+each with the status 3; publications refused with the status 4; and runs of
+the built binary that pass, are refused, have no reader of their output, or
+cannot read their plan, which is said on standard error, and that switch
+the supply off or publish, which say so on standard output.
+
+### POWER-R07
+
+**An interrupt stops a run on real devices with the supply off.** When
+SIGINT, SIGTERM or SIGHUP reaches a run on a bench of real devices after the
+run opened the bench, the run sends no further power on: the cold boot under
+way ends with its power off, confirmed by readings as after any cold boot.
+If the run has sent any power command, it then switches the supply off once
+more and says on standard error whether readings confirmed it. It leaves no
+receipt and no output directory and exits with 130, also when staging the
+payloads refused the run before its first power command, and when it came
+after the last cold boot but before the run's last check of it, which
+follows the run's last power command and comes before the receipt is put
+together. One that comes after that check is not acted on: the receipt is
+written and the run exits with the status of its result. One that comes
+before the run opens the bench, while its inputs and payload sources are
+checked, is not caught and ends the process as the signal does by default.
+`kyto-bench publish` stopped by one before its switch leaves what the board
+is served unchanged and exits with 130, also when staging or the readings
+would have refused it; `kyto-bench power-off` finishes its command and
+confirmation.
+
+**Evidence.** Runs on simulated devices, whose bench takes the flag of an
+interrupt without catching a signal: an interrupt after the first power on,
+after which the capture stops at once, the cold boot is switched off and the
+supply once more, also when the power off of the cold boot sticks, with no
+output directory and the message on standard error; one during the power off
+before the first entry, after which no cold boot starts; one during the
+power off that follows a fault of the last cold boot, after the run's last
+check of the flag; one before the first power command, after which none is
+sent, also when staging then refuses the run; a publication that an
+interrupt stops before its switch, which serves nothing new, also when the
+supply is on or the staged copy differs; and the power-off command, which
+finishes when an interrupt came first.

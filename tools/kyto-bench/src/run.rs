@@ -14,16 +14,24 @@
 //! power off, the run switches the supply off once more first.
 //!
 //! The steps that serve more than one cold boot are functions of their own,
-//! which the flow calls: [`check_sources`] and [`prepare_entry`] before any
-//! power command, [`publish_entry`], and [`switch_confirmed`] with
-//! [`power_off_confirmed`].
+//! which the flow and the commands call: [`check_sources`] and
+//! [`prepare_entry`] before any power command, [`publish_entry`], and
+//! [`switch_confirmed`] with [`power_off_confirmed`] and
+//! [`readings_confirm`].
 //!
 //! Every wait, timeout and time comes from the bench clock, and the flow
-//! ends a cold boot at its deadline whatever the console reports. The rules
-//! that judge what happened are those of `kyto_bench_core`, which a reader
-//! of the receipt calls again on what it records.
+//! ends a cold boot at its deadline whatever the console reports. A console
+//! stamps a chunk when it arrives, which can be before the run takes it, so
+//! the run takes every chunk stamped before now before it sends a step, and
+//! past a deadline it still takes a chunk stamped before that deadline. The
+//! rules that judge what happened are those of `kyto_bench_core`, which a
+//! reader of the receipt calls again on what it records.
+//!
+//! An interrupt that the bench catches stops the run: before the first
+//! power command, at once, even when staging refused the run; after it,
+//! once the cold boot under way has been switched off as usual, and the
+//! supply is switched off once more.
 
-use std::io::{self, Write as _};
 use std::panic::{self, AssertUnwindSafe};
 use std::rc::Rc;
 
@@ -47,11 +55,22 @@ use crate::gate::WriteGate;
 use crate::inputs::Inputs;
 use crate::record::{self, Capture, Got};
 
+/// Why a run gave no receipt.
+#[derive(Debug, PartialEq, Eq)]
+pub enum NoReceipt {
+    /// An input error, before any device was used: the nonce or the bench
+    /// could not be had.
+    Input(String),
+    /// An interrupt stopped the run. One that came after the run's first
+    /// power command switched the supply off once more.
+    Interrupted,
+}
+
 /// Runs the plan of `inputs` on the bench that `env` opens and returns its
-/// receipt, refused or judged. The error is an input error, before any
-/// device was used: the nonce or the bench could not be had.
-pub fn run(env: &dyn Env, inputs: &Inputs) -> Result<Receipt, String> {
-    let mut receipt = assemble::start(inputs, env.nonce()?, env.tool());
+/// receipt, refused or judged, or why it gave none.
+pub fn run(env: &dyn Env, inputs: &Inputs) -> Result<Receipt, NoReceipt> {
+    let nonce = env.nonce().map_err(NoReceipt::Input)?;
+    let mut receipt = assemble::start(inputs, nonce, env.tool());
     let mut sources = Vec::new();
     for (index, entry) in inputs.plan.entries.iter().enumerate() {
         let read = inputs.sources(entry);
@@ -60,45 +79,65 @@ pub fn run(env: &dyn Env, inputs: &Inputs) -> Result<Receipt, String> {
         }
         sources.push(read);
     }
-    let mut bench = env.open_bench(&inputs.board, &inputs.instance, &inputs.instance_dir)?;
-    for (index, read) in sources.into_iter().enumerate() {
-        let record = &mut receipt.entries[index];
-        if let Err(refusal) = prepare_entry(inputs, &mut bench, index, read, record) {
-            return Ok(assemble::refused(receipt, refusal));
-        }
+    let (board, instance) = (&inputs.board, &inputs.instance);
+    let open = env.open_bench(board, instance, &inputs.instance_dir);
+    let mut bench = open.map_err(NoReceipt::Input)?;
+    let prepared = sources
+        .into_iter()
+        .enumerate()
+        .try_for_each(|(index, read)| {
+            let record = &mut receipt.entries[index];
+            prepare_entry(env, inputs, &mut bench, index, read, record)
+        });
+    if bench.interrupt.caught() {
+        env.say("the run was interrupted before its first power command");
+        return Err(NoReceipt::Interrupted);
     }
-    let off_at = None;
+    if let Err(refusal) = prepared {
+        return Ok(assemble::refused(receipt, refusal));
+    }
+    let (off_at, interrupted) = (None, false);
     let mut flow = Flow {
+        env,
         inputs,
         bench,
         receipt,
         off_at,
+        interrupted,
     };
-    // A run that unwinds leaves the supply off, as far as the devices let
-    // it.
-    if let Err(panic) = panic::catch_unwind(AssertUnwindSafe(|| flow.run_entries())) {
-        let confirmation = &inputs.instance.parameters().confirmation;
-        abort_off(
-            &mut flow.bench,
-            confirmation,
-            &mut Vec::new(),
-            "the run stopped",
-        );
-        panic::resume_unwind(panic);
+    // A run that unwinds, or that an interrupt stops, leaves the supply
+    // off, as far as the devices let it.
+    let ran = panic::catch_unwind(AssertUnwindSafe(|| flow.run_entries()));
+    // An interrupt caught after the run's last check of it counts too.
+    flow.interrupted |= flow.bench.interrupt.caught();
+    if ran.is_err() || flow.interrupted {
+        let why = match ran {
+            Err(_) => "the run stopped",
+            Ok(()) => "the run was interrupted",
+        };
+        let confirmation = &instance.parameters().confirmation;
+        abort_off(env, &mut flow.bench, confirmation, &mut Vec::new(), why);
     }
-    Ok(assemble::finish(flow.receipt))
+    match ran {
+        Err(panic) => panic::resume_unwind(panic),
+        Ok(()) if flow.interrupted => Err(NoReceipt::Interrupted),
+        Ok(()) => Ok(assemble::finish(flow.receipt)),
+    }
 }
 
 /// Switches the supply off once more after a run stopped with the board
 /// perhaps on, records it in `events`, and says on standard error, after
 /// `why`, whether readings confirmed it.
-fn abort_off(bench: &mut Bench, confirmation: &Confirmation, events: &mut Vec<Event>, why: &str) {
+fn abort_off(
+    env: &dyn Env,
+    bench: &mut Bench,
+    confirmation: &Confirmation,
+    events: &mut Vec<Event>,
+    why: &str,
+) {
     let off = power_off_confirmed(bench, confirmation, events, 0);
     let not = if off.is_some() { "" } else { "not " };
-    let _ = writeln!(
-        io::stderr(),
-        "kyto-bench: {why}; readings did {not}confirm the power off"
-    );
+    env.say(&format!("{why}; readings did {not}confirm the power off"));
 }
 
 /// Records the source files `read` of entry `index` of `inputs` in `record`
@@ -129,8 +168,9 @@ pub fn check_sources(
 /// delivery device of `bench`, through the write gate of the entry, reads
 /// the staged copy back into `record` and checks it:
 /// [`payload::check_staged`]. A payload that the gate refuses, and a failure
-/// of the device, leave the copy unread.
+/// of the device, leave the copy unread, and `env` says why.
 pub fn prepare_entry(
+    env: &dyn Env,
     inputs: &Inputs,
     bench: &mut Bench,
     index: usize,
@@ -146,11 +186,7 @@ pub fn prepare_entry(
         .collect();
     let delivery = &mut *bench.delivery;
     let report = |error: &dyn std::fmt::Display| {
-        let name = &entry.name;
-        let _ = writeln!(
-            io::stderr(),
-            "kyto-bench: staging the payload of {name}: {error}"
-        );
+        env.say(&format!("staging the payload of {}: {error}", entry.name));
     };
     match WriteGate::new(&entry.writes, &inputs.board).stage(delivery, &files) {
         Ok(generation) => {
@@ -198,10 +234,9 @@ pub fn publish_entry(bench: &mut Bench, payload: &[PinnedFile], record: &mut Ent
     checks.iter().all(|check| check.result == Outcome::Pass)
 }
 
-/// Sends `command` to the power switch of `bench` and takes a reading every
-/// `poll_ms` of `confirmation` until readings confirm it or its timeout has
-/// passed, each recorded in `events` after `received` bytes; the time the
-/// command was sent, when readings confirmed it.
+/// Sends `command` to the power switch of `bench`, recorded in `events`
+/// after `received` bytes, and confirms it: [`readings_confirm`] from the
+/// time it was sent; that time, when readings confirmed it.
 pub fn switch_confirmed(
     bench: &mut Bench,
     confirmation: &Confirmation,
@@ -222,25 +257,40 @@ pub fn switch_confirmed(
     };
     let relay = bench.relay.clone();
     record::add(events, sent, received, EventKind::Power { command, relay });
-    let mut confirming = Confirming::new(confirmation, command, sent.0);
-    let (poll, mut next) = (Nanos::from_millis(confirmation.poll_ms), sent);
+    readings_confirm(bench, confirmation, command, sent, events, received).then_some(sent)
+}
+
+/// Takes a reading every `poll_ms` of `confirmation` from `since` until
+/// readings confirm `command` or its timeout has passed, each recorded in
+/// `events` after `received` bytes; whether readings confirmed it. A
+/// failure of the meter, recorded too, ends the readings.
+pub fn readings_confirm(
+    bench: &mut Bench,
+    confirmation: &Confirmation,
+    command: Command,
+    since: Nanos,
+    events: &mut Vec<Event>,
+    received: u64,
+) -> bool {
+    let mut confirming = Confirming::new(confirmation, command, since.0);
+    let (poll, mut next) = (Nanos::from_millis(confirmation.poll_ms), since);
     loop {
         next = bench.clock.wait_until(next.saturating_add(poll));
         let reading = match bench.confirm.read() {
             Ok(reading) => reading,
             Err(error) => {
                 record::failed(events, bench.clock.now(), received, &error);
-                return None;
+                return false;
             }
         };
         let (quantity, micro) = (bench.confirm.quantity(), reading.micro);
         let kind = EventKind::Reading { quantity, micro };
         record::add(events, reading.at, received, kind);
         if confirming.read(confirmation, quantity, micro, reading.at.0) {
-            return Some(sent);
+            return true;
         }
         if next.0 >= confirming.deadline() {
-            return None;
+            return false;
         }
     }
 }
@@ -258,19 +308,30 @@ pub fn power_off_confirmed(
 
 /// A run on an open bench.
 struct Flow<'a> {
+    env: &'a dyn Env,
     inputs: &'a Inputs,
     bench: Bench,
     receipt: Receipt,
     /// When readings last confirmed the supply off, if they did after the
     /// last power command.
     off_at: Option<u64>,
+    /// Whether an interrupt stopped the run.
+    interrupted: bool,
 }
 
 impl Flow<'_> {
+    /// Whether an interrupt stopped the run: one that the bench caught
+    /// stops it from now on.
+    fn stop(&mut self) -> bool {
+        self.interrupted |= self.bench.interrupt.caught();
+        self.interrupted
+    }
+
     /// Switches the supply off before the first entry, then runs the
-    /// entries in order until one is a bench fault. When readings did not
-    /// confirm the last power off, which only a fault leaves, the supply is
-    /// switched off once more, recorded in the events of the entry.
+    /// entries in order until one is a bench fault or an interrupt stops
+    /// the run. When readings did not confirm the last power off, which
+    /// only a fault leaves, the supply is switched off once more, recorded
+    /// in the events of the entry.
     fn run_entries(&mut self) {
         let (inputs, mut start) = (self.inputs, Vec::new());
         let confirmation = &inputs.instance.parameters().confirmation;
@@ -283,10 +344,13 @@ impl Flow<'_> {
                     break;
                 }
             }
+            if self.stop() {
+                return;
+            }
             if self.off_at.is_none() {
                 let events = &mut self.receipt.entries[index].events;
                 let why = "the supply was switched off again after a fault";
-                abort_off(&mut self.bench, confirmation, events, why);
+                abort_off(self.env, &mut self.bench, confirmation, events, why);
             }
             let payload = inputs.payload(entry);
             verdict::close_entry(&mut self.receipt, index, payload, entry.cold_boots);
@@ -298,8 +362,9 @@ impl Flow<'_> {
 
     /// Runs cold boot `number` of entry `index` and records it; its verdict,
     /// or `None` when it could not start: the supply was not confirmed off,
-    /// or the payload could not be served before any step of the cold boot
-    /// was recorded.
+    /// or the payload could not be served or an interrupt came before any
+    /// step of the cold boot was recorded. An interrupt takes no further
+    /// step, and the supply of a cold boot that started is switched off.
     fn cold_boot(&mut self, index: usize, number: usize) -> Option<Verdict> {
         let (inputs, off_at) = (self.inputs, self.off_at?);
         let (board, entry) = (&inputs.board, &inputs.plan.entries[index]);
@@ -310,6 +375,9 @@ impl Flow<'_> {
         let mut capture = Capture::new(matcher, entry.max_capture_bytes, Rc::clone(&clock));
         let mut on = None;
         for step in &board.cold_boot.order {
+            if self.stop() {
+                break;
+            }
             let done = match step {
                 Step::Publish => {
                     let record = &mut self.receipt.entries[index];
@@ -337,8 +405,9 @@ impl Flow<'_> {
         if capture.events.is_empty() {
             return None;
         }
-        if let Some(on) = on {
-            let reason = self.capture(&mut capture, entry, on);
+        if let Some(on) = on
+            && let Some(reason) = self.capture(&mut capture, entry, on)
+        {
             capture.event(EventKind::End { reason });
         }
         let received = capture.received();
@@ -353,38 +422,52 @@ impl Flow<'_> {
 
     /// Reads the console of a cold boot of `entry`, switched on at `on`,
     /// sending each step once it is armed, until the cold boot ends; the
-    /// reason it ended. A deadline ends it once the bench clock has reached
-    /// it, whatever the console reports.
-    fn capture(&mut self, capture: &mut Capture<'_>, entry: &Entry, on: Nanos) -> EndReason {
+    /// reason it ended, or `None` when an interrupt stopped the run. Before
+    /// it sends a step, it takes every chunk that the console stamped before
+    /// now, which can end the cold boot first, at its capture limit or once
+    /// its boot timeout has passed. A deadline ends it once the bench clock
+    /// has reached it, whatever the console reports, after a chunk that the
+    /// console stamped before the deadline is taken.
+    fn capture(
+        &mut self,
+        capture: &mut Capture<'_>,
+        entry: &Entry,
+        on: Nanos,
+    ) -> Option<EndReason> {
         let boot = on.saturating_add(Nanos::from_millis(entry.boot_timeout_ms));
-        let (clock, console) = (&self.bench.clock, &mut *self.bench.console);
-        loop {
+        while !self.stop() {
             if capture.matcher.ended() {
-                return EndReason::EndCondition;
+                return Some(EndReason::EndCondition);
             }
+            let (clock, console) = (&self.bench.clock, &mut *self.bench.console);
+            let now = clock.now();
             let deadline = capture
                 .matcher
                 .deadline()
                 .map_or(boot, |step| boot.min(Nanos(step)));
             let got = match capture.matcher.armed() {
-                Some(step) => {
-                    let bytes = entry.steps()[step].send.as_bytes();
-                    capture.send(console, step, bytes).map(|()| Got::Bytes)
-                }
-                None if clock.now() >= deadline => Ok(Got::Deadline),
-                None => capture.receive(console, deadline),
+                Some(step) if now <= boot => match capture.receive_held(console, now) {
+                    Ok(Got::Deadline) => {
+                        let bytes = entry.steps()[step].send.as_bytes();
+                        capture.send(console, step, bytes).map(|()| Got::Bytes)
+                    }
+                    got => got,
+                },
+                _ if now >= deadline => capture.receive_held(console, deadline),
+                _ => capture.receive(console, deadline),
             };
             match got {
                 Ok(Got::Bytes) => {}
                 Ok(Got::Deadline) if clock.now() < deadline => {}
-                Ok(Got::Deadline) if deadline == boot => return EndReason::BootTimeout,
-                Ok(Got::Deadline) => return EndReason::StepTimeout,
-                Ok(Got::Limit(reason)) => return reason,
+                Ok(Got::Deadline) if deadline == boot => return Some(EndReason::BootTimeout),
+                Ok(Got::Deadline) => return Some(EndReason::StepTimeout),
+                Ok(Got::Limit(reason)) => return Some(reason),
                 Err(error) => {
                     capture.failed(&error);
-                    return EndReason::DeviceError;
+                    return Some(EndReason::DeviceError);
                 }
             }
         }
+        None
     }
 }

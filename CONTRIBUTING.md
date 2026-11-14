@@ -2,9 +2,9 @@
 
 kyto is newly initialized. It has no design files or models yet. Its Cargo
 workspaces are the repository tasks in `xtask/` and the bench tool in
-`tools/`, which runs [run plans](docs/bench/formats.md#run-plans) on
-simulated devices and writes their receipts, but cannot drive a bench of
-real devices yet. Before proposing a change, enable the commit message hook
+`tools/`, which runs [run plans](docs/bench/formats.md#run-plans) on a bench
+of the devices that it has drivers for and on simulated devices, and writes
+their receipts. Before proposing a change, enable the commit message hook
 once and run these commands from the repository root:
 
 ```sh
@@ -75,14 +75,20 @@ In the `tools` workspace, Clippy reads `tools/clippy.toml`, which bans
 sleeping and reading the system clock, since every time and wait of a run
 comes from the bench clock, and running an external program; only the build
 script of `kyto-bench`, which asks Git for the commit and whether the working
-tree is clean, the tests that run the `kyto-bench` binary and the tests of
+tree is clean, the tests that run the `kyto-bench` binary, the tests of
 `kyto-bench-os` that catch signals in a child process of their own test
-binary run one. `kyto-bench-os` is the one member that may use unsafe code,
-read the system clock and call the C library through `libc`: every other
-member forbids unsafe code, and within `kyto-bench-os` the bans are lifted
-only by `allow` attributes on the module declarations of
-`tools/kyto-bench-os/src/lib.rs`, each of which a test of the workspace
-pins.
+binary, and a test of the TFTP directory that runs its own test binary
+again through `sh` under the umask `077`, run one. `kyto-bench-os` is the
+one member that may use unsafe code, read the system clock and call the C
+library through `libc`: every other member forbids unsafe code, and within
+`kyto-bench-os` the bans are lifted only by `allow` attributes on the
+module declarations of `tools/kyto-bench-os/src/lib.rs`, each of which a
+test of the workspace pins. `kyto-bench` reaches the meter's USB bridge
+through the safe interface of the `hidapi` crate. On macOS its build
+compiles the crate's bundled C library with the system C compiler, which
+needs the Xcode Command Line Tools, and links IOKit, CoreFoundation and
+AppKit; on Linux it uses the crate's Rust backend over hidraw and compiles
+no C.
 `tools/kyto-bench-core/clippy.toml` repeats these bans, which a test of the
 workspace checks, and also bans the entry points of the standard library to
 files and links, the network, environment variables, process and system
@@ -190,15 +196,16 @@ parts.
 
 ## Hardware-in-the-loop bench
 
-The bench hardware does not exist yet. The bench tool under `tools/` runs
-[run plans](docs/bench/formats.md#run-plans) on simulated devices and writes
-their [receipts](docs/bench/formats.md#receipts). It has drivers for a USB
-relay module and a USB serial adapter, which no run uses yet, and none for a
-supply meter or the TFTP directory, so it cannot run a bench yet. From the
-repository root, this runs the example run plan on the simulated devices of
-the example instance configuration and writes the receipt and its public
-version into `tools/target/example-run`, a directory that must not exist
-yet:
+The bench tool under `tools/` runs
+[run plans](docs/bench/formats.md#run-plans) on a bench and writes their
+[receipts](docs/bench/formats.md#receipts). It has drivers for the devices
+of one bench, which [wiring a bench](#wiring-a-bench) describes, with a
+Raspberry Pi 5 under test, and a simulated device for every role, on which
+it runs its example; kyto has no bench hardware of its own yet, such as an
+adapter board. From the repository root, this runs the example run plan on
+the simulated devices of the example instance configuration and writes the
+receipt and its public version into `tools/target/example-run`, a directory
+that must not exist yet:
 
 ```sh
 cargo run --locked --release --manifest-path tools/Cargo.toml -- run \
@@ -211,20 +218,151 @@ cargo run --locked --release --manifest-path tools/Cargo.toml -- run \
 Its exit status is 0 for `PASS`, 1 for `FAIL`, 2 for a usage or input error
 or a receipt that cannot be written, with no receipt left, 3 for
 `BENCH FAULT`, 4 for a run refused before any power command, 5 when the
-receipt was written but its public version was refused or cannot be
-written, and 101 when the tool stopped on an error of its own, with no
-receipt left.
-[The formats page](docs/bench/formats.md) describes the command, the files it
-reads and writes, and every rule of a verdict.
+receipt was written but its public version was refused or cannot be written,
+101 when the tool stopped on an error of its own, and 130 when SIGINT,
+SIGTERM or SIGHUP stopped a run on a bench of real devices after the run
+opened the bench, with no receipt left in either case; one that comes before
+then ends the process as the signal does by default. A run acts on an
+interrupt within 100 ms while it reads the console, and otherwise when the
+step under way ends: the longest steps wait the off interval of the board
+description, the console's `ready_timeout_ms` or a confirmation timeout, and
+a relay command whose port never sends its frame does not end, as
+[wiring a bench](#wiring-a-bench) says. The cold boot under way is then
+switched off and confirmed as usual, which takes up to `off_timeout_ms`, and
+the supply is switched off once more, whose readings take up to another
+`off_timeout_ms`; each power command adds about 400 ms of relay timing, a
+wait of 250 ms before its frame and 150 ms after it.
+
+Two more commands use a bench without a run, and write no receipt; with
+the instance configuration, plan, payload root and entry of a bench in
+place of the placeholders, they run as:
+
+```sh
+cargo run --locked --release --manifest-path tools/Cargo.toml -- power-off \
+  --instance <file>
+cargo run --locked --release --manifest-path tools/Cargo.toml -- publish \
+  --plan <file> --instance <file> --payload-root <dir> --entry <name>
+```
+
+`power-off` switches the supply off once and waits for readings to confirm
+it. Its exit status is 0 when they did, 2 for a usage or input error, 3 for
+`BENCH FAULT`, when they did not or a device failed, and 101 for an error of
+the tool; an interrupt does not stop it. It takes no lock, so it also cuts a
+run or a publication that holds the bench, and says so first: that run's
+receipt does not show the power off, is no evidence and is discarded. Such a
+run or publication also holds the meter's USB bridge, exclusively on macOS,
+so `power-off` then still sends its power off but cannot confirm it and
+exits with 3; run `power-off` again once that run has ended to confirm the
+supply off. `publish` checks the payload of one entry, stages it and checks
+the staged copy as a run does, then, without a power command, makes it the
+generation that the board is served, only while readings confirm the supply
+off, and checks the copy that the board is served. Its exit status is 0 when
+it published, 2 for a usage or input error, 3 for `BENCH FAULT`, when the
+meter failed before the switch, the switch failed, or the served copy could
+not be read or differs, 4 when a payload check failed, the TFTP directory
+could not be staged, as when another run or publication holds it or a write
+failed, or readings did not confirm the supply off, 101 for an error of the
+tool and 130 for an interrupt before the switch; with 2, 4 and 130 the board
+is served what it was served before. `publish` relies on readings alone to
+tell that the board is off, so when its state is unknown, run `power-off`
+first.
+[The formats page](docs/bench/formats.md) describes the commands, the files
+they read and write, and every rule of a verdict.
 
 The tool drives a bench through four device interfaces: power commands; a
 reading of the supply from a device of its own, which confirms power-on and
 power-off; the serial console, whose bytes are kept exactly as received; and
 payload delivery to the directory that the board reads over TFTP. Every
 time, wait and timeout of a run comes from a clock that the bench provides.
-Each interface has one simulated device, and the four share a simulated
-clock, so a run on them waits for nothing in real time and gives the same
-times in every run.
+Each interface has a simulated device and a driver for one real device. On
+simulated devices the four share a simulated clock, so a run on them waits
+for nothing in real time and gives the same times in every run. On a bench,
+the clock is the monotonic clock of the host, started when the bench opens,
+which does not run while the host sleeps. Its times are in nanoseconds, but
+the console stamps each chunk when it arrives on the host, after the
+adapter's own buffering, so a stamp can be later than the board wrote the
+bytes, and every byte of a chunk has the same stamp.
+
+### Wiring a bench
+
+Wire a bench with its supply unplugged at the wall. Every device, model and
+connection is listed in the bench's instance configuration, and a change of
+any of them is a new bench hardware revision.
+
+- **Supply and relay.** An LCUS-1 USB relay module, powered and commanded
+  by the bench host over its USB serial port (a CH340 at 9600 baud, 8 data
+  bits, no parity, 1 stop bit), switches the board's supply. Its COM and NO
+  contacts are in series with the VBUS conductor between a USB-C supply and
+  the board; ground, CC and every other conductor pass through unswitched,
+  so USB-C negotiation and the ground stay connected. Never cut only one of
+  several parallel conductors. The relay's state is never read back, and
+  its reply confirms nothing. The tool waits without a bound for the port
+  to send a command's frame, and a signal does not end that wait: a relay
+  port that never sends it holds the command, and the run, until the
+  process is killed.
+- **Confirmation.** A TI INA228 power monitor on an Adafruit 5832 board
+  reads the supply voltage on the board side of the relay. Its 15 mΩ shunt
+  is in the VBUS conductor between the relay and the board, VIN+ to the
+  relay's NO contact and VIN− to the board, through its screw terminals
+  rather than its header pins; its VBUS pin is joined to VIN+, by its VBUS
+  solder jumper or by a short wire, so that it reads the voltage at VIN+;
+  and its GND is wired to the board's ground. A Microchip MCP2221A USB
+  bridge, such as an Adafruit 4471, powers it and reads it from the bench
+  host at its default address 0x40. Connect only that one bridge: the tool
+  opens the one bridge of the host.
+- **Console.** A USB serial adapter at 3.3 V TTL, such as one with an FTDI
+  FT232R, is connected to the board's debug UART: its TX to the board's RX,
+  its RX to the board's TX, and ground to ground. Its VCC is not connected.
+  The line settings are those of the board description.
+- **Delivery.** The bench host serves the payload over TFTP from a
+  directory that holds a link named after the path prefix of the instance
+  configuration. The board's bootloader boots from the network with that
+  server and prefix, and writes its log to the debug UART.
+- **Board.** Keep no bootable storage, such as an SD card, in the board
+  unless a run plan needs it: when the network boot fails, the firmware
+  boots from it, and whatever it holds then runs unattended. Jumpers and
+  fixtures on the board are part of the bench, such as GPIO17 (header pin
+  11) joined to GPIO27 (header pin 13) through 1 kΩ. Join two GPIO pins
+  only through a series resistor, so that a payload that drives both as
+  outputs at opposite levels cannot short them.
+
+The console adapter is powered by the host and holds the board's RX line
+high while the supply is off, which can feed a voltage back into the board
+and keep the supply reading above zero after a power off. Measure it before
+setting the off threshold.
+
+A run takes every chunk that the console holds before it sends a step, but
+output that is still on its way to the host at that moment is recorded
+after the send and can be read as the step's response. A step's `expect`
+should therefore match only output that its send causes.
+
+### Instance configuration and thresholds
+
+Start a bench's instance configuration from
+[the template](tools/templates/instance.toml);
+[the example of a bench](tools/examples/bench-instance.toml) shows the
+connections of one with a GPIO loopback. Keep it, with the bench's receipts,
+in the bench's private instance, outside this repository. Generate its salt
+once with `openssl rand -hex 16`, and fill in this machine's settings of
+each device, which
+[the formats page](docs/bench/formats.md#local-settings) lists.
+
+Set `[confirmation]` from readings of the supply voltage at the board side
+of the relay taken with a multimeter, both with the supply off and the
+console adapter connected, and with the supply on: the on threshold below
+the lowest reading with the supply on, such as 4.5 V when every such
+reading is at least 4.75 V, and the off threshold above the highest reading
+with the supply off, by a margin such as 0.5 V. When the off threshold
+would not stay at or below half of the on threshold, the supply voltage
+cannot tell the two states apart on that bench, and the wiring must change,
+for example by a series resistor in the adapter's TX line.
+
+After any change to the meter's wiring or to its bridge, repeat the check
+with a multimeter in both states before relying on `power-off` or
+`publish`: a fault in the meter's wiring can read as off while the board is
+on, and `publish` switches on readings alone.
+
+### Rules of the tool and the bench
 
 The rules below apply to the tool now and to the hardware from the first
 change that adds it.
@@ -236,29 +374,34 @@ change that adds it.
   the interrupt signals and the system clock, the one member that may use
   unsafe code and `libc`, whose serial transport is copied from krepi as the
   [porting record](PORTING.md) lists; and `kyto-bench`, the devices, the
-  flow of a run and the command. External dependencies come only from
-  crates.io and are pinned to exact versions. The tool does not depend on any
-  one bench or on the system under test: what it knows of a board is in the
-  board's [description](docs/bench/formats.md#board-descriptions), and what
+  flow of a run and the three commands, which reaches the meter's USB
+  bridge through the `hidapi` crate, whose bundled C library its build
+  compiles on macOS. External dependencies come only from crates.io and are
+  pinned to exact versions. The tool does not depend on any one bench or on
+  the system under test: what it knows of a board is in the board's
+  [description](docs/bench/formats.md#board-descriptions), and what
   it knows of a bench is in the bench's instance configuration.
 - **Instance configuration.** A bench's own configuration, such as addresses,
   relay channels, local paths and credentials, is kept outside this
-  repository. The repository holds templates and examples only, such as the
-  [example instance configuration](tools/examples/instance.toml) of simulated
-  devices, whose salt is published, so that no bench may use it.
+  repository. The repository holds templates and examples only: the
+  [instance configuration template](tools/templates/instance.toml) and the
+  [example of a bench](tools/examples/bench-instance.toml) of real devices,
+  which hold no salt and none of a machine's settings, and the
+  [example instance configuration](tools/examples/instance.toml) of
+  simulated devices, whose salt is published, so that no bench may use it.
 - **Safety.** Power-on and power-off are each confirmed by readings of the
   supply, never by the relay's own reply. A run switches the supply off and
-  waits for readings to confirm it before the first cold boot and after
-  every cold boot that started, one that failed or faulted too, and its
-  receipt records the commands and the readings; a run that a fault ends
-  before readings confirmed the last power off, and a run that stops on an
-  error of the tool, switch the supply off once more and say whether
+  waits for readings to confirm it before the first cold boot and after every
+  cold boot that started, one that failed or faulted too, and its receipt
+  records the commands and the readings; a run that a fault ends before
+  readings confirmed the last power off, and a run that stops on an error of
+  the tool or an interrupt, switch the supply off once more and say whether
   readings confirmed it. Operations that write firmware, EEPROM contents or
   storage media are off by default: a run refuses a payload file that the
   board description lists as letting the firmware make such a write, before
-  anything is staged or powered, unless its run plan entry enables that
-  class of write explicitly. An enable is needed for a write but does not
-  authorize one; that is decided outside the tool.
+  anything is staged or powered, unless its run plan entry enables that class
+  of write explicitly. An enable is needed for a write but does not authorize
+  one; that is decided outside the tool.
 - **Receipts.** A receipt records the tool revision, the bench hardware
   revision, the digest of every payload file, the commands sent, the console
   transcript and every observation, with checks and verdicts. The tool writes
@@ -269,7 +412,11 @@ change that adds it.
   from what they record. A receipt of a run on simulated devices, or of a
   tool whose commit is unknown or whose working tree had changes, is not
   evidence. When the tool or the bench hardware changes, results that depend
-  on it are taken again.
+  on it are taken again. A receipt of a run on a bench is kept with the
+  bench's private instance, outside this repository, and a record names it
+  by its commit and SHA-256. The tool never deletes a published generation
+  of the TFTP directory, so whoever runs the bench removes old ones from
+  `releases/` by hand, never the one that the link names.
 - **Tests.** The rules that decide a verdict, check an image digest and power
   a board off after a failure need written requirements and a contract,
   contract tests with negative cases, and fuzz tests on untrusted input such
@@ -282,10 +429,12 @@ change that adds it.
   workspace, and the contract lists the tests that remain as
   [open obligations](docs/bench/contract.md#open-obligations). The rest of
   the tool is tested on the host against simulated devices, on which the
-  tests run the example run plan through the command, and its drivers of
-  the relay and the console on pseudo-terminals, with a clock that the test
-  moves; no test opens a real device. A bench self-test shows only that a
-  bench works.
+  tests run the example run plan and the other commands through the command
+  line, and its drivers: those of the relay and the console on
+  pseudo-terminals, with a clock that the test moves, that of the meter on
+  a simulated USB bridge and INA228, and that of the TFTP directory in
+  temporary directories; no test opens a real device. A bench self-test
+  shows only that a bench works.
 - **Bench hardware.** Adapter boards, fixtures and other bench parts keep
   their design files under `bench/` and follow the rules for design files and
   records above.

@@ -6,7 +6,8 @@
 //! [`cli`], reads the files of a run ([`inputs`]), opens the bench of the
 //! instance configuration ([`env`]), runs the plan ([`run`]) while it records
 //! what happens ([`record`]), and writes the receipt ([`assemble`]) and its
-//! public version ([`output`]). The formats and rules it uses are in
+//! public version ([`output`]); its other [`commands`] switch the supply off
+//! and publish a payload. The formats and rules it uses are in
 //! `kyto_bench_core`.
 
 // A message that cannot be written, as when nothing reads it any more, must
@@ -16,6 +17,7 @@
 
 pub mod assemble;
 pub mod cli;
+pub mod commands;
 pub mod device;
 pub mod drivers;
 pub mod env;

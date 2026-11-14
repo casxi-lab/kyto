@@ -29,6 +29,14 @@ clap = { version = "=4.6.7", default-features = false, features = ["std", "help"
 # The 128-bit nonce of each receipt is read from the operating system's
 # generator with `fill`, which needs no feature.
 getrandom = { version = "=0.4.3", default-features = false }
+# The supply meter's USB bridge is a HID device, reached through the safe
+# interface of the crate. On macOS the crate compiles its bundled C library
+# against IOKit and opens a device exclusively, so `macos-shared-device` is
+# left out. On Linux, where only the checks run, the Rust backend over
+# hidraw with `basic-udev` compiles no C and needs no system library, while
+# the default backends need libudev or libusb through pkg-config, so they
+# are left out.
+hidapi = { version = "=2.6.7", default-features = false, features = ["linux-native-basic-udev"] }
 # The terminal, lock and signal calls of the serial transport copied from
 # krepi and of the command port of `kyto-bench-os`, and the pseudo-terminals,
 # signals and child processes of their tests. Only the C declarations are

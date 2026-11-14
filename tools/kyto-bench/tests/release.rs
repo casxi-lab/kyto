@@ -5,8 +5,7 @@
 //! the test profile under `cargo test`, the release profile only under
 //! `cargo test --release`.
 
-// These tests run the binary of the tool, the one program that a test of
-// the tool starts.
+// These tests run the binary of the tool, the one program that they start.
 #![allow(clippy::disallowed_types)]
 
 use std::fs;
@@ -95,6 +94,46 @@ fn the_example_runs_to_pass_with_the_built_binary() {
     assert_eq!(first, second);
 }
 
+/// The exit status and standard output of the built binary with `args`.
+fn output_of(args: &[&std::ffi::OsStr]) -> (Option<i32>, String) {
+    let output = Command::new(env!("CARGO_BIN_EXE_kyto-bench"))
+        .args(args)
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    (output.status.code(), stdout)
+}
+
+#[test]
+fn the_built_binary_says_what_power_off_and_publish_did() {
+    let examples = examples();
+    let (plan, instance) = (
+        examples.join("run-plan.toml"),
+        examples.join("instance.toml"),
+    );
+    let power_off = output_of(&[
+        "power-off".as_ref(),
+        "--instance".as_ref(),
+        instance.as_ref(),
+    ]);
+    let off = "OFF: readings confirmed it; the last read 0 µV\n";
+    assert_eq!(power_off, (Some(0), off.into()));
+    let payloads = examples.join("payload");
+    let publish = output_of(&[
+        "publish".as_ref(),
+        "--plan".as_ref(),
+        plan.as_ref(),
+        "--instance".as_ref(),
+        instance.as_ref(),
+        "--payload-root".as_ref(),
+        payloads.as_ref(),
+        "--entry".as_ref(),
+        "echo".as_ref(),
+    ]);
+    assert_eq!(publish, (Some(0), "PUBLISHED: echo as g000001\n".into()));
+}
+
 #[test]
 fn the_built_binary_refuses_an_unenabled_eeprom_payload() {
     let dir = scratch("eeprom");
@@ -160,4 +199,21 @@ fn output_that_nothing_reads_changes_no_exit_status() {
         assert_eq!(ran.code(), Some(status), "{}", plan.display());
         assert_eq!(out.join("receipt.json").exists(), status == 0);
     }
+}
+
+#[test]
+fn the_built_binary_says_an_input_error_on_standard_error() {
+    // A plan that cannot be read: an input error, said on standard error as
+    // one line after the name of the tool, and nothing on standard output.
+    let dir = scratch("input-error");
+    let (plan, out) = (dir.join("absent.toml"), dir.join("out"));
+    let output = kyto_bench(&plan, &examples().join("payload"), &out)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let error = fs::read(&plan).unwrap_err();
+    let said = format!("kyto-bench: cannot read {}: {error}\n", plan.display());
+    assert_eq!(String::from_utf8(output.stderr).unwrap(), said);
+    assert!(!out.exists(), "no output directory");
 }

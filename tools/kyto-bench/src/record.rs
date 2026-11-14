@@ -38,7 +38,12 @@ pub fn failed(events: &mut Vec<Event>, at: Nanos, received: u64, error: &DeviceE
     );
 }
 
-/// What [`Capture::receive`] got.
+/// A failure of the console.
+fn fault(detail: &str) -> Result<Got, DeviceError> {
+    Err(DeviceError::new(Role::Console, detail))
+}
+
+/// What [`Capture::receive`] or [`Capture::receive_held`] got.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Got {
     /// Bytes, kept whole, or none.
@@ -118,12 +123,34 @@ impl<'a> Capture<'a> {
         console: &mut dyn Console,
         deadline: Nanos,
     ) -> Result<Got, DeviceError> {
-        let fault = |detail| Err(DeviceError::new(Role::Console, detail));
-        let (at, bytes) = match console.receive(deadline)? {
-            Received::Bytes { at, bytes } => (at.0, bytes),
-            Received::Deadline { .. } => return Ok(Got::Deadline),
-            Received::Closed { .. } => return fault("the console closed"),
-        };
+        match console.receive(deadline)? {
+            Received::Bytes { at, bytes } => self.keep(at.0, &bytes),
+            Received::Deadline { .. } => Ok(Got::Deadline),
+            Received::Closed { .. } => fault("the console closed"),
+        }
+    }
+
+    /// Receives from `console` a chunk that it holds already, stamped
+    /// before `by`, a time that has passed: it asks once, with a deadline
+    /// 1 ns before `by`, so that the console does not wait. A chunk is kept
+    /// as [`Capture::receive`] keeps one; no bytes, a closed port and a
+    /// chunk stamped at `by` or later, which only a console that breaks its
+    /// contract gives and whose bytes are dropped, are [`Got::Deadline`].
+    pub fn receive_held(
+        &mut self,
+        console: &mut dyn Console,
+        by: Nanos,
+    ) -> Result<Got, DeviceError> {
+        match console.receive(Nanos(by.0.saturating_sub(1)))? {
+            Received::Bytes { at, bytes } if at < by && !bytes.is_empty() => {
+                self.keep(at.0, &bytes)
+            }
+            _ => Ok(Got::Deadline),
+        }
+    }
+
+    /// Keeps the chunk `bytes`, stamped `at`, as far as there is room.
+    fn keep(&mut self, at: u64, bytes: &[u8]) -> Result<Got, DeviceError> {
         if self.index.last().is_some_and(|&[_, last]| at < last) {
             return fault("the console stamped a chunk before the one before it");
         }
@@ -249,6 +276,61 @@ mod tests {
             .map(|e| (e.at_ns, e.received))
             .collect();
         assert_eq!(kinds, [(0, 0), (MS, 3), (9 * MS, 6)]);
+    }
+
+    /// A console that gives what it holds, whatever the deadline, and then
+    /// the deadline, and keeps the deadlines that it was given.
+    struct Given(Option<Received>, Vec<Nanos>);
+
+    impl Console for Given {
+        fn open(&mut self, _: Nanos) -> Result<Nanos, DeviceError> {
+            Ok(Nanos(0))
+        }
+
+        fn receive(&mut self, deadline: Nanos) -> Result<Received, DeviceError> {
+            self.1.push(deadline);
+            Ok(self.0.take().unwrap_or(Received::Deadline { at: deadline }))
+        }
+
+        fn send(&mut self, _: &[u8]) -> Result<Nanos, DeviceError> {
+            Ok(Nanos(0))
+        }
+
+        fn close(&mut self) -> Result<(), DeviceError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_held_chunk_is_taken_only_when_it_was_stamped_before_its_time() {
+        let (board, tftp) = context();
+        let plan = plan("sends = false");
+        let entry = &plan.entries[0];
+        let world = SimWorld::new();
+        let matcher = Matcher::new(&board, entry, &tftp, entry.files(&[]).unwrap());
+        let mut capture = Capture::new(matcher, 9, Rc::new(world.clone()));
+        let by = Nanos(5 * MS);
+        let chunk = |at, bytes: &[u8]| Received::Bytes {
+            at: Nanos(at),
+            bytes: bytes.to_vec(),
+        };
+        // A chunk stamped at the time or later, no bytes and a closed port
+        // are the deadline, and nothing is kept.
+        for given in [
+            Some(chunk(5 * MS, b"ab")),
+            Some(chunk(6 * MS, b"ab")),
+            Some(chunk(MS, b"")),
+            Some(Received::Closed { at: Nanos(MS) }),
+            None,
+        ] {
+            let mut console = Given(given, Vec::new());
+            assert_eq!(capture.receive_held(&mut console, by), Ok(Got::Deadline));
+            assert_eq!(console.1, [Nanos(5 * MS - 1)], "the console need not wait");
+        }
+        assert!(capture.bytes.is_empty() && capture.index.is_empty());
+        let mut console = Given(Some(chunk(5 * MS - 1, b"ab")), Vec::new());
+        assert_eq!(capture.receive_held(&mut console, by), Ok(Got::Bytes));
+        assert_eq!(capture.index, [[0, 5 * MS - 1]]);
     }
 
     #[test]

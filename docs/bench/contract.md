@@ -2,7 +2,8 @@
 
 This page is the contract of the rules of the kyto bench tool that decide a
 verdict, check payload digests and the tool's own revision, and power the
-board off and report after a failure: the names of the rules, the functions
+board off and report after a failure or an interrupt: the names of the
+rules, the functions
 that apply them, what a run checks before any power command, how the rules
 keep their results the same and their work bounded, and the tests of each
 [requirement](requirements.md). The [formats page](formats.md) gives the
@@ -41,18 +42,21 @@ functions on a receipt.
 | --- | --- | --- | --- |
 | `payload::check_entry`, with `payload::check_variants` | `kyto-bench-core` | `run::check_sources`; `rejudge::rejudge` | `PROV-R01`, `PROV-R04`, `PROV-R05`, `PROV-R06` |
 | `payload::check_staged` | `kyto-bench-core` | `run::prepare_entry`; `rejudge::rejudge` | `PROV-R02`, `PROV-R04` |
-| `payload::check_served` | `kyto-bench-core` | `run::publish_entry`; `verdict::entry_checks` | `PROV-R03` |
+| `payload::check_served` | `kyto-bench-core` | `run::publish_entry`; `verdict::entry_checks`; `commands::publish` | `PROV-R03` |
 | `verdict::judge` | `kyto-bench-core` | `assemble::cold_boot`; `rejudge::rejudge` | `VERD-R05` to `VERD-R11`, `POWER-R03` |
 | `verdict::entry_checks`, `verdict::close_entry` | `kyto-bench-core` | the flow of `run::run`; `rejudge::rejudge` | `VERD-R02`, `PROV-R03`, `POWER-R03` |
 | `verdict::cold_boot`, `verdict::entry`, `verdict::run` | `kyto-bench-core` | `assemble::cold_boot`, `assemble::finish`; `verdict::close_entry`; `rejudge::rejudge` | `VERD-R01`, `VERD-R02`, `VERD-R03` |
-| `power::Confirming`, `power::confirmed`, `power::off_confirmed_at` | `kyto-bench-core` | `run::switch_confirmed`; the flow of `run::run`; `power::cold_boot_checks`; `rejudge::rejudge` | `POWER-R01`, `POWER-R02` |
+| `power::Confirming`, `power::confirmed`, `power::off_confirmed_at` | `kyto-bench-core` | `run::readings_confirm`; the flow of `run::run`; `power::cold_boot_checks`; `rejudge::rejudge` | `POWER-R01`, `POWER-R02` |
 | `power::start_check`, `power::cold_boot_checks`, `power::device_errors` | `kyto-bench-core` | `verdict::entry_checks`; `verdict::judge` | `POWER-R02`, `POWER-R03` |
 | `evidence::eligibility` | `kyto-bench-core` | `assemble::start`; `rejudge::rejudge` | `PROV-R07` |
-| `receipt::Receipt::parse` | `kyto-bench-core` | readers of a receipt | `VERD-R03`, `VERD-R10`, `PROV-R07` |
+| `receipt::Receipt::parse` | `kyto-bench-core` | readers of a receipt | `VERD-R03`, `VERD-R09`, `VERD-R10`, `PROV-R07` |
 | `rejudge::rejudge` | `kyto-bench-core` | readers of a receipt | `VERD-R04`, `VERD-R12`, `PROV-R04` |
-| `run::run` | `kyto-bench` | `cli::run_plan` | `VERD-R04`, `VERD-R06`, `PROV-R01`, `PROV-R02`, `POWER-R02`, `POWER-R04`, `POWER-R05` |
-| `run::switch_confirmed`, `run::power_off_confirmed` | `kyto-bench` | the flow of `run::run` | `POWER-R01`, `POWER-R02` |
-| `cli::run` | `kyto-bench` | `main::main`, the binary | `POWER-R05`, `POWER-R06` |
+| `run::run` | `kyto-bench` | `cli::run_plan` | `VERD-R04`, `VERD-R06`, `VERD-R09`, `PROV-R01`, `PROV-R02`, `POWER-R02`, `POWER-R04`, `POWER-R05`, `POWER-R07` |
+| `run::switch_confirmed`, `run::power_off_confirmed`, `run::readings_confirm` | `kyto-bench` | the flow of `run::run`; `commands::power_off`; `commands::publish` | `POWER-R01`, `POWER-R02` |
+| `commands::power_off`, `commands::publish` | `kyto-bench` | `cli::run` | `POWER-R01`, `POWER-R02`, `POWER-R06`, `POWER-R07`, `PROV-R01`, `PROV-R02`, `PROV-R03` |
+| `drivers::open` | `kyto-bench` | `env::HostEnv::open_bench` | `POWER-R07` |
+| `env::Env::say`, `env::say_to` | `kyto-bench` | `run::run`, `run::prepare_entry`, `cli::run`, `commands::power_off`, `commands::publish` | `POWER-R04`, `POWER-R05` |
+| `cli::run` | `kyto-bench` | `main::main`, the binary | `POWER-R05`, `POWER-R06`, `POWER-R07` |
 | `provenance::ToolRevision::built`, with the build script | `kyto-bench` | `env::Env::tool` | `PROV-R08` |
 
 ## Rule names
@@ -203,6 +207,13 @@ boot is not powered.
   IPv6 address of 2001:db8::/32, `::` or `::1`, a serial number chosen for
   the examples or the recordings, the SD card identifier, card-specific
   data or partition UUID chosen for the recordings, or `#` alone.
+  `the_instance_template_and_the_bench_example_hold_documentation_values_only`,
+  in the same file, fails unless the
+  [instance configuration template](../../tools/templates/instance.toml) and
+  the [example of a bench of real devices](../../tools/examples/bench-instance.toml)
+  hold such values alone, with the server address 192.0.2.10 and the path
+  prefix `example/`, no absolute path, a salt that is not one and no value
+  in the tables of `[local]`.
 - `tools/kyto-bench/tests/fuzz.rs` fuzz tests the parsing of untrusted
   input. A SplitMix64 generator written in that file makes each case from
   the constant `SEED`, the name of its target without `fuzz_` and its
@@ -262,7 +273,9 @@ boot is not powered.
     changed, the rule, entry, subject or detail of a refusal among them,
     re-deriving gives back the receipt that the run wrote; and re-deriving a
     receipt in which an entry after a bench fault was given the events or cold
-    boots of that entry fails at the JSON pointer of the entry.
+    boots of that entry fails at the JSON pointer of the entry; and a receipt
+    whose first send is moved inside a chunk is refused at the JSON pointer
+    of its `received`.
 
   Each target also fails when too few of its cases reach what it checks,
   such as sends, segments, a CR and its LF in two chunks, lone CR bytes,
@@ -270,12 +283,12 @@ boot is not powered.
   index read and one refused under each rule of an index, a run of each
   verdict and a refused run, cold boots that reach their capture limit,
   forged receipts that reading refuses, forged judgements that re-deriving
-  undoes, forged refusals among them, and entries that ran after a bench
-  fault, or, for the run plans, when too few or too many of the changed
-  plans are read, or too few with a value at a limit are read or with a
-  value just past one refused. `fuzz_deeper`, which `#[ignore]` keeps out
-  of the check, runs a hundred times as many cases of each target, for a
-  deeper search:
+  undoes, forged refusals among them, entries that ran after a bench fault,
+  and sends moved inside a chunk, or, for the run plans, when too few or
+  too many of the changed plans are read, or too few with a value at a
+  limit are read or with a value just past one refused. `fuzz_deeper`,
+  which `#[ignore]` keeps out of the check, runs a hundred times as many
+  cases of each target, for a deeper search:
 
   ```sh
   cargo test --release --locked --manifest-path tools/Cargo.toml --test fuzz -- --ignored
@@ -348,6 +361,8 @@ it.
 | [VERD-R06](requirements.md#verd-r06) | `a_cold_boot_ends_at_its_deadline_whatever_the_console_reports` | `tools/kyto-bench/tests/run.rs` | negative |
 | [VERD-R06](requirements.md#verd-r06) | `a_boot_timeout_fails_and_the_supply_is_confirmed_off` | `tools/kyto-bench/tests/run.rs` | negative |
 | [VERD-R06](requirements.md#verd-r06) | `a_deadline_that_the_console_reports_early_ends_no_cold_boot` | `tools/kyto-bench/tests/run.rs` | positive |
+| [VERD-R06](requirements.md#verd-r06) | `a_chunk_held_from_before_a_passed_deadline_is_read` | `tools/kyto-bench/tests/run.rs` | positive |
+| [VERD-R06](requirements.md#verd-r06) | `a_step_armed_after_the_boot_deadline_is_not_sent` | `tools/kyto-bench/tests/run.rs` | negative |
 | [VERD-R07](requirements.md#verd-r07) | `firmware_versions_and_segments_are_those_of_the_entry` | `tools/kyto-bench-core/src/verdict.rs` | negative |
 | [VERD-R07](requirements.md#verd-r07) | `a_firmware_version_other_than_expected_fails` | `tools/kyto-bench-core/src/verdict.rs` | negative |
 | [VERD-R07](requirements.md#verd-r07) | `the_checks_of_the_example_runs_are_fixed` | `tools/kyto-bench/tests/run.rs` | positive |
@@ -361,6 +376,9 @@ it.
 | [VERD-R09](requirements.md#verd-r09) | `an_entry_that_declares_no_sends_fails_when_one_is_sent` | `tools/kyto-bench-core/src/verdict.rs` | negative |
 | [VERD-R09](requirements.md#verd-r09) | `a_response_without_its_line_feed_is_no_response` | `tools/kyto-bench/tests/run.rs` | negative |
 | [VERD-R09](requirements.md#verd-r09) | `fuzz_transcripts` | `tools/kyto-bench/tests/fuzz.rs` | positive |
+| [VERD-R09](requirements.md#verd-r09) | `a_line_that_came_before_a_send_is_no_response` | `tools/kyto-bench/tests/run.rs` | negative |
+| [VERD-R09](requirements.md#verd-r09) | `a_send_inside_a_chunk_is_refused` | `tools/kyto-bench-core/src/receipt.rs` | negative |
+| [VERD-R09](requirements.md#verd-r09) | `fuzz_receipts` | `tools/kyto-bench/tests/fuzz.rs` | negative |
 | [VERD-R10](requirements.md#verd-r10) | `receipt_round_trips` | `tools/kyto-bench-core/src/receipt.rs` | positive |
 | [VERD-R10](requirements.md#verd-r10) | `a_receipt_with_non_canonical_base64_is_rejected` | `tools/kyto-bench-core/src/receipt.rs` | negative |
 | [VERD-R10](requirements.md#verd-r10) | `bytes_are_kept_as_received` | `tools/kyto-bench-core/src/lines.rs` | positive |
@@ -388,6 +406,8 @@ it.
 | [PROV-R02](requirements.md#prov-r02) | `staging_is_checked_before_any_power_command` | `tools/kyto-bench/tests/run.rs` | negative |
 | [PROV-R03](requirements.md#prov-r03) | `served_digests_give_one_check_per_file` | `tools/kyto-bench-core/src/payload.rs` | negative |
 | [PROV-R03](requirements.md#prov-r03) | `staging_is_checked_before_any_power_command` | `tools/kyto-bench/tests/run.rs` | negative |
+| [PROV-R03](requirements.md#prov-r03) | `the_publish_command_publishes_one_entry_without_a_power_command` | `tools/kyto-bench/tests/run.rs` | positive |
+| [PROV-R03](requirements.md#prov-r03) | `the_publish_command_reports_a_served_copy_that_differs` | `tools/kyto-bench/tests/run.rs` | negative |
 | [PROV-R04](requirements.md#prov-r04) | `payload_checks_go_by_file_name_then_by_rule` | `tools/kyto-bench-core/src/payload.rs` | negative |
 | [PROV-R04](requirements.md#prov-r04) | `a_refusal_is_rederived_from_the_recorded_digests_in_order` | `tools/kyto-bench-core/src/rejudge.rs` | negative |
 | [PROV-R04](requirements.md#prov-r04) | `a_refused_property_is_taken_from_the_receipt_at_its_place` | `tools/kyto-bench-core/src/rejudge.rs` | negative |
@@ -414,6 +434,10 @@ it.
 | [POWER-R01](requirements.md#power-r01) | `confirmation_follows_the_supply_not_the_command` | `tools/kyto-bench/src/sim/meter.rs` | negative |
 | [POWER-R01](requirements.md#power-r01) | `confirmation_is_read_from_its_own_device` | `tools/kyto-bench/src/sim/meter.rs` | negative |
 | [POWER-R01](requirements.md#power-r01) | `residual_voltage_above_the_off_threshold_is_not_off` | `tools/kyto-bench/tests/run.rs` | negative |
+| [POWER-R01](requirements.md#power-r01) | `the_power_off_command_switches_the_supply_off_and_confirms_it` | `tools/kyto-bench/tests/run.rs` | positive |
+| [POWER-R01](requirements.md#power-r01) | `the_power_off_command_without_confirmation_is_a_bench_fault` | `tools/kyto-bench/tests/run.rs` | negative |
+| [POWER-R01](requirements.md#power-r01) | `the_power_off_command_switches_off_when_the_meter_cannot_be_opened` | `tools/kyto-bench/tests/run.rs` | negative |
+| [POWER-R01](requirements.md#power-r01) | `readings_of_the_ina228_confirm_the_supply_not_the_command` | `tools/kyto-bench/src/drivers/ina228.rs` | negative |
 | [POWER-R02](requirements.md#power-r02) | `a_two_entry_plan_runs_to_pass_on_simulated_devices` | `tools/kyto-bench/tests/run.rs` | positive |
 | [POWER-R02](requirements.md#power-r02) | `each_cold_boot_waits_the_off_interval_on_the_bench_clock` | `tools/kyto-bench/tests/run.rs` | positive |
 | [POWER-R02](requirements.md#power-r02) | `the_switch_happens_only_while_off_is_confirmed` | `tools/kyto-bench/tests/run.rs` | positive |
@@ -423,6 +447,7 @@ it.
 | [POWER-R02](requirements.md#power-r02) | `a_missing_boot_marker_fails_and_the_supply_is_confirmed_off` | `tools/kyto-bench/tests/run.rs` | positive |
 | [POWER-R02](requirements.md#power-r02) | `residual_voltage_above_the_off_threshold_is_not_off` | `tools/kyto-bench/tests/run.rs` | negative |
 | [POWER-R02](requirements.md#power-r02) | `the_off_interval_runs_from_the_last_off_confirmation_of_the_run` | `tools/kyto-bench-core/src/rejudge.rs` | negative |
+| [POWER-R02](requirements.md#power-r02) | `the_publish_command_switches_only_while_readings_confirm_the_supply_off` | `tools/kyto-bench/tests/run.rs` | negative |
 | [POWER-R03](requirements.md#power-r03) | `an_unconfirmed_command_or_a_console_not_ready_is_a_fault` | `tools/kyto-bench-core/src/power.rs` | negative |
 | [POWER-R03](requirements.md#power-r03) | `steps_after_the_wait_begin_once_the_off_interval_has_passed` | `tools/kyto-bench-core/src/power.rs` | negative |
 | [POWER-R03](requirements.md#power-r03) | `events_out_of_order_are_a_fault` | `tools/kyto-bench-core/src/power.rs` | negative |
@@ -434,22 +459,32 @@ it.
 | [POWER-R03](requirements.md#power-r03) | `an_unconfirmed_power_off_after_a_cold_boot_is_a_bench_fault` | `tools/kyto-bench/tests/run.rs` | negative |
 | [POWER-R04](requirements.md#power-r04) | `a_fault_that_leaves_the_supply_unconfirmed_switches_it_off_again` | `tools/kyto-bench/tests/run.rs` | negative |
 | [POWER-R04](requirements.md#power-r04) | `residual_voltage_above_the_off_threshold_is_not_off` | `tools/kyto-bench/tests/run.rs` | negative |
+| [POWER-R04](requirements.md#power-r04) | `say_to_writes_one_line_after_the_tool_name` | `tools/kyto-bench/src/env.rs` | positive |
 | [POWER-R05](requirements.md#power-r05) | `a_run_that_panics_switches_the_supply_off_and_leaves_no_output` | `tools/kyto-bench/tests/run.rs` | negative |
+| [POWER-R05](requirements.md#power-r05) | `say_to_writes_one_line_after_the_tool_name` | `tools/kyto-bench/src/env.rs` | positive |
 | [POWER-R06](requirements.md#power-r06) | `each_result_has_the_exit_status_of_its_own` | `tools/kyto-bench/src/cli.rs` | positive |
-| [POWER-R06](requirements.md#power-r06) | `the_command_line_has_the_run_command_only` | `tools/kyto-bench/src/cli.rs` | negative |
+| [POWER-R06](requirements.md#power-r06) | `the_command_line_has_its_three_commands` | `tools/kyto-bench/src/cli.rs` | negative |
 | [POWER-R06](requirements.md#power-r06) | `an_output_file_that_cannot_be_written_has_a_status_of_its_own` | `tools/kyto-bench/tests/run.rs` | negative |
 | [POWER-R06](requirements.md#power-r06) | `the_example_runs_to_pass_with_the_built_binary` | `tools/kyto-bench/tests/release.rs` | positive |
 | [POWER-R06](requirements.md#power-r06) | `the_built_binary_refuses_an_unenabled_eeprom_payload` | `tools/kyto-bench/tests/release.rs` | negative |
 | [POWER-R06](requirements.md#power-r06) | `output_that_nothing_reads_changes_no_exit_status` | `tools/kyto-bench/tests/release.rs` | negative |
+| [POWER-R06](requirements.md#power-r06) | `the_built_binary_says_an_input_error_on_standard_error` | `tools/kyto-bench/tests/release.rs` | negative |
+| [POWER-R06](requirements.md#power-r06) | `the_power_off_command_without_confirmation_is_a_bench_fault` | `tools/kyto-bench/tests/run.rs` | negative |
+| [POWER-R06](requirements.md#power-r06) | `the_power_off_command_switches_off_when_the_meter_cannot_be_opened` | `tools/kyto-bench/tests/run.rs` | negative |
+| [POWER-R06](requirements.md#power-r06) | `the_publish_command_reports_a_served_copy_that_differs` | `tools/kyto-bench/tests/run.rs` | negative |
+| [POWER-R06](requirements.md#power-r06) | `an_interrupted_run_switches_the_supply_off_and_leaves_no_output` | `tools/kyto-bench/tests/run.rs` | negative |
+| [POWER-R07](requirements.md#power-r07) | `an_interrupted_run_switches_the_supply_off_and_leaves_no_output` | `tools/kyto-bench/tests/run.rs` | negative |
+| [POWER-R07](requirements.md#power-r07) | `an_interrupt_before_the_first_power_command_sends_none` | `tools/kyto-bench/tests/run.rs` | negative |
+| [POWER-R07](requirements.md#power-r07) | `the_publish_command_switches_only_while_readings_confirm_the_supply_off` | `tools/kyto-bench/tests/run.rs` | negative |
+| [POWER-R07](requirements.md#power-r07) | `the_power_off_command_finishes_when_interrupted` | `tools/kyto-bench/tests/run.rs` | positive |
 
 ## Open obligations
 
 | Obligation | Why open | What closes it |
 | --- | --- | --- |
 | `PROV-R08` across builds | No test builds the tool, changes its working tree and builds it again. That every build asks Git again rests on Cargo running the build script on every build while a path that it watches does not exist | A test that builds the tool in a Git checkout, then changes a tracked file, adds an untracked file, edits a tracked file marked assume-unchanged or skip-worktree, or adds a file that only a local exclude hides, builds it again after each change and reads `tool.clean` as `false` |
-| `POWER-R04` on standard error | No test reads what a run says on standard error after it sends the power off again | A test that reads the standard error of a run whose fault leaves the supply unconfirmed, and of one whose power off is then confirmed |
-| `POWER-R05` and `POWER-R06` for an error of the tool | No test reads the message on standard error or runs the binary to the exit status 101, the status of a Rust panic | A test that runs the built binary to an error of the tool and reads its message on standard error and its exit status 101 |
-| `POWER-R01` on a real bench | Power commands are confirmed only by the simulated supply meter | Drivers for a real power device and supply meter, and runs on a bench |
+| `POWER-R05` and `POWER-R06`: the exit status 101 | No test runs the built binary to an error of the tool; its message on standard error is read only through the surroundings of a run | A test that runs the built binary to an error of the tool and reads its exit status 101 and its message on standard error |
+| `POWER-R01` on a real bench | The tests confirm power commands with the simulated supply meter; the drivers of the relay and the supply meter are tested on the host against stand-ins that read no supply | Runs on a bench of these devices, recorded with the bench's private instance |
 
 ## Current deviations
 
@@ -464,16 +499,3 @@ it.
   [minimum bootloader](formats.md#minimum-bootloader) describes, but no
   check, refusal or verdict reads it: a board with an older bootloader is
   judged only by the `firmware.version` expectations of the run plan.
-- **A send recorded inside a chunk is read after that chunk** (`VERD-R09`).
-  A run sends a step only after it has read a whole chunk, so every send
-  that the tool records has its `received` on a chunk boundary, but reading
-  a receipt does not require it. Re-deriving gives the matcher a send whose
-  `received` lies inside a chunk only after that chunk: a trigger line in
-  the chunk, received after the send, can arm the step, and its response is
-  looked for from the end of the chunk, not from the recorded offset. A
-  receipt whose step was sent before its trigger line was received can
-  thus re-derive to an armed and answered step, against the rules of
-  [steps](formats.md#steps-and-the-end-of-a-cold-boot). Neither reading
-  nor re-deriving refuses such a receipt. The runs of the fuzz tests send
-  on chunk boundaries only, and a send that they move elsewhere is checked
-  only for the order of the rules or for an error at a JSON pointer.

@@ -1,0 +1,134 @@
+# The instance configuration of one bench, as a form. A bench keeps its own
+# copy outside this repository, filled in with this machine's settings and a
+# salt of its own; this form holds neither. It describes a Raspberry Pi 5
+# under test with the devices that the bench tool has drivers for, wired as
+# CONTRIBUTING.md describes; docs/bench/formats.md describes every table.
+# The form is refused until its salt is replaced, and a bench cannot be
+# opened until [local] is filled in.
+format = "kyto-bench instance"
+format_version = 1
+board = "raspberry-pi-5"
+
+# The TFTP server's address as the board's firmware prints it, and the
+# prefix of every path that the board reads, one directory name and a slash,
+# as the board's bootloader configuration sets it; the board is served
+# through a link of that name. Both are documentation values: replace them.
+[tftp]
+server_address = "192.0.2.10"
+path_prefix = "example/"
+
+# How readings of the supply voltage on the board side of the relay confirm
+# that the supply is on or off. The thresholds are placeholders: set them
+# from readings taken on the bench, as CONTRIBUTING.md describes.
+[confirmation]
+quantity = "supply_voltage"
+on_at_least_micro = 4500000
+off_at_most_micro = 1000000
+consecutive = 3
+poll_ms = 100
+on_timeout_ms = 3000
+off_timeout_ms = 3000
+
+[console]
+ready_timeout_ms = 2000
+
+# The identity record of the board on the bench: the fields of
+# tools/templates/identity.toml, whose comments say how each is written.
+# Write each value as it is read, or "unknown"; never estimate one.
+[identity]
+format = "kyto-bench board identity"
+format_version = 1
+board = "raspberry-pi-5"
+revision_code         = { value = "unknown", read = "firmware_log" }
+pcb_version           = { value = "unknown", read = "visual" }
+soc_stepping          = { value = "unknown", read = "visual" }
+memory.vendor         = { value = "unknown", read = "visual" }
+memory.part           = { value = "unknown", read = "visual" }
+ethernet_phy          = { value = "unknown", read = "visual" }
+spi_flash.jedec_id    = { value = "unknown", read = "firmware_log" }
+spi_flash.part        = { value = "unknown", read = "visual" }
+eeprom_version        = { value = "unknown", read = "firmware_version" }
+manufacturing_version = { value = "unknown", read = "firmware_log" }
+min_boot_version      = { value = "unknown", read = "software" }
+boot_files            = { value = "unknown", read = "tftp_reads" }
+
+# The devices of the bench and its connections. The SHA-256 of this table is
+# the bench hardware revision: write each model as the device names it, list
+# every connection that the bench has, jumpers and fixtures on the board
+# among them, and change the table when the bench changes, and only then.
+# Each end of a connection names a device by its role, or the board, the
+# supply or the host, then its terminal or pin. The meter's model is one of
+# the two that its driver knows; with the other bridge it is
+# "Adafruit 5832 INA228 board (15 mOhm shunt) with Microchip ADM00559 MCP2221 bridge".
+[devices]
+power = { kind = "lcus-1", model = "LCUS-1 USB relay module (CH340)" }
+power_confirmation = { kind = "ina228-mcp2221", model = "Adafruit 5832 INA228 board (15 mOhm shunt) with Adafruit 4471 MCP2221A bridge" }
+console = { kind = "serial", model = "USB serial adapter with an FTDI FT232R, 3.3 V TTL" }
+delivery = { kind = "tftp-directory", model = "directory served by a TFTP server on the bench host" }
+
+[[devices.connections]]
+from = "supply USB-C VBUS"
+to = "power relay COM"
+
+[[devices.connections]]
+from = "power relay NO"
+to = "power_confirmation VIN+"
+
+[[devices.connections]]
+from = "power_confirmation VIN-"
+to = "board USB-C VBUS"
+
+[[devices.connections]]
+from = "supply USB-C GND and CC"
+to = "board USB-C GND and CC, not switched"
+
+# Joined by the meter board's VBUS solder jumper or by a short wire; a
+# bench's own copy says which.
+[[devices.connections]]
+from = "power_confirmation VBUS"
+to = "power_confirmation VIN+"
+
+[[devices.connections]]
+from = "power_confirmation GND"
+to = "board USB-C GND"
+
+[[devices.connections]]
+from = "console TX, RX and GND, VCC not connected"
+to = "board debug UART RX, TX and GND"
+
+[[devices.connections]]
+from = "delivery TFTP server"
+to = "board Ethernet, on the same network"
+
+[[devices.connections]]
+from = "power, power_confirmation and console USB"
+to = "host USB"
+
+# A jumper or fixture on the board is a connection too, such as this one
+# for tests of a GPIO interrupt; list only those that the bench has:
+# [[devices.connections]]
+# from = "board header pin 11, GPIO17"
+# to = "board header pin 13, GPIO27, through 1 kOhm"
+
+# This machine's settings of each device, which the driver of its kind reads.
+# Fill them in on the bench host. Device paths and directories go here,
+# never into [devices]; a public receipt hides them. The meter takes no
+# settings: its driver opens the one MCP2221 bridge that the host has.
+[local]
+# 128 random bits for this configuration alone.
+salt = "replace with the output of openssl rand -hex 16"
+
+# The callout device of the relay module's USB serial port, and the relay
+# that it switches, as the module numbers it.
+[local.power]
+port = ""
+relay = ""
+
+# The callout device of the console's USB serial adapter.
+[local.console]
+port = ""
+
+# The absolute path of the directory from which the TFTP server serves the
+# board.
+[local.delivery]
+dir = ""

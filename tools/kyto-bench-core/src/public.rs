@@ -509,14 +509,24 @@ mod tests {
             .deidentify_values()
     }
 
-    /// The example receipt whose cold boot received `bytes` in one chunk.
+    /// The example receipt whose cold boot received `bytes` in one chunk,
+    /// each of its events after bytes now after the whole chunk.
     fn with_serial(bytes: &[u8]) -> Receipt {
         let mut receipt = example();
-        receipt.entries[0].cold_boots[0].serial = Serial {
-            length: bytes.len() as u64,
+        let cold_boot = &mut receipt.entries[0].cold_boots[0];
+        let length = bytes.len() as u64;
+        cold_boot.serial = Serial {
+            length,
             bytes_base64: crate::receipt::Base64(bytes.to_vec()),
             index: vec![[0, 6_100_000_000]],
         };
+        for event in cold_boot
+            .events
+            .iter_mut()
+            .filter(|event| event.received > 0)
+        {
+            event.received = length;
+        }
         receipt
     }
 

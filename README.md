@@ -90,10 +90,11 @@ Hardware-in-the-loop bench:
 - **Bench hardware.** The adapter boards, fixtures and injection or capture
   devices a bench needs, with their design files.
 
-Anyone will be able to set up a bench of their own from kyto. Each bench
-keeps its own instance configuration, such as addresses, relay channels and
-local paths, outside this repository; kyto will hold templates and examples
-only.
+Anyone can set up a bench of the devices that the bench tool has drivers
+for, from its [instance configuration template](tools/templates/instance.toml).
+Each bench keeps its own instance configuration, such as addresses, relay
+channels and local paths, outside this repository; kyto holds templates and
+examples only.
 
 [Scope](docs/scope.md) describes each of these in detail, together with what
 kyto relies on from the other parts of casξ.
@@ -107,25 +108,27 @@ are built on are fixed; no other part has been chosen, and the screen size,
 the key count and the arrangement within each form are open. Nothing has been
 designed or modelled yet: there are no design files and no models, and nothing
 to build, order, print or assemble. The bench tool in `tools/` is partly
-written: its command runs [run plans](docs/bench/formats.md#run-plans) on
-simulated devices and writes their receipts and the receipts' public
-versions. Its library reads [board descriptions, identity records, instance
-configurations and run plans](docs/bench/formats.md), with the Raspberry Pi 5
-description built in, checks payloads, reads what a cold boot shows, judges
-cold boots, entries and runs, writes and reads receipts and their public
-versions, and derives the verdicts of a receipt again from what it records.
-The tool has the interfaces of four kinds of device, each with one simulated
-device: power commands, a supply meter that also confirms power-on and
-power-off, the serial console, and payload delivery to the directory that
-the board reads over TFTP. It has drivers for a USB relay module that
-switches the supply and a USB serial adapter for the console, which no run
-uses yet, but none for a supply meter or the TFTP directory, and no input
-injection or display capture, so it cannot run a bench yet, and no receipt
-that it writes is evidence. Apart from the bench tool, the board descriptions
-and the formats of run plans and receipts, none of the items above exists
-today. Until a power circuit exists, the development boards, a whole
-Raspberry Pi 5 board and a Compute Module 5 in its official IO board, run
-from a stable external supply.
+written: it runs [run plans](docs/bench/formats.md#run-plans) on a bench of
+the devices that it has drivers for and on simulated devices, and writes their
+receipts and the receipts' public versions. Its library reads [board
+descriptions, identity records, instance configurations and run
+plans](docs/bench/formats.md), with the Raspberry Pi 5 description built in,
+checks payloads, reads what a cold boot shows, judges cold boots, entries and
+runs, writes and reads receipts and their public versions, and derives the
+verdicts of a receipt again from what it records. The tool has the interfaces
+of four kinds of device, each with a simulated device and a driver for one
+real device: an LCUS-1 USB relay module for power commands; a TI INA228 power
+monitor read through a Microchip MCP2221A USB bridge, which confirms power-on
+and power-off by the supply voltage; a USB serial adapter for the serial
+console; and the directory of a TFTP server for payload delivery. Its commands
+run a plan, switch a bench's supply off and confirm it, and publish a payload
+without powering the board. It has no bench self-test, input injection or
+display capture yet. A receipt is evidence only when a clean, known revision
+of the tool wrote it on real devices. Apart from the bench tool, the board
+descriptions and the formats of run plans and receipts, none of the items
+above exists today. Until a power circuit exists, the development boards, a
+whole Raspberry Pi 5 board and a Compute Module 5 in its official IO board,
+run from a stable external supply.
 
 The repository checks run from the repository root:
 
@@ -136,8 +139,8 @@ cargo xtask check
 The checks are a Rust program in `xtask/`, which checks the bench tool in
 `tools/` too; rustup installs the toolchain pinned in `rust-toolchain.toml`
 on first use. [Contributing](CONTRIBUTING.md) describes the steps of the
-check, how to run the bench tool on its example, how files will be organized
-and the commit rules.
+check, how to wire a bench and run the bench tool on it and on its example,
+how files will be organized and the commit rules.
 
 ## How the files will be organized
 

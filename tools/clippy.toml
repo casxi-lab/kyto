@@ -20,7 +20,9 @@ disallowed-methods = [
 ]
 
 # The tool runs no external program; only the build script, which asks Git
-# for the commit, and the tests that run the tool's own binary may.
+# for the commit, the tests that run the tool's own binary, and a test of the
+# TFTP directory that runs its own test binary again through `sh` under
+# another umask may.
 disallowed-types = [
     { path = "std::process::Command", reason = "the tool runs no external program" },
 ]

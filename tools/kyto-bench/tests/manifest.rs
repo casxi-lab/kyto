@@ -38,8 +38,12 @@ const ESCAPES: [&str; 6] = [
 /// The files apart from the crate root of `kyto-bench-os` that allow a lint
 /// of [`ESCAPES`], from the workspace directory, each with the lints of its
 /// one attribute that allows lints.
-const OTHER_ESCAPES: [(&str, &[&str]); 2] = [
+const OTHER_ESCAPES: [(&str, &[&str]); 3] = [
     ("kyto-bench/build.rs", &["clippy::disallowed_types"]),
+    (
+        "kyto-bench/src/drivers/tftp.rs",
+        &["clippy::disallowed_types"],
+    ),
     ("kyto-bench/tests/release.rs", &["clippy::disallowed_types"]),
 ];
 

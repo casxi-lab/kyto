@@ -11,8 +11,10 @@
 //! switch makes a new link to the relative path `releases/gNNNNNN`, which a
 //! server that serves from a changed root resolves as the tool does, and
 //! renames it over the old link, so that the board reads the old generation
-//! or the new one, never neither. It switches only to a generation that the
-//! same driver staged whole. From its first staging or switch until the
+//! or the new one, never neither; on macOS a read through the link at the
+//! moment of the rename can fail, which is why the tool switches only while
+//! readings confirm the supply off. It switches only to a generation that
+//! the same driver staged whole. From its first staging or switch until the
 //! bench closes, the driver holds a lock on the directory, so that no other
 //! run or publication stages or switches there meanwhile. Its errors name
 //! no path and no link.
@@ -424,6 +426,52 @@ mod tests {
             assert_eq!(fs::read_to_string(releases.join(path)).unwrap(), bytes);
         }
         drop(tftp);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The variable under which [`staging_gives_its_modes_under_any_umask`]
+    /// takes the part of its child process: the directory to stage into.
+    const STAGE_INTO: &str = "KYTO_BENCH_TEST_STAGE_INTO";
+
+    #[test]
+    #[allow(
+        clippy::disallowed_types,
+        reason = "the umask is a state of the whole process, so sh sets it for this test binary run again"
+    )]
+    fn staging_gives_its_modes_under_any_umask() {
+        if let Some(dir) = std::env::var_os(STAGE_INTO) {
+            let dir = PathBuf::from(dir);
+            fs::write(dir.join("unmoded"), "").unwrap();
+            let files = [("config.txt", &b"a"[..]), ("overlays/x.dtbo", b"x")];
+            assert_eq!(stage(&mut tftp(&dir), &files), Ok(generation(1)));
+            return;
+        }
+        let dir = scratch("umask");
+        let test = "drivers::tftp::tests::staging_gives_its_modes_under_any_umask";
+        let child = std::process::Command::new("sh")
+            .args(["-c", "umask 077 && exec \"$0\" --exact \"$1\" --quiet"])
+            .arg(std::env::current_exe().unwrap())
+            .arg(test)
+            .env(STAGE_INTO, &dir)
+            .output()
+            .unwrap();
+        let said = String::from_utf8_lossy(&child.stdout) + String::from_utf8_lossy(&child.stderr);
+        assert!(
+            child.status.success() && said.contains("1 passed"),
+            "{said}"
+        );
+        // The child staged under the umask 077, which a file made without a
+        // mode of its own shows.
+        assert_eq!(mode(&dir.join("unmoded")), 0o600);
+        for (path, expected) in [
+            ("releases", 0o755),
+            ("releases/g000001", 0o755),
+            ("releases/g000001/overlays", 0o755),
+            ("releases/g000001/config.txt", 0o644),
+            ("releases/g000001/overlays/x.dtbo", 0o644),
+        ] {
+            assert_eq!(mode(&dir.join(path)), expected, "{path}");
+        }
         fs::remove_dir_all(&dir).unwrap();
     }
 

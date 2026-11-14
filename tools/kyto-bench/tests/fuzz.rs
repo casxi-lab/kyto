@@ -1471,9 +1471,8 @@ fn fuzz_run_plans() {
     run_plans(PLAN_CASES);
 }
 
-/// The commit and nonce of the receipts of the cases.
+/// The commit of the receipts of the cases.
 const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
-const NONCE: &str = "f0e1d2c3b4a5968778695a4b3c2d1e0f";
 
 /// A console that keeps a copy of the bytes that it gives in each cold
 /// boot, from each time it is opened, and that fails the case once it is
@@ -1521,13 +1520,14 @@ impl Console for Played {
 
 /// A bench of simulated devices, with a fault set on them if any, whose
 /// console plays a script, keeps what it gives and takes at most `sends`
-/// sends, of a tool of a fixed revision that gives a fixed nonce, so that a
-/// case makes the same receipt in every run.
+/// sends, of a tool of a fixed revision that gives a nonce drawn from the
+/// case's generator, so that a case makes the same receipt in every run.
 struct FuzzEnv {
     script: RefCell<Option<ScriptProvider>>,
     played: Rc<RefCell<Vec<Vec<u8>>>>,
     sends: usize,
     fault: Option<fn(&mut Knobs)>,
+    nonce: String,
 }
 
 impl Env for FuzzEnv {
@@ -1552,7 +1552,7 @@ impl Env for FuzzEnv {
     }
 
     fn nonce(&self) -> Result<String, String> {
-        Ok(NONCE.into())
+        Ok(self.nonce.clone())
     }
 }
 
@@ -2048,6 +2048,7 @@ fn receipts(cases: u64) {
             played: Rc::clone(&played),
             sends: sends.sum(),
             fault: fault.map(|(set, _)| set),
+            nonce: format!("{:016x}{:016x}", rng.next(), rng.next()),
         };
         let receipt = run::run(&env, &inputs).unwrap();
         if let Some((_, verdict)) = fault {

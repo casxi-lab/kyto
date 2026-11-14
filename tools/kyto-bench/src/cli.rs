@@ -49,14 +49,17 @@ const POWER_OFF_STATUS: &str = "Exit status: 0 readings confirmed the power off,
 input error, 3 BENCH FAULT: readings did not confirm the power off or a device failed, 101 an \
 error of the tool itself. An interrupt does not stop it. When a run or a publication holds the \
 bench, it says so first: the power off cuts that run, whose receipt does not show it and is no \
-evidence.";
+evidence; that run also holds the meter on macOS, so the power off is sent but not confirmed \
+(3), and power-off run again after that run ended confirms it.";
 
 const PUBLISH_STATUS: &str = "Exit status: 0 published: the board is served the new \
 generation and its copy has the digests of the run plan, 2 usage or input error, 3 BENCH \
-FAULT: a device failed or the copy that the board is served after the switch differs, 4 \
-refused by a payload check or because readings did not confirm the supply off; what the board \
-is served did not change, 101 an error of the tool itself, 130 interrupted before the switch. \
-It sends no power command: when the state of the board is unknown, run power-off first.";
+FAULT: the meter failed before the switch, the switch failed, or the copy that the board is \
+served after the switch could not be read or differs, 4 refused: a payload check failed, the \
+TFTP directory could not be staged (another run or publication holds it, or a write failed), \
+or readings did not confirm the supply off; what the board is served did not change, 101 an \
+error of the tool itself, 130 interrupted before the switch. It sends no power command: when \
+the state of the board is unknown, run power-off first.";
 
 /// The command line.
 pub fn command() -> Command {

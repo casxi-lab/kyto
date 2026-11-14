@@ -247,17 +247,23 @@ it. Its exit status is 0 when they did, 2 for a usage or input error, 3 for
 `BENCH FAULT`, when they did not or a device failed, and 101 for an error of
 the tool; an interrupt does not stop it. It takes no lock, so it also cuts a
 run or a publication that holds the bench, and says so first: that run's
-receipt does not show the power off, is no evidence and is discarded.
-`publish` checks the payload of one entry, stages it and checks the staged
-copy as a run does, then, without a power command, makes it the generation
-that the board is served, only while readings confirm the supply off, and
-checks the copy that the board is served. Its exit status is 0 when it
-published, 2 for a usage or input error, 3 for `BENCH FAULT`, when a device
-failed or the served copy differs, 4 when a payload check or the readings
-refused it, 101 for an error of the tool and 130 for an interrupt before the
-switch; with 2, 4 and 130 the board is served what it was served before.
-`publish` relies on readings alone to tell that the board is off, so when
-its state is unknown, run `power-off` first.
+receipt does not show the power off, is no evidence and is discarded. Such a
+run or publication also holds the meter's USB bridge, exclusively on macOS,
+so `power-off` then still sends its power off but cannot confirm it and
+exits with 3; run `power-off` again once that run has ended to confirm the
+supply off. `publish` checks the payload of one entry, stages it and checks
+the staged copy as a run does, then, without a power command, makes it the
+generation that the board is served, only while readings confirm the supply
+off, and checks the copy that the board is served. Its exit status is 0 when
+it published, 2 for a usage or input error, 3 for `BENCH FAULT`, when the
+meter failed before the switch, the switch failed, or the served copy could
+not be read or differs, 4 when a payload check failed, the TFTP directory
+could not be staged, as when another run or publication holds it or a write
+failed, or readings did not confirm the supply off, 101 for an error of the
+tool and 130 for an interrupt before the switch; with 2, 4 and 130 the board
+is served what it was served before. `publish` relies on readings alone to
+tell that the board is off, so when its state is unknown, run `power-off`
+first.
 [The formats page](docs/bench/formats.md) describes the commands, the files
 they read and write, and every rule of a verdict.
 

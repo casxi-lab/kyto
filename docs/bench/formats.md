@@ -68,7 +68,11 @@ has passed. It writes no receipt and does not stop for an interrupt. It
 takes no lock, so that it works while a run holds the bench; on a bench of
 real devices it first says when a run or a publication holds the
 [TFTP directory](#local-settings) of the bench, since that run's receipt
-does not show this power off and is no evidence. Its exit status:
+does not show this power off and is no evidence. Such a run or
+publication also holds the meter's USB bridge, exclusively on macOS, the
+host of a bench, so `power-off` then still sends its power off but cannot
+confirm it and exits with 3; run `power-off` again once that run has ended
+to confirm the supply off. Its exit status:
 
 | Status | Result |
 | --- | --- |

@@ -424,10 +424,10 @@ impl Flow<'_> {
     /// sending each step once it is armed, until the cold boot ends; the
     /// reason it ended, or `None` when an interrupt stopped the run. Before
     /// it sends a step, it takes every chunk that the console stamped before
-    /// now, which may end the cold boot or show that the step is not due.
-    /// A deadline ends it once the bench clock has reached it, whatever the
-    /// console reports, after a chunk that the console stamped before the
-    /// deadline is taken.
+    /// now, which can end the cold boot first, at its capture limit or once
+    /// its boot timeout has passed. A deadline ends it once the bench clock
+    /// has reached it, whatever the console reports, after a chunk that the
+    /// console stamped before the deadline is taken.
     fn capture(
         &mut self,
         capture: &mut Capture<'_>,

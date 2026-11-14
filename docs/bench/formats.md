@@ -953,8 +953,8 @@ hour, of the send. Steps run in order:
   response of the step before it, which can be that response itself;
 - an armed step is sent once the chunk that holds its trigger line has been
   read, and every chunk that the console holds already, stamped before the
-  run sends, which can end the cold boot first or show that the step is
-  not due;
+  run sends, which can end the cold boot first, at its capture limit or
+  once its boot timeout has passed;
 - its response is the first line that starts after the last byte received
   before the send and matches `expect`; it must be complete, ended by its
   LF, within `timeout_ms` of the send.
@@ -975,7 +975,9 @@ console that reports nothing by then does not keep the cold boot going, and
 one that reports a deadline earlier does not end it. Once that time has
 passed, the run still takes a chunk that the console stamped before it and
 holds already, and goes on; a chunk stamped at that time or later ends the
-cold boot as the time does.
+cold boot as the time does. A chunk stamped exactly at a deadline is
+therefore kept, and a response that it completes passes, only when the run
+was already waiting for it before its bench clock reached that deadline.
 
 ### Checks of a run plan
 

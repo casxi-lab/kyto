@@ -134,7 +134,8 @@ impl<'a> Capture<'a> {
     /// before `by`, a time that has passed: it asks once, with a deadline
     /// 1 ns before `by`, so that the console does not wait. A chunk is kept
     /// as [`Capture::receive`] keeps one; no bytes, a closed port and a
-    /// chunk stamped at `by` or later are [`Got::Deadline`].
+    /// chunk stamped at `by` or later, which only a console that breaks its
+    /// contract gives and whose bytes are dropped, are [`Got::Deadline`].
     pub fn receive_held(
         &mut self,
         console: &mut dyn Console,

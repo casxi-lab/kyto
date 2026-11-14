@@ -111,7 +111,8 @@ boot at its boot timeout on the bench clock, whatever the console reports.
 
 Past that time it still reads a chunk that the console stamped before it,
 and a chunk stamped at that time or later ends the cold boot as the time
-does.
+does. A chunk stamped exactly at a deadline is thus kept only when the run
+was already waiting for it before its bench clock reached that deadline.
 
 **Evidence.** A unit test of an end marker that comes late, never comes or
 has no LF, and of an entry that ends at the timeout; runs on simulated

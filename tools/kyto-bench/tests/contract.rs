@@ -24,7 +24,7 @@ macro_rules! sources {
 /// Every source of the library and of the command, and the test files that
 /// the contract may name. The modules that any source of the crates
 /// declares are checked against this list, so a new module joins it.
-const SOURCES: [(&str, &str); 43] = sources![
+const SOURCES: [(&str, &str); 47] = sources![
     "tools/kyto-bench-core/src/board.rs",
     "tools/kyto-bench-core/src/bootloader.rs",
     "tools/kyto-bench-core/src/digest.rs",
@@ -49,6 +49,10 @@ const SOURCES: [(&str, &str); 43] = sources![
     "tools/kyto-bench/src/assemble.rs",
     "tools/kyto-bench/src/cli.rs",
     "tools/kyto-bench/src/device.rs",
+    "tools/kyto-bench/src/drivers/clock.rs",
+    "tools/kyto-bench/src/drivers/console.rs",
+    "tools/kyto-bench/src/drivers/mod.rs",
+    "tools/kyto-bench/src/drivers/relay.rs",
     "tools/kyto-bench/src/env.rs",
     "tools/kyto-bench/src/gate.rs",
     "tools/kyto-bench/src/inputs.rs",

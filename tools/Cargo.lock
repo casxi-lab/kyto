@@ -152,6 +152,7 @@ dependencies = [
  "clap",
  "getrandom",
  "kyto-bench-core",
+ "kyto-bench-os",
  "serde",
  "toml",
 ]

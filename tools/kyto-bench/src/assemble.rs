@@ -27,31 +27,6 @@ pub fn start(inputs: &Inputs, nonce: String, tool: ToolRevision) -> Receipt {
         commit: tool.commit,
         clean: tool.clean,
     };
-    let entry = |(index, entry): (usize, &Entry)| {
-        let file = |file: &PinnedFile| PayloadFile {
-            name: file.name.clone(),
-            bytes: None,
-            source_sha256: None,
-            staged_sha256: None,
-            served_sha256: None,
-        };
-        let (pin, generation) = (entry.payload_pin.clone(), None);
-        let files = inputs.payload(entry).iter().map(file).collect();
-        EntryRecord {
-            index,
-            name: entry.name.clone(),
-            reference: entry.reference.clone(),
-            payload: PayloadRecord {
-                pin,
-                generation,
-                files,
-            },
-            events: Vec::new(),
-            checks: Vec::new(),
-            cold_boots: Vec::new(),
-            verdict: Verdict::NotRun,
-        }
-    };
     let (run_plan, board_text) = (plan.text().to_string(), board.text().to_string());
     Receipt {
         format: receipt::FORMAT.into(),
@@ -84,8 +59,39 @@ pub fn start(inputs: &Inputs, nonce: String, tool: ToolRevision) -> Receipt {
         reference: plan.reference.clone(),
         refusal: None,
         start: Start { events: Vec::new() },
-        entries: plan.entries.iter().enumerate().map(entry).collect(),
+        entries: (0..plan.entries.len())
+            .map(|index| entry(inputs, index))
+            .collect(),
         verdict: None,
+    }
+}
+
+/// The record of entry `index` of `inputs` before it ran, with the files of
+/// its payload, none read yet.
+pub fn entry(inputs: &Inputs, index: usize) -> EntryRecord {
+    let entry = &inputs.plan.entries[index];
+    let file = |file: &PinnedFile| PayloadFile {
+        name: file.name.clone(),
+        bytes: None,
+        source_sha256: None,
+        staged_sha256: None,
+        served_sha256: None,
+    };
+    let (pin, generation) = (entry.payload_pin.clone(), None);
+    let files = inputs.payload(entry).iter().map(file).collect();
+    EntryRecord {
+        index,
+        name: entry.name.clone(),
+        reference: entry.reference.clone(),
+        payload: PayloadRecord {
+            pin,
+            generation,
+            files,
+        },
+        events: Vec::new(),
+        checks: Vec::new(),
+        cold_boots: Vec::new(),
+        verdict: Verdict::NotRun,
     }
 }
 

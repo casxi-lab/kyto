@@ -107,7 +107,9 @@ pub trait Console {
     /// or fails at `deadline` when the port is not ready by then.
     fn open(&mut self, deadline: Nanos) -> Result<Nanos, DeviceError>;
     /// The next input, or [`Received::Deadline`] when nothing arrives by
-    /// `deadline`.
+    /// `deadline`. A chunk is stamped no later than `deadline`, and a
+    /// deadline that has passed does not wait: the console gives a chunk
+    /// that it holds already, or the deadline at once.
     fn receive(&mut self, deadline: Nanos) -> Result<Received, DeviceError>;
     /// Hands every byte to the port; returns the time it accepted them.
     fn send(&mut self, bytes: &[u8]) -> Result<Nanos, DeviceError>;

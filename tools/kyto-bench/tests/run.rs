@@ -7,21 +7,26 @@
 //! clock; nothing sleeps or reads the system clock.
 
 use std::cell::RefCell;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicI32, Ordering};
 
 use serde::Deserialize;
 
 use kyto_bench::device::{
-    Clock, Console, Delivery, DeviceError, Meter, Nanos, PowerState, PowerSwitch, Received, Role,
+    Clock, Console, Delivery, DeviceError, Meter, MeterConfirm, Nanos, PowerState, PowerSwitch,
+    Quantity, Received, Role,
 };
-use kyto_bench::env::{self, Bench, Env};
+use kyto_bench::drivers::hid::{HidOpen, HidapiLink, OpenError};
+use kyto_bench::drivers::ina228::Ina228Meter;
+use kyto_bench::env::{self, Bench, Env, Interrupt};
 use kyto_bench::provenance::ToolRevision;
 use kyto_bench::sim::{
-    Files, ON_MICRO, Responder, Script, ScriptProvider, SimSupplyMeter, SimTftp, SimWorld, replay,
+    Files, ON_MICRO, Responder, Script, ScriptProvider, SimRelay, SimSupplyMeter, SimTftp,
+    SimWorld, replay,
 };
 use kyto_bench::{cli, output};
 use kyto_bench_core::board::{Board, RASPBERRY_PI_5};
@@ -63,6 +68,12 @@ fn scratch(name: &str) -> PathBuf {
 /// board sends `answer` in its place as the answer to the step. `cut` leaves
 /// out the last line of the power-on of that number.
 fn script(cut: Option<u32>, answer: &'static [u8]) -> ScriptProvider {
+    played(cut, answer, STATS)
+}
+
+/// [`script`], with the lines `left_out` left out in place of the STATS
+/// line.
+fn played(cut: Option<u32>, answer: &'static [u8], left_out: &'static [u8]) -> ScriptProvider {
     let (firmware, echo) = (
         example("captures/firmware-only.bin"),
         example("captures/echo.bin"),
@@ -76,7 +87,7 @@ fn script(cut: Option<u32>, answer: &'static [u8]) -> ScriptProvider {
             &firmware
         };
         let mut lines: Vec<&[u8]> = capture.split_inclusive(|b| *b == b'\n').collect();
-        lines.retain(|line| *line != STATS);
+        lines.retain(|line| *line != left_out);
         if cut == Some(power_on) {
             lines.pop();
         }
@@ -170,6 +181,70 @@ impl Console for Panicking {
     }
 }
 
+/// How long after a chunk's stamp a [`Lagging`] console lets the run read
+/// it.
+const LAG: Nanos = Nanos(1_500_000);
+
+/// A console that the run reads late. After it hands a chunk or takes a
+/// send, it takes the next chunk that the board writes within 2 ms and
+/// moves the bench clock [`LAG`] past that chunk's stamp, as a console that
+/// stamps chunks when they arrive holds what came while the run was busy.
+/// It hands a chunk that it holds by a deadline only when the chunk was
+/// stamped by then, unless it is `careless`.
+struct Lagging {
+    console: Box<dyn Console>,
+    clock: Rc<dyn Clock>,
+    held: Option<(Nanos, Vec<u8>)>,
+    careless: bool,
+}
+
+impl Lagging {
+    fn take_next(&mut self, after: Nanos) -> Result<(), DeviceError> {
+        let by = after.saturating_add(Nanos::from_millis(2));
+        if let Received::Bytes { at, bytes } = self.console.receive(by)? {
+            self.clock.wait_until(at.saturating_add(LAG));
+            self.held = Some((at, bytes));
+        }
+        Ok(())
+    }
+}
+
+impl Console for Lagging {
+    fn open(&mut self, deadline: Nanos) -> Result<Nanos, DeviceError> {
+        self.console.open(deadline)
+    }
+
+    fn receive(&mut self, deadline: Nanos) -> Result<Received, DeviceError> {
+        let (at, bytes) = match self.held.take() {
+            Some(held) => held,
+            None => match self.console.receive(deadline)? {
+                Received::Bytes { at, bytes } => (at, bytes),
+                other => return Ok(other),
+            },
+        };
+        if at > deadline && !self.careless {
+            self.held = Some((at, bytes));
+            let at = self.clock.wait_until(deadline);
+            return Ok(Received::Deadline { at });
+        }
+        self.take_next(at)?;
+        Ok(Received::Bytes { at, bytes })
+    }
+
+    fn send(&mut self, bytes: &[u8]) -> Result<Nanos, DeviceError> {
+        let at = self.console.send(bytes)?;
+        if self.held.is_none() {
+            self.take_next(at)?;
+        }
+        Ok(at)
+    }
+
+    fn close(&mut self) -> Result<(), DeviceError> {
+        self.held = None;
+        self.console.close()
+    }
+}
+
 /// A power switch whose command of the number given, from 1, fails before
 /// it is sent.
 struct Failing(Box<dyn PowerSwitch>, u32, u32);
@@ -199,13 +274,51 @@ impl PowerSwitch for Sticking {
     }
 }
 
+/// A power switch that sets the flag of an interrupt once it has sent a
+/// command of the state given, as SIGINT does.
+struct Interrupting(Box<dyn PowerSwitch>, &'static AtomicI32, PowerState);
+
+impl PowerSwitch for Interrupting {
+    fn command(&mut self, state: PowerState) -> Result<Nanos, DeviceError> {
+        let sent = self.0.command(state)?;
+        if state == self.2 {
+            self.1.store(2, Ordering::SeqCst);
+        }
+        Ok(sent)
+    }
+}
+
+/// An opener of the meter's bridge that finds none.
+struct NoBridge;
+
+impl HidOpen for NoBridge {
+    type Link = HidapiLink;
+
+    fn open(&mut self) -> Result<HidapiLink, OpenError> {
+        Err(OpenError::NoBridge)
+    }
+}
+
+/// When the bench of a [`TestEnv`] catches an interrupt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Interrupts {
+    Never,
+    AtOpen,
+    After(PowerState),
+}
+
 /// Surroundings whose bench is a simulated device of each role on `world`,
 /// with a [`Deaf`] console when `deaf` is set, an [`Early`] one when `early`
-/// is, a [`Panicking`] one when `panics` is, a [`Failing`] switch when
-/// `failing` gives a command and a [`Sticking`] one when `sticking` does.
-/// When the bench is opened, a directory is made at `block`, if it is
-/// given. The revision of the tool is `tool`, when it is given, in place of
-/// the one that the build embedded.
+/// is, a [`Panicking`] one when `panics` is, a [`Lagging`] one when
+/// `lagging` is, careless when `careless` is, a [`Failing`] switch when
+/// `failing` gives a command and a [`Sticking`] one when `sticking` does,
+/// and an INA228 meter whose bridge is missing when `no_bridge` is set.
+/// The bench catches interrupts as `interrupts` says, through the flag
+/// `flag`; nothing installs a signal handler. When the bench is opened, a
+/// directory is made at `block`, if it is given. The revision of the tool
+/// is `tool`, when it is given, in place of the one that the build
+/// embedded. What the tool says on standard error is kept in `said`, and
+/// the bench is in use when `in_use` is set.
 struct TestEnv {
     world: SimWorld,
     script: RefCell<Option<ScriptProvider>>,
@@ -213,10 +326,17 @@ struct TestEnv {
     deaf: bool,
     early: bool,
     panics: bool,
+    lagging: bool,
+    careless: bool,
     failing: Option<u32>,
     sticking: Option<u32>,
+    no_bridge: bool,
+    interrupts: Interrupts,
+    flag: &'static AtomicI32,
     block: Option<PathBuf>,
     tool: Option<ToolRevision>,
+    said: RefCell<Vec<String>>,
+    in_use: bool,
 }
 
 impl TestEnv {
@@ -230,11 +350,23 @@ impl TestEnv {
             deaf: false,
             early: false,
             panics: false,
+            lagging: false,
+            careless: false,
             failing: None,
             sticking: None,
+            no_bridge: false,
+            interrupts: Interrupts::Never,
+            flag: Box::leak(Box::new(AtomicI32::new(0))),
             block: None,
             tool: None,
+            said: RefCell::new(Vec::new()),
+            in_use: false,
         }
+    }
+
+    /// What the tool said on standard error.
+    fn said(&self) -> Vec<String> {
+        self.said.borrow().clone()
     }
 
     /// The board plays the example console output.
@@ -264,6 +396,29 @@ impl Env for TestEnv {
         if self.panics {
             bench.console = Box::new(Panicking(bench.console));
         }
+        if self.lagging {
+            bench.console = Box::new(Lagging {
+                console: bench.console,
+                clock: Rc::clone(&bench.clock),
+                held: None,
+                careless: self.careless,
+            });
+        }
+        if self.no_bridge {
+            let clock = Rc::clone(&bench.clock);
+            let meter = Ina228Meter::new(NoBridge, clock, Quantity::SupplyVoltage, 15_000);
+            bench.confirm = Box::new(MeterConfirm(meter));
+        }
+        if self.interrupts != Interrupts::Never {
+            bench.interrupt = Interrupt::of(self.flag);
+        }
+        match self.interrupts {
+            Interrupts::AtOpen => self.flag.store(15, Ordering::SeqCst),
+            Interrupts::After(state) => {
+                bench.power = Box::new(Interrupting(bench.power, self.flag, state));
+            }
+            Interrupts::Never => {}
+        }
         if let Some(command) = self.failing {
             bench.power = Box::new(Failing(bench.power, 0, command));
         }
@@ -283,6 +438,23 @@ impl Env for TestEnv {
     fn tool(&self) -> ToolRevision {
         self.tool.clone().unwrap_or_else(ToolRevision::built)
     }
+
+    fn bench_in_use(&self, _: &Instance) -> bool {
+        self.in_use
+    }
+
+    fn say(&self, message: &str) {
+        self.said.borrow_mut().push(message.to_string());
+    }
+}
+
+/// The exit status of the command line `args`, after the name of the
+/// program, on `env`.
+fn command(env: &TestEnv, args: &[&OsStr]) -> u8 {
+    let line = [OsStr::new("kyto-bench")]
+        .into_iter()
+        .chain(args.iter().copied());
+    cli::run(line, env)
 }
 
 /// What a run left in its output directory.
@@ -1209,6 +1381,9 @@ fn residual_voltage_above_the_off_threshold_is_not_off() {
     assert_eq!(power::off_confirmed_at(confirmation, &first.events), None);
     let sent: Vec<PowerState> = env.world.power_commands().iter().map(|c| c.1).collect();
     assert_eq!(sent, [PowerState::Off; 2], "nothing is switched on");
+    let said = "the supply was switched off again after a fault; readings did not confirm the \
+                power off";
+    assert_eq!(env.said(), [said]);
 }
 
 #[test]
@@ -1279,6 +1454,9 @@ fn a_fault_that_leaves_the_supply_unconfirmed_switches_it_off_again() {
         assert!(power::off_confirmed_at(confirmation, &first.events).is_some());
         let mut meter = SimSupplyMeter::new(&env.world);
         assert_eq!(meter.sample().unwrap().micro, 0);
+        let said = "the supply was switched off again after a fault; readings did confirm the \
+                    power off";
+        assert_eq!(env.said(), [said], "command {command}");
     }
 }
 
@@ -1299,6 +1477,9 @@ fn a_run_that_panics_switches_the_supply_off_and_leaves_no_output() {
         !dir.join("out").exists(),
         "no receipt and no output directory"
     );
+    // It said so before the panic went on.
+    let said = "the run stopped; readings did confirm the power off";
+    assert_eq!(env.said(), [said]);
 }
 
 #[test]
@@ -1998,4 +2179,328 @@ fn a_bench_fault_ends_the_run_and_the_rest_is_not_run() {
         commands(&env),
         [&[PowerState::Off][..], &on_off, &on_off].concat()
     );
+}
+
+/// The exit status of `kyto-bench power-off` with the example instance
+/// configuration on `env`.
+fn power_off(env: &TestEnv) -> u8 {
+    let instance = examples().join("instance.toml");
+    command(
+        env,
+        &[
+            "power-off".as_ref(),
+            "--instance".as_ref(),
+            instance.as_ref(),
+        ],
+    )
+}
+
+/// The exit status of `kyto-bench publish` of the entry `entry` of the
+/// example plan, instance configuration and payloads on `env`.
+fn publish(env: &TestEnv, entry: &str) -> u8 {
+    let examples = examples();
+    let (plan, instance) = (
+        examples.join("run-plan.toml"),
+        examples.join("instance.toml"),
+    );
+    let payloads = examples.join("payload");
+    let args: [&OsStr; 9] = [
+        "publish".as_ref(),
+        "--plan".as_ref(),
+        plan.as_ref(),
+        "--instance".as_ref(),
+        instance.as_ref(),
+        "--payload-root".as_ref(),
+        payloads.as_ref(),
+        "--entry".as_ref(),
+        entry.as_ref(),
+    ];
+    command(env, &args)
+}
+
+/// What the board of `env` is served for `file`.
+fn served(env: &TestEnv, file: &str) -> Result<Vec<u8>, DeviceError> {
+    SimTftp::new(&env.world).read_served(&PayloadName::parse(file).unwrap())
+}
+
+/// What the meter of `world` reads now.
+fn supply(world: &SimWorld) -> i64 {
+    SimSupplyMeter::new(world).sample().unwrap().micro
+}
+
+#[test]
+fn the_power_off_command_switches_the_supply_off_and_confirms_it() {
+    let env = TestEnv::example();
+    SimRelay::new(&env.world).command(PowerState::On).unwrap();
+    assert_eq!(power_off(&env), cli::PASS);
+    assert_eq!(commands(&env), [PowerState::On, PowerState::Off]);
+    assert_eq!(supply(&env.world), 0);
+    assert_eq!(env.said(), [""; 0]);
+}
+
+#[test]
+fn the_power_off_command_without_confirmation_is_a_bench_fault() {
+    // A meter that reads the supply on whatever it does.
+    let env = TestEnv::example();
+    env.world.knobs().meter.stuck_micro = Some(ON_MICRO);
+    assert_eq!(power_off(&env), cli::BENCH_FAULT);
+    assert_eq!(commands(&env), [PowerState::Off], "one power off, no retry");
+    let said = "readings did not confirm the power off within 3000 ms; the last read 5100000 µV";
+    assert_eq!(env.said(), [said]);
+}
+
+#[test]
+fn the_power_off_command_switches_off_when_the_meter_cannot_be_opened() {
+    let mut env = TestEnv::example();
+    env.no_bridge = true;
+    assert_eq!(power_off(&env), cli::BENCH_FAULT);
+    assert_eq!(commands(&env), [PowerState::Off], "the power off was sent");
+    let said = [
+        "the power_confirmation device failed: no MCP2221 USB bridge is connected",
+        "readings did not confirm the power off within 3000 ms; no reading was taken",
+    ];
+    assert_eq!(env.said(), said);
+}
+
+#[test]
+fn the_power_off_command_finishes_when_interrupted() {
+    let mut env = TestEnv::example();
+    env.interrupts = Interrupts::AtOpen;
+    SimRelay::new(&env.world).command(PowerState::On).unwrap();
+    assert_eq!(power_off(&env), cli::PASS);
+    assert_eq!(commands(&env), [PowerState::On, PowerState::Off]);
+    assert_eq!(supply(&env.world), 0);
+    assert_eq!(env.said(), [""; 0]);
+}
+
+#[test]
+fn the_power_off_command_says_when_a_run_holds_the_bench() {
+    let mut env = TestEnv::example();
+    env.in_use = true;
+    assert_eq!(power_off(&env), cli::PASS);
+    assert_eq!(
+        commands(&env),
+        [PowerState::Off],
+        "one power off all the same"
+    );
+    let said = "a run or publication holds this bench; this power off cuts it, and its receipt \
+                does not show this power off and is no evidence";
+    assert_eq!(env.said(), [said]);
+}
+
+#[test]
+fn the_publish_command_publishes_one_entry_without_a_power_command() {
+    let env = TestEnv::example();
+    assert_eq!(publish(&env, "echo"), cli::PASS);
+    assert!(env.world.power_commands().is_empty(), "no power command");
+    let kernel = example("payload/echo/kernel.img");
+    assert_eq!(served(&env, "kernel.img").unwrap(), kernel);
+    assert!(env.staged(1, "kernel.img") && !env.staged(2, "kernel.img"));
+    assert_eq!(env.said(), [""; 0]);
+    // An entry that the plan does not have is an input error.
+    let env = TestEnv::example();
+    assert_eq!(publish(&env, "absent"), cli::INPUT_ERROR);
+    assert_eq!(env.said(), ["the run plan has no entry absent"]);
+    assert!(!env.staged(1, "kernel.img"), "nothing staged");
+}
+
+#[test]
+fn the_publish_command_reports_a_served_copy_that_differs() {
+    let env = TestEnv::example();
+    env.world.knobs().tftp.corrupts_served = true;
+    assert_eq!(publish(&env, "echo"), cli::BENCH_FAULT);
+    assert!(env.world.power_commands().is_empty(), "no power command");
+    let said = env.said();
+    assert_eq!(said.len(), 5, "{said:?}");
+    for (line, file) in said.iter().zip(["config.txt", "bcm2712-rpi-5-b.dtb"]) {
+        let copy = format!("the served copy of {file} has the SHA-256 ");
+        assert!(line.starts_with(&copy), "{line}");
+    }
+    let last = "the board is served g000001, whose copy differs from the run plan; a run \
+                switches the supply on only for a generation that it published and checked itself";
+    assert_eq!(said[4], last);
+    // Nothing switched back: the board is served the one generation staged.
+    env.world.knobs().tftp.corrupts_served = false;
+    let kernel = example("payload/echo/kernel.img");
+    assert_eq!(served(&env, "kernel.img").unwrap(), kernel);
+    assert!(!env.staged(2, "kernel.img"));
+}
+
+#[test]
+fn the_publish_command_switches_only_while_readings_confirm_the_supply_off() {
+    // A supply that is on: no switch, and no power command.
+    let env = TestEnv::example();
+    SimRelay::new(&env.world).command(PowerState::On).unwrap();
+    assert_eq!(publish(&env, "echo"), cli::REFUSED);
+    assert_eq!(commands(&env), [PowerState::On]);
+    let none = served(&env, "kernel.img").unwrap_err();
+    assert_eq!(none.detail, "no generation is served");
+    let said = "refused: readings did not confirm the supply off within 3000 ms, and publish \
+                sends no power command; the board is served what it was served before; run \
+                power-off first";
+    assert_eq!(env.said(), [said]);
+    // An interrupt before the switch: nothing is served either.
+    let mut env = TestEnv::example();
+    env.interrupts = Interrupts::AtOpen;
+    assert_eq!(publish(&env, "echo"), cli::INTERRUPTED);
+    assert!(env.world.power_commands().is_empty(), "no power command");
+    assert!(served(&env, "kernel.img").is_err(), "nothing served");
+    let said = "interrupted before the switch; the board is served what it was served before";
+    assert_eq!(env.said(), [said]);
+}
+
+#[test]
+fn an_interrupted_run_switches_the_supply_off_and_leaves_no_output() {
+    // The first entry captures until its boot timeout of 60 s.
+    let dir = scratch("interrupted");
+    let plan = plan_with(&dir, |text| {
+        let end = "boot_timeout_ms = 60000\nend = { marker = \"started\" }";
+        text.replacen(end, "boot_timeout_ms = 60000\nend = \"timeout\"", 1)
+    });
+    let mut env = TestEnv::example();
+    env.interrupts = Interrupts::After(PowerState::On);
+    let ran = run(&dir, &plan, &examples().join("payload"), &env);
+    assert_eq!(ran.status, cli::INTERRUPTED);
+    assert!(!ran.out.exists(), "no receipt and no output directory");
+    // The cold boot under way stopped its capture at once and was switched
+    // off as usual, and the supply once more.
+    let sent = [
+        PowerState::Off,
+        PowerState::On,
+        PowerState::Off,
+        PowerState::Off,
+    ];
+    assert_eq!(commands(&env), sent);
+    let at: Vec<u64> = env.world.power_commands().iter().map(|c| c.0.0).collect();
+    assert!(at[2] - at[1] < 1000 * MS, "{at:?}");
+    assert_eq!(supply(&env.world), 0);
+    let said = "the run was interrupted; readings did confirm the power off";
+    assert_eq!(env.said(), [said]);
+    // An interrupt during the power off before the first entry: no cold
+    // boot starts, and the supply is switched off once more.
+    let mut env = TestEnv::example();
+    env.interrupts = Interrupts::After(PowerState::Off);
+    let ran = run_example("interrupted-at-the-start", &env);
+    assert_eq!(ran.status, cli::INTERRUPTED);
+    assert!(!ran.out.exists(), "no receipt and no output directory");
+    assert_eq!(commands(&env), [PowerState::Off; 2]);
+    assert_eq!(env.said(), [said]);
+    // An interrupt after a power on whose power off sticks: the supply is
+    // switched off once more, once.
+    let mut env = TestEnv::example();
+    (env.interrupts, env.sticking) = (Interrupts::After(PowerState::On), Some(3));
+    let ran = run_example("interrupted-and-stuck", &env);
+    assert_eq!(ran.status, cli::INTERRUPTED);
+    let sent = [
+        PowerState::Off,
+        PowerState::On,
+        PowerState::Off,
+        PowerState::Off,
+    ];
+    assert_eq!(commands(&env), sent);
+    assert_eq!(supply(&env.world), 0);
+    assert_eq!(env.said(), [said]);
+}
+
+#[test]
+fn an_interrupt_before_the_first_power_command_sends_none() {
+    let mut env = TestEnv::example();
+    env.interrupts = Interrupts::AtOpen;
+    let ran = run_example("interrupted-before", &env);
+    assert_eq!(ran.status, cli::INTERRUPTED);
+    assert!(!ran.out.exists(), "no receipt and no output directory");
+    assert!(env.world.power_commands().is_empty(), "no power command");
+    let said = "the run was interrupted before its first power command";
+    assert_eq!(env.said(), [said]);
+}
+
+#[test]
+fn a_chunk_held_from_before_a_passed_deadline_is_read() {
+    // The board answers the step 2 ms after its send, within its timeout of
+    // 3 ms, and the console holds the answer until the run reads it 1.5 ms
+    // later, after the step's deadline.
+    let dir = scratch("held-past-deadline");
+    let plan = plan_with(&dir, |text| {
+        text.replacen("timeout_ms = 1000", "timeout_ms = 3", 1)
+    });
+    let mut env = TestEnv::example();
+    env.lagging = true;
+    let ran = run(&dir, &plan, &examples().join("payload"), &env);
+    assert_eq!(ran.status, cli::PASS);
+    let receipt = ran.receipt();
+    let cold_boot = &receipt.entries[1].cold_boots[0];
+    let t = times(&receipt, &cold_boot.events);
+    let (sent, received) = t.send.unwrap();
+    let deadline = sent + 3 * MS;
+    let answer = cold_boot
+        .serial
+        .index
+        .iter()
+        .find(|chunk| chunk[0] == received);
+    assert_eq!(
+        answer,
+        Some(&[received, sent + 2 * MS]),
+        "stamped before the deadline"
+    );
+    assert!(t.end.0 > deadline, "read after the deadline");
+    assert_eq!(end(&cold_boot.events), Some(EndReason::EndCondition));
+}
+
+#[test]
+fn a_line_that_came_before_a_send_is_no_response() {
+    // The board writes the STATS line just after READY, which arms the
+    // step, and answers the send with another line. The console holds the
+    // STATS line when the step is armed; the run reads it before it sends.
+    let mut env = TestEnv::new(played(None, b"OK\r\n", b"no line is this"));
+    env.lagging = true;
+    let ran = run_example("line-before-send", &env);
+    assert_eq!(ran.status, cli::FAIL);
+    let receipt = ran.receipt();
+    let cold_boot = &receipt.entries[1].cold_boots[0];
+    let bytes = &cold_boot.serial.bytes_base64.0;
+    let (_, received) = times(&receipt, &cold_boot.events).send.unwrap();
+    let before = &bytes[..usize::try_from(received).unwrap()];
+    assert!(
+        before.ends_with(b"READY\r\nSTATS seq=1\r\n"),
+        "recorded before the send"
+    );
+    assert!(bytes.ends_with(b"OK\r\n"));
+    assert_eq!(end(&cold_boot.events), Some(EndReason::StepTimeout));
+    assert_eq!(failed(cold_boot), ["step.response"]);
+}
+
+#[test]
+fn a_chunk_stamped_after_a_passed_deadline_ends_the_cold_boot() {
+    // A boot timeout that passes while the run reads the console late, and
+    // a console that then hands a chunk stamped after it.
+    let dir = scratch("stamped-past-deadline");
+    let plan = plan_with(&dir, |text| {
+        let end = "boot_timeout_ms = 60000\nend = { marker = \"started\" }";
+        text.replacen(
+            end,
+            "boot_timeout_ms = 105\nend = { marker = \"started\" }",
+            1,
+        )
+    });
+    let mut env = TestEnv::example();
+    (env.lagging, env.careless) = (true, true);
+    let ran = run(&dir, &plan, &examples().join("payload"), &env);
+    assert_eq!(ran.status, cli::FAIL);
+    let receipt = ran.receipt();
+    let cold_boot = &receipt.entries[0].cold_boots[0];
+    let t = times(&receipt, &cold_boot.events);
+    let deadline = t.on.0 + 105 * MS;
+    assert_eq!(end(&cold_boot.events), Some(EndReason::BootTimeout));
+    assert!(t.end.0 > deadline);
+    let stamps: Vec<u64> = cold_boot
+        .serial
+        .index
+        .iter()
+        .map(|chunk| chunk[1])
+        .collect();
+    assert!(
+        stamps.last().is_some_and(|last| *last < deadline),
+        "{stamps:?}"
+    );
+    assert!(failed(cold_boot).contains(&"boot.end"));
 }

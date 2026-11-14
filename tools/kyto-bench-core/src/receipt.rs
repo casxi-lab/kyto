@@ -543,8 +543,9 @@ impl Receipt {
     /// no event before the first entry, entries that were not run and
     /// checked nothing, and a refusal that names its entry; every entry not
     /// run has no cold boot, and a cold boot's console output, at most the
-    /// capture limit of its entry, is described by its index; a check has a
-    /// detail exactly when it did not pass.
+    /// capture limit of its entry, is described by its index, and every send
+    /// of the cold boot comes between two of its chunks, before the first or
+    /// after the last; a check has a detail exactly when it did not pass.
     pub fn check(&self) -> Result<(), ReceiptError> {
         let (tool, evidence, inputs) = (&self.tool, &self.evidence, &self.inputs);
         let (plan_text, board) = (&inputs.run_plan.text, &inputs.board_description);
@@ -624,6 +625,20 @@ impl Receipt {
                     at("verdict") => cold_boot.verdict != Verdict::NotRun, NOT_RUN;
                 }
                 check_results(&at("checks"), &cold_boot.checks)?;
+                // The offsets of a valid index increase.
+                let between = |received| {
+                    let offsets = serial
+                        .index
+                        .binary_search_by_key(&received, |chunk| chunk[0]);
+                    received == serial.length || offsets.is_ok()
+                };
+                for (position, event) in cold_boot.events.iter().enumerate() {
+                    let send = matches!(event.event, EventKind::Send { .. });
+                    check! {
+                        at(&format!("events/{position}/received")) => !send || between(event.received),
+                            BETWEEN_CHUNKS;
+                    }
+                }
             }
         }
         Ok(())
@@ -708,6 +723,8 @@ pub(crate) fn decoded(at: &str, text: &str) -> Option<Vec<u8>> {
 
 const DIGEST: &str = "the SHA-256 of the recorded text";
 const NOT_RUN: &str = "only an entry is NOT RUN";
+const BETWEEN_CHUNKS: &str =
+    "a send comes between two chunks: at the offset of a chunk or the length";
 
 impl fmt::Display for ReceiptError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -939,6 +956,42 @@ steps = [{ after = "ready", send = "?\r", expect = '^STATS seq=1', timeout_ms = 
             ReceiptError::Invalid { at, .. } => at,
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn a_send_inside_a_chunk_is_refused() {
+        // The worked example has chunks at 0, 41 and 48 of 61 bytes, and its
+        // send at 48.
+        let at = "/entries/0/cold_boots/0/events/3/received";
+        for received in 0..=62 {
+            let mut receipt = example();
+            receipt.entries[0].cold_boots[0].events[3].received = received;
+            if [0, 41, 48, 61].contains(&received) {
+                assert!(
+                    Receipt::parse(receipt.render().as_bytes()).is_ok(),
+                    "{received}"
+                );
+            } else {
+                assert_eq!(invalid_at(&receipt), at, "{received}");
+            }
+        }
+        // Another event inside a chunk is read.
+        let mut receipt = example();
+        receipt.entries[0].cold_boots[0].events[4].received = 50;
+        assert!(Receipt::parse(receipt.render().as_bytes()).is_ok());
+        // A cold boot that received nothing allows a send at 0 alone.
+        let cold_boot = &mut receipt.entries[0].cold_boots[0];
+        cold_boot.serial = Serial {
+            length: 0,
+            bytes_base64: Base64(Vec::new()),
+            index: Vec::new(),
+        };
+        for event in &mut cold_boot.events {
+            event.received = 0;
+        }
+        assert!(Receipt::parse(receipt.render().as_bytes()).is_ok());
+        receipt.entries[0].cold_boots[0].events[3].received = 1;
+        assert_eq!(invalid_at(&receipt), at);
     }
 
     /// The rendering of the example with `from`, which occurs exactly once,

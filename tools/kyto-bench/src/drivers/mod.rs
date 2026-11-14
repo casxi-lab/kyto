@@ -213,6 +213,7 @@ mod tests {
     use std::path::Path;
 
     use kyto_bench_core::board::RASPBERRY_PI_5;
+    use kyto_bench_core::instance::InstanceError;
 
     use super::console::HostConsole;
     use super::relay::Lcus1Relay;
@@ -367,6 +368,88 @@ mod tests {
             let checked = settings(&other, &of_real(&all));
             assert_eq!(checked.unwrap_err(), ONLY_8N1, "{line}");
         }
+    }
+
+    #[test]
+    fn the_instance_template_and_the_bench_example_open_with_a_fresh_salt() {
+        let pi5 = board(RASPBERRY_PI_5);
+        let identity = include_str!("../../../templates/identity.toml");
+        let identity = toml::Value::Table(toml::from_str(identity).unwrap());
+        let files = [
+            include_str!("../../../templates/instance.toml"),
+            include_str!("../../../examples/bench-instance.toml"),
+        ];
+        let mut tables = Vec::new();
+        for text in files {
+            // As written, each is refused for its salt.
+            let refused = Instance::parse(text).unwrap_err();
+            let salt = matches!(&refused, InstanceError::Invalid { at, .. } if at == "local.salt");
+            assert!(salt, "{refused}");
+            let placeholder = "replace with the output of openssl rand -hex 16";
+            let text = text.replacen(placeholder, &crate::env::nonce().unwrap(), 1);
+            let instance = Instance::parse(&text).unwrap();
+            instance.check_board(&pi5).unwrap();
+            // Real devices of the kinds of the drivers, whose settings are
+            // key names alone.
+            let devices = instance.devices();
+            assert_eq!(
+                Role::ALL.map(|role| devices.device(role).kind.as_str()),
+                KINDS
+            );
+            assert!(!devices.any_simulated());
+            for role in Role::ALL {
+                let values = instance
+                    .local(role)
+                    .into_iter()
+                    .flat_map(|local| local.values());
+                assert!(
+                    values.into_iter().all(|value| value.as_str() == Some("")),
+                    "{role}"
+                );
+            }
+            // Filled in, the settings are those that the drivers read.
+            let filled = text
+                .replacen("port = \"\"", "port = \"/dev/cu.kyto-test-relay\"", 1)
+                .replacen("relay = \"\"", "relay = \"1\"", 1)
+                .replacen("port = \"\"", "port = \"/dev/cu.kyto-test-console\"", 1)
+                .replacen("dir = \"\"", "dir = \"/kyto-test/tftp\"", 1);
+            let read = settings(&pi5, &Instance::parse(&filled).unwrap()).unwrap();
+            assert_eq!(
+                (read.power.relay.as_str(), read.delivery.link.as_str()),
+                ("1", "example")
+            );
+            assert_eq!(read.meter, (Quantity::SupplyVoltage, 15_000));
+            let extra = filled.replacen(
+                "[local.console]\n",
+                "[local.console]\nbaud = \"115200\"\n",
+                1,
+            );
+            let refused = settings(&pi5, &Instance::parse(&extra).unwrap()).unwrap_err();
+            assert!(
+                refused.starts_with("[local.console]: unknown field `baud`"),
+                "{refused}"
+            );
+            // The identity record is the form of the identity template.
+            let table: toml::Table = toml::from_str(&text).unwrap();
+            assert_eq!(table["identity"], identity);
+            tables.push(table);
+        }
+        // The example is the template with a GPIO loopback, which the
+        // template shows as a comment.
+        let kinds = |table: &toml::Table| {
+            let devices = table["devices"].as_table().unwrap();
+            Role::ALL.map(|role| devices[role.name()]["kind"].clone())
+        };
+        assert_eq!(kinds(&tables[0]), kinds(&tables[1]));
+        let loopback = toml::Value::Table(toml::from_str(
+            "from = \"board header pin 11, GPIO17\"\nto = \"board header pin 13, GPIO27, through 1 kOhm\"",
+        ).unwrap());
+        let connections =
+            |table: &toml::Table| table["devices"]["connections"].as_array().unwrap().clone();
+        let mut expected = connections(&tables[0]);
+        expected.push(loopback);
+        assert_eq!(connections(&tables[1]), expected);
+        assert!(files[0].contains("\n# from = \"board header pin 11, GPIO17\"\n"));
     }
 
     #[test]

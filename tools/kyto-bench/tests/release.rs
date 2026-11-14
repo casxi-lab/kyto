@@ -161,3 +161,20 @@ fn output_that_nothing_reads_changes_no_exit_status() {
         assert_eq!(out.join("receipt.json").exists(), status == 0);
     }
 }
+
+#[test]
+fn the_built_binary_says_an_input_error_on_standard_error() {
+    // A plan that cannot be read: an input error, said on standard error as
+    // one line after the name of the tool, and nothing on standard output.
+    let dir = scratch("input-error");
+    let (plan, out) = (dir.join("absent.toml"), dir.join("out"));
+    let output = kyto_bench(&plan, &examples().join("payload"), &out)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    let error = fs::read(&plan).unwrap_err();
+    let said = format!("kyto-bench: cannot read {}: {error}\n", plan.display());
+    assert_eq!(String::from_utf8(output.stderr).unwrap(), said);
+    assert!(!out.exists(), "no output directory");
+}

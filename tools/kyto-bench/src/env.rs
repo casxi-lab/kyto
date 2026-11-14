@@ -11,6 +11,7 @@
 //! settings.
 
 use std::fs;
+use std::io::{self, Write};
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -91,6 +92,18 @@ pub trait Env {
     fn bench_in_use(&self, _instance: &Instance) -> bool {
         false
     }
+
+    /// Says `message` on the tool's standard error, through [`say_to`].
+    fn say(&self, message: &str) {
+        say_to(&mut io::stderr(), message);
+    }
+}
+
+/// Writes `message` to `out` as one line after `kyto-bench: `. A message
+/// that cannot be written is dropped, so that it never ends a run or
+/// changes an exit status.
+pub fn say_to(out: &mut dyn Write, message: &str) {
+    let _ = writeln!(out, "kyto-bench: {message}");
 }
 
 /// The surroundings of the `kyto-bench` command.
@@ -196,6 +209,34 @@ mod tests {
             );
         }
         assert_ne!(first, second);
+    }
+
+    /// A writer that fails.
+    struct Closed;
+
+    impl Write for Closed {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn say_to_writes_one_line_after_the_tool_name() {
+        let mut out = Vec::new();
+        say_to(
+            &mut out,
+            "the run stopped; readings did confirm the power off",
+        );
+        say_to(&mut out, "µ");
+        let said =
+            "kyto-bench: the run stopped; readings did confirm the power off\nkyto-bench: µ\n";
+        assert_eq!(out, said.as_bytes());
+        // A message that cannot be written is dropped.
+        say_to(&mut Closed, "nothing reads this");
     }
 
     #[test]

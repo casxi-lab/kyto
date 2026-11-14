@@ -14,14 +14,18 @@ what a cold boot shows, judges cold boots, entries and runs, renders
 receipts and reads them back strictly, re-derives their verdicts, and makes
 and checks public versions.
 
-The command of the tool, `kyto-bench`, has one subcommand, `run`. It reads a
+The command of the tool, `kyto-bench`, has three subcommands. `run` reads a
 run plan and an instance configuration, checks the payload of every entry,
 runs the plan on the bench that the configuration describes, and writes the
 receipt of the run, `receipt.json`, and its public version,
-`receipt.public.json`, into a new directory. The tool has devices of one
-kind so far, [`simulated`](#local-settings), so it runs plans on simulated
-devices only. From the repository root, this command runs the example run
-plan on the simulated devices of the example instance configuration,
+`receipt.public.json`, into a new directory. `power-off` and `publish`
+switch the supply of a bench off and publish the payload of one entry, as
+[commands without a run](#commands-without-a-run) describes. The tool drives
+devices of four real kinds, one for each role, and devices of the kind
+`simulated` for every role, which the [local settings](#local-settings)
+describe; a bench's devices are all simulated or all real. From the
+repository root, this command runs the example run plan on the simulated
+devices of the example instance configuration,
 [`tools/examples/instance.toml`](../../tools/examples/instance.toml), whose
 console replays the example console output in
 [`tools/examples/captures/`](../../tools/examples/captures):
@@ -49,13 +53,59 @@ run needs another one. The exit status gives the result:
 | 4 | The run was [refused](#refused-runs) before any power command; the receipt says why |
 | 5 | The receipt was written, but not its public version: the [leak check](#the-leak-check) refused it, and the error names the rule and the field of each value found, or it cannot be written, and the error says why. The receipt gives the verdict or the refusal |
 | 101 | The run stopped on an error of the tool itself, a panic. A panic while the entries ran switched the supply off once more and says on standard error whether readings confirmed it; one before them sent no power command. No receipt is left, and the output directory is removed |
+| 130 | An interrupt, SIGINT, SIGTERM or SIGHUP, stopped a run on a bench of real devices. One that came after the run's first power command let the cold boot under way end with its power off, then switched the supply off once more and says on standard error whether readings confirmed it; one before sent no power command. No receipt is left, and the output directory is removed |
 
 A message or result that cannot be written, as when nothing reads standard
-output or standard error any more, changes no exit status.
+output or standard error any more, changes no exit status. The tool's own
+messages on standard error start with `kyto-bench: `.
+
+### Commands without a run
+
+`kyto-bench power-off --instance <file>` opens the bench of an instance
+configuration, sends one power off, without a retry, and takes readings
+until they confirm it, as a run confirms a power off, or `off_timeout_ms`
+has passed. It writes no receipt and does not stop for an interrupt. It
+takes no lock, so that it works while a run holds the bench; on a bench of
+real devices it first says when a run or a publication holds the
+[TFTP directory](#local-settings) of the bench, since that run's receipt
+does not show this power off and is no evidence. Its exit status:
+
+| Status | Result |
+| --- | --- |
+| 0 | Readings confirmed the power off; standard output gives the last reading |
+| 2 | A usage or input error: the command line is not valid, the instance configuration cannot be read or does not pass its checks, or the bench cannot be opened |
+| 3 | `BENCH FAULT`: readings did not confirm the power off, or a device failed, such as a meter that cannot be opened, after the power off was sent; standard error says which, with the last reading |
+| 101 | An error of the tool itself |
+
+`kyto-bench publish --plan <file> --instance <file> --payload-root <dir>
+--entry <name>` makes the payload of the entry `name` of a run plan the
+generation that the board is served. It reads the plan and the instance
+configuration as `run` does, makes the [payload checks](#payload-checks) of
+the entry, stages its payload and checks the staged copy, and then, without
+any power command, takes readings until they confirm the supply off, as for
+a power off, within `off_timeout_ms`. Only then does it switch, and it
+checks the copy that the board is served after the switch with
+`payload.served_digest`. It never switches back: a run powers a board only
+for a generation that the run itself published and checked. It writes no
+receipt. An interrupt before the switch stops it; one after the switch does
+not. Its exit status:
+
+| Status | Result |
+| --- | --- |
+| 0 | Published: the board is served the new generation, whose copy has the digests of the run plan; standard output names the generation |
+| 2 | A usage or input error, as for `run`, or a plan with no entry of that name |
+| 3 | `BENCH FAULT`: a device failed, or the copy that the board is served after the switch differs; standard error names each file that differs and the generation now served |
+| 4 | Refused: a payload check failed, the TFTP directory is held by another run or publication, so that the payload cannot be staged, or readings did not confirm the supply off; what the board is served did not change |
+| 101 | An error of the tool itself |
+| 130 | An interrupt stopped it before the switch; what the board is served did not change |
+
+Since `publish` relies on readings alone to tell that the board is off,
+switch the supply off with `power-off` first when its state is unknown.
 
 The tests of the tool read the Raspberry Pi 5 description, the identity
-record template and the examples under `tools/examples/`, run the example run
-plan through the command, and run from the repository root with:
+record and instance configuration templates and the examples under
+`tools/examples/`, run the example run plan through the command, and run
+from the repository root with:
 
 ```sh
 cargo test --locked --manifest-path tools/Cargo.toml
@@ -528,7 +578,9 @@ the parameters of the bench that the tool reads (`[tftp]`, `[confirmation]`,
 digests that the bench pins in `[[pins]]`, the devices and their connections
 in `[devices]`, and in `[local]` a random salt and this machine's settings of
 each device. A bench keeps its instance configuration outside this
-repository; kyto holds none. This example uses documentation values only,
+repository; kyto holds a
+[template](../../tools/templates/instance.toml) for one and examples, and no
+value of any bench. This example uses documentation values only,
 with an empty path prefix and a salt that no bench may use:
 
 ```toml
@@ -603,7 +655,7 @@ salt = "9c1f5e0a7b3d48e2a6c0f4b8d2e71a35"
 ### Devices
 
 `[devices]` gives the device of each of the four roles of a bench, each as
-`{ kind, model }`, and the connections between them:
+`{ kind, model }`, and the connections of the bench:
 
 - `power` switches the board's supply;
 - `power_confirmation` confirms the supply state with a reading of its own;
@@ -611,14 +663,21 @@ salt = "9c1f5e0a7b3d48e2a6c0f4b8d2e71a35"
 - `delivery` publishes payloads where the board reads them over TFTP.
 
 `kind`, a name, is the kind of driver that runs the device, and `model`, a
-line of text, is the model of the device. `connections` lists the connections
-between devices and the board, each `{ from, to }` with two lines of text;
-the key is required, and the list can be empty. `[devices]` holds no address,
-relay channel or local path. Reading a configuration checks only the form of
+line of text, is the model of the device. `connections` lists the
+connections of the bench, each `{ from, to }` with two lines of text: those
+between devices, between a device and the board or its supply, and those on
+the board itself, such as a jumper between two pins of its header that a
+test needs. Each end names a device by its role, or the board, the supply or
+the host, and then its terminal or pin, such as `power relay NO` or
+`board header pin 11, GPIO17`; the tool reads neither end. The key is
+required, and the list can be empty. `[devices]` holds no address, relay
+channel or local path. Reading a configuration checks only the form of
 `kind`. A run opens the device of each role with the driver of its kind, and
-a kind that the tool has no driver for is an input error. The tool has one
-kind so far, `simulated`, for every role, whose devices the
-[local settings](#local-settings) describe.
+a kind that the tool has no driver for is an input error. The tool has the
+kind `simulated` for every role, and for each role one kind of real device:
+`lcus-1`, `ina228-mcp2221`, `serial` and `tftp-directory`, which the
+[local settings](#local-settings) describe. A bench's devices are all
+simulated or all real, and a mix is an input error.
 
 The bench hardware revision is the SHA-256 of the canonical JSON of the
 `[devices]` table as written. The canonical JSON of a TOML value is UTF-8
@@ -671,7 +730,11 @@ SHA-256 of the whole configuration file, and its
 [public version](#public-versions) shows every digest. The other values of a
 configuration are few and could be guessed from a template and tried one by
 one against that digest; with 128 random bits in the file, they cannot. The
-salt itself never enters a receipt.
+salt itself never enters a receipt. The
+[instance configuration template](../../tools/templates/instance.toml) and
+the [example of a bench of real devices](../../tools/examples/bench-instance.toml)
+hold no salt, only a text in its place that reading refuses, so each bench
+generates its own.
 
 The devices of the kind `simulated` share a simulated clock, which is the
 bench clock of a run on them, so a run waits for nothing in real time and
@@ -685,6 +748,48 @@ k-th line k ms after the supply comes on; after the last file, the board
 writes nothing. The console answers nothing that it is sent, so the
 response of a step must already be in the file. The other roles take no
 settings, so their tables are absent or empty.
+
+The devices of the real kinds take the settings below. Each table refuses
+a key that its kind does not read, and opening the bench checks only their
+form: no port, bridge or directory is opened then, so `power-off` works
+while the console adapter or the TFTP directory is missing.
+
+| Role | Kind | `[local.<role>]` | What the driver does |
+| --- | --- | --- | --- |
+| `power` | `lcus-1` | `port`, the absolute path of the callout device of the relay module's USB serial port, and `relay`, `"1"`, the one relay of the module | An LCUS-1 USB relay module (CH340). For each power command it opens the port exclusively and locks it, sets 9600 baud, 8 data bits, no parity and 1 stop bit, discards what the port holds, waits 250 ms, writes `A0 01 01 A2` to switch the supply on or `A0 01 00 A1` to switch it off, waits until the port has sent the frame, which is the time of the command, waits 150 ms more, restores the port and closes it. It never reads a reply and never sends a command again |
+| `power_confirmation` | `ina228-mcp2221` | none: the table is absent or empty | A TI INA228 at the I2C address 0x40, read at 100 kHz through the Microchip MCP2221 or MCP2221A USB bridge (USB `04D8:00DD`) of the host. Its model is one of the two that the driver knows, each with a 15 mΩ shunt: `Adafruit 5832 INA228 board (15 mOhm shunt) with Adafruit 4471 MCP2221A bridge` and `Adafruit 5832 INA228 board (15 mOhm shunt) with Microchip ADM00559 MCP2221 bridge`. At its first reading it opens the one bridge of the host exclusively; a host with no bridge or more than one, or a bridge that another program holds, makes that reading a failure of the device, and the next reading tries again. `supply_voltage` is the INA228's bus voltage and `supply_current` the current through the shunt; a current below −20 mA, from the board towards the relay, is a failure of the device, as the shunt would be wired the wrong way round. A reading is of a conversion that began after it was asked for |
+| `console` | `serial` | `port`, the absolute path of the callout device of the USB serial adapter, another device than the power's | A USB serial adapter, opened exclusively for each cold boot at the line settings of the board description, which must be 115200 baud, 8N1. It discards what arrives in the first 50 ms after it opened, and stamps each chunk with the bench clock when it arrives on the host |
+| `delivery` | `tftp-directory` | `dir`, the absolute path of the directory from which the TFTP server serves the board | As below |
+
+The bench clock of real devices is the monotonic clock of the host,
+started when the bench opens, which does not run while the host sleeps.
+Its times are in nanoseconds, but a chunk's stamp is the time at which the
+host received the chunk from the adapter, after the adapter's own buffering,
+so it can be later than the board wrote its bytes, and every byte of a chunk
+has the same stamp. Output that is still on its way to the host when a run
+sends a step is recorded after the send.
+
+The delivery device of the kind `tftp-directory` publishes into a directory
+of the bench host from which a TFTP server serves the board. The path prefix
+of `[tftp]` must be one directory name and `/`, such as `current/`, whose
+name is not `releases` in any letter case: the board is served through a
+symbolic link of that name in `dir`. Each staged generation is a new
+directory `releases/<generation>` below `dir`, with files of the mode `0644`
+and directories of `0755`; a name that `releases` holds already, in any
+letter case, is never used again, and nothing in `releases` is changed or
+removed. Switching makes a new link whose target is the relative path
+`releases/<generation>`, so that a server that serves from a changed root
+resolves it as the tool does, and renames it over the old link, so that the
+board finds the old generation or the new one, never neither; on macOS a
+read through the link at that moment can fail, and the tool switches only
+while readings confirm the supply off. A link to anything else, such as one
+that another publisher left, is replaced the same way; a file or directory
+of that name is refused. The tool switches only to a generation that the
+same run or publication staged whole. From its first staging until it ends,
+a run or a publication holds a lock on `dir`, so that no other one stages
+or switches there meanwhile; `kyto-bench power-off` takes no lock. The tool
+never deletes a generation, so whoever runs the bench removes old ones from
+`releases/` by hand, never the one that the link names.
 
 ### Values to hide
 
@@ -842,13 +947,19 @@ hour, of the send. Steps run in order:
   later step by the first line of its `after` marker that is read after the
   response of the step before it, which can be that response itself;
 - an armed step is sent once the chunk that holds its trigger line has been
-  read;
+  read, and every chunk that the console holds already, stamped before the
+  run sends, which can end the cold boot first or show that the step is
+  not due;
 - its response is the first line that starts after the last byte received
   before the send and matches `expect`; it must be complete, ended by its
   LF, within `timeout_ms` of the send.
 
 Only complete lines arm and answer steps and end a cold boot at its marker:
-the unterminated last line of a capture does none of these.
+the unterminated last line of a capture does none of these. A send lies
+between two chunks, before the first or after the last, never inside one.
+Output that is still on its way to the host when a step is sent is recorded
+after the send, and can be read as its response, so a step's `expect` should
+match only output that the send causes.
 
 `end = { marker = "<marker>" }` ends a cold boot once a complete line of the
 marker has appeared and every step has its response. `end = "timeout"`
@@ -856,7 +967,10 @@ captures until the boot timeout. A run ends a cold boot at the boot timeout,
 or when the `timeout_ms` of the step that waits for its response has passed,
 once its bench clock reaches that time, whatever the console reports: a
 console that reports nothing by then does not keep the cold boot going, and
-one that reports a deadline earlier does not end it.
+one that reports a deadline earlier does not end it. Once that time has
+passed, the run still takes a chunk that the console stamped before it and
+holds already, and goes on; a chunk stamped at that time or later ends the
+cold boot as the time does.
 
 ### Checks of a run plan
 
@@ -921,9 +1035,9 @@ file; a file that differs is a fault of the bench.
 The library reads the transcript of a cold boot in [lines](#lines), with the
 line patterns of the board description and of the entry. It reads a
 transcript the same way while it is received and when a record of it is read
-back, with each send placed after the bytes received before it (a send that
-a receipt records inside a chunk is placed after that chunk, one of the
-contract's [current deviations](contract.md#current-deviations)); the
+back, with each send placed after the bytes received before it, which a run
+records only between two chunks, before the first or after the last, and
+which [reading a receipt](#reading-a-receipt) therefore requires; the
 unterminated last line of a capture is read when the capture ends, but not
 for [steps or the end](#steps-and-the-end-of-a-cold-boot). A line is
 named by its offset. From the lines, in order, it takes:
@@ -1419,13 +1533,25 @@ The library reads a receipt strictly:
      most the cold boots of the plan's entry, numbered from 0;
    - each `serial` has the `length` and an `index` of its bytes, of at most
      65536 chunks, and at most the `max_capture_bytes` of the plan's entry;
+   - each `send` event of a cold boot has as `received` the offset of one of
+     the chunks of its `serial`, or its `length`: a send comes between two
+     chunks, before the first or after the last, never inside one. A cold
+     boot that received nothing has an empty `index` and the `length` 0, so
+     each of its sends has `received` 0. That the `received` of the events
+     of a cold boot, its sends among them, never decreases is not checked
+     here but by `power.order`, which finds such events
+     [out of order](#the-supply) when the verdicts are re-derived;
    - each check has `detail` exactly when it did not pass.
 
 Reading a receipt does not check the rule names of checks and refusals
 against the lists above, so that the rules can be refined without a new
-version of the format, nor the order and times of events, nor whether the
-observations, checks and verdicts follow from the record:
-[re-deriving verdicts](#re-deriving-verdicts) does.
+version of the format, nor the times of events or their order, beyond where
+each send falls among the chunks, nor whether the observations, checks and
+verdicts follow from the record:
+[re-deriving verdicts](#re-deriving-verdicts) does. The time of a send is
+not compared with the times of the chunks: a console stamps chunks as they
+arrive, which can be while a send is under way, so the chunk after a send
+can carry an earlier time than the send.
 
 ## Public versions
 
@@ -1470,7 +1596,7 @@ its public version, with the receipt digest shortened here, starts like this:
 {
   "format": "kyto-bench public receipt",
   "format_version": 1,
-  "receipt_sha256": "a67d6e1a...",
+  "receipt_sha256": "395991dc...",
   "placeholder": "#",
   "withheld": [
     {

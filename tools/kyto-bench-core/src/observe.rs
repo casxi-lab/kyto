@@ -521,7 +521,9 @@ pub struct ColdBootInputs<'a> {
 /// The observations of a recorded cold boot: the chunks of the transcript
 /// and the sends are fed to a [`Matcher`] in the order they happened, each
 /// send before the chunk that starts at or after the bytes received before
-/// it. Fails when the index does not describe the transcript.
+/// it. A receipt that has been read records every send between two chunks,
+/// so each comes exactly where it was sent. Fails when the index does not
+/// describe the transcript.
 pub fn observe(inputs: &ColdBootInputs<'_>) -> Result<Observations, IndexError> {
     let mut matcher = Matcher::new(inputs.board, inputs.entry, inputs.tftp, inputs.payload);
     let mut sends = inputs.sends.iter().peekable();

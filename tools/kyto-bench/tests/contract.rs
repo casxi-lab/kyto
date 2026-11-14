@@ -24,7 +24,7 @@ macro_rules! sources {
 /// Every source of the library and of the command, and the test files that
 /// the contract may name. The modules that any source of the crates
 /// declares are checked against this list, so a new module joins it.
-const SOURCES: [(&str, &str); 52] = sources![
+const SOURCES: [(&str, &str); 53] = sources![
     "tools/kyto-bench-core/src/board.rs",
     "tools/kyto-bench-core/src/bootloader.rs",
     "tools/kyto-bench-core/src/digest.rs",
@@ -48,6 +48,7 @@ const SOURCES: [(&str, &str); 52] = sources![
     "tools/kyto-bench-core/src/write.rs",
     "tools/kyto-bench/src/assemble.rs",
     "tools/kyto-bench/src/cli.rs",
+    "tools/kyto-bench/src/commands.rs",
     "tools/kyto-bench/src/device.rs",
     "tools/kyto-bench/src/drivers/clock.rs",
     "tools/kyto-bench/src/drivers/console.rs",
@@ -82,8 +83,8 @@ const SOURCES: [(&str, &str); 52] = sources![
 /// The number of requirements of each prefix, of rows of the requirement
 /// tests and of rule names. A change that adds or removes a requirement, a
 /// row or a rule changes these in the same change.
-const REQUIREMENT_COUNTS: [(&str, usize); 3] = [("POWER", 6), ("PROV", 8), ("VERD", 12)];
-const REQUIREMENT_TEST_ROWS: usize = 110;
+const REQUIREMENT_COUNTS: [(&str, usize); 3] = [("POWER", 7), ("PROV", 8), ("VERD", 12)];
+const REQUIREMENT_TEST_ROWS: usize = 132;
 const RULE_ROWS: usize = 32;
 
 /// The constructors that name a rule as their first argument, called in
@@ -503,8 +504,10 @@ fn item<'a>(sources: &[(&'a str, &str)], path: &str) -> Option<(&'a str, String)
         words.any(|word| word == name)
     };
     (1..segments.len()).rev().find_map(|split| {
-        let module = format!("/src/{}.rs", segments[..split].join("/"));
-        let (file, text) = sources.iter().find(|(file, _)| file.ends_with(&module))?;
+        let module = segments[..split].join("/");
+        let paths = [format!("/src/{module}.rs"), format!("/src/{module}/mod.rs")];
+        let of = |file: &&(&str, &str)| paths.iter().any(|path| file.0.ends_with(path));
+        let (file, text) = sources.iter().find(of)?;
         let code = code(text);
         let lines: Vec<&str> = code.lines().collect();
         let found = match segments[split..] {
@@ -864,29 +867,34 @@ fn the_contract_lists_every_requirement_and_rule() {
     assert_finds(&requirements("### PROV-R02", "### PROV-R03"), "PROV runs");
     let found = requirements("### POWER-R06", "### power-R06");
     assert_finds(&found, "power-R06 is not a requirement id");
-    let found = requirements("### POWER-R06", "### POWER-R06\n\n### POWER-R07");
-    assert_finds(&found, "POWER has 7 requirements, not 6");
-    assert_finds(&found, "POWER-R07 has no test");
+    let found = requirements("### POWER-R07", "### POWER-R07\n\n### POWER-R08");
+    assert_finds(&found, "POWER has 8 requirements, not 7");
+    assert_finds(&found, "POWER-R08 has no test");
     let found = requirements("### VERD-R01", "### VER-R01");
     assert_finds(&found, "VER is not a known prefix");
-    let last = REQUIREMENTS.find("### POWER-R06").unwrap();
+    let last = REQUIREMENTS.find("### POWER-R07").unwrap();
     let rest = REQUIREMENTS[last + 1..]
         .find("\n#")
         .map_or(REQUIREMENTS.len(), |at| last + at + 2);
     let fewer = format!("{}{}", &REQUIREMENTS[..last], &REQUIREMENTS[rest..]);
     let lines = CONTRACT
         .lines()
-        .filter(|line| !line.starts_with("| [POWER-R06]"));
+        .filter(|line| !line.starts_with("| [POWER-R07]"));
     let without = lines.collect::<Vec<_>>().join("\n");
     let found = problems(&fewer, &without, FORMATS, &SOURCES);
-    assert_finds(&found, "POWER has 5 requirements, not 6");
+    assert_finds(&found, "POWER has 6 requirements, not 7");
     // A requirement without a row or without a negative one, a row removed,
     // and a row of another requirement, anchor, test, file or kind.
     let row = "| [POWER-R05](requirements.md#power-r05) \
         | `a_run_that_panics_switches_the_supply_off_and_leaves_no_output` \
         | `tools/kyto-bench/tests/run.rs` | negative |\n";
     let edit = |from: &str, to: &str| contract(row, &row.replace(from, to));
-    assert_finds(&contract(row, ""), "POWER-R05 has no test");
+    let lines = CONTRACT
+        .lines()
+        .filter(|line| !line.starts_with("| [POWER-R05]"));
+    let without = lines.collect::<Vec<_>>().join("\n");
+    let found = problems(REQUIREMENTS, &without, FORMATS, &SOURCES);
+    assert_finds(&found, "POWER-R05 has no test");
     assert_finds(
         &edit("negative", "positive"),
         "POWER-R05 has no negative test",
@@ -899,9 +907,9 @@ fn the_contract_lists_every_requirement_and_rule() {
     assert_finds(&contract(other, ""), &rows);
     let found = edit(
         "POWER-R05](requirements.md#power-r05",
-        "POWER-R07](requirements.md#power-r07",
+        "POWER-R08](requirements.md#power-r08",
     );
-    assert_finds(&found, "POWER-R07 is not a requirement");
+    assert_finds(&found, "POWER-R08 is not a requirement");
     assert_finds(&edit("#power-r05", "#power-r04"), "is not a link");
     let found = edit("leaves_no_output", "leaves_nothing");
     assert_finds(&found, "run.rs has no test a_run_that_panics");

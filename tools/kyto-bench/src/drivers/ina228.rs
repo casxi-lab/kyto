@@ -425,11 +425,15 @@ mod tests {
             (1, (0, CONVERSIONS))
         );
         // A link that fails is dropped, and the next reading opens the
-        // bridge again.
+        // bridge again, sets it up and checks the INA228's identity again.
+        let other = "the device at I2C address 0x40 is not an INA228 (manufacturer ID 5448)";
         for error in [LinkError::Gone, LinkError::NotTaken] {
             bridge.knobs().link = Some(error);
             assert_eq!(detail(&mut meter), error.to_string());
             bridge.knobs().link = None;
+            bridge.knobs().ids = Some((0x5448, 0x2281));
+            assert_eq!(detail(&mut meter), other);
+            bridge.knobs().ids = None;
             assert_eq!(micro(&mut meter), ON_MICRO);
         }
         assert_eq!(bridge.opens(), 3);

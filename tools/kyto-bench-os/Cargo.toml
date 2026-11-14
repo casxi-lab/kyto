@@ -1,0 +1,23 @@
+[package]
+name = "kyto-bench-os"
+description = "The operating-system edge of the kyto bench tool: serial ports, interrupt signals and the system clock"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+libc = { workspace = true }
+serde_json = { workspace = true }
+
+# The serial transport is copied from krepi with krepi's lints: this member
+# alone may use unsafe code, each unsafe operation in an unsafe function
+# needs a block of its own, and each unsafe block a SAFETY comment. The other
+# members forbid unsafe code through the workspace lints; this table repeats
+# every other lint of the workspace, which a test of the workspace checks.
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"

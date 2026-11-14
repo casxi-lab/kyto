@@ -1,7 +1,7 @@
 # The bench tool is a workspace of its own, apart from the repository tasks
 # in `xtask/`, with its own `Cargo.lock`.
 [workspace]
-members = ["kyto-bench-core", "kyto-bench"]
+members = ["kyto-bench-core", "kyto-bench-os", "kyto-bench"]
 resolver = "3"
 
 [workspace.package]
@@ -29,6 +29,12 @@ clap = { version = "=4.6.7", default-features = false, features = ["std", "help"
 # The 128-bit nonce of each receipt is read from the operating system's
 # generator with `fill`, which needs no feature.
 getrandom = { version = "=0.4.3", default-features = false }
+# The terminal, lock and signal calls of the serial transport copied from
+# krepi and of the command port of `kyto-bench-os`, and the pseudo-terminals,
+# signals and child processes of their tests. Only the C declarations are
+# used, which need no standard-library support, so the default feature is
+# left out.
+libc = { version = "=0.2.191", default-features = false }
 # Line patterns are matched against the bytes of one console line with
 # Unicode mode off, so the Unicode tables are left out; console lines are
 # short, so the literal and DFA optimisations of `perf` are left out; `std` is

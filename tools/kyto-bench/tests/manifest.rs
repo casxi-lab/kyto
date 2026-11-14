@@ -1,13 +1,17 @@
-//! Checks of the workspace manifests, the lock file and the Clippy settings:
-//! every external dependency is an exact version from crates.io, declared
-//! once in the workspace under a comment that explains its features, the
-//! lock file holds nothing but crates.io packages and the workspace members,
-//! and a member with Clippy settings of its own keeps every ban of the
-//! workspace.
+//! Checks of the workspace manifests, the lock file, the lints, the Clippy
+//! settings and the copied code: every external dependency is an exact
+//! version from crates.io, declared once in the workspace under a comment
+//! that explains its features, the lock file holds nothing but crates.io
+//! packages and the workspace members, a member with Clippy settings of its
+//! own keeps every ban of the workspace, only `kyto-bench-os` has lints of
+//! its own and depends on `libc`, the bans are lifted only where they are
+//! listed, and the code copied from krepi has the digests that `PORTING.md`
+//! records.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use kyto_bench_core::digest::Sha256;
 use toml::{Table, Value};
 
 /// The source that Cargo writes in the lock file for crates.io.
@@ -15,6 +19,60 @@ const CRATES_IO: &str = "registry+https://github.com/rust-lang/crates.io-index";
 
 /// The keys a workspace dependency may have.
 const DEPENDENCY_KEYS: [&str; 3] = ["version", "default-features", "features"];
+
+/// The one member with lints of its own, which may use unsafe code and
+/// depends on `libc`.
+const UNSAFE_MEMBER: &str = "kyto-bench-os";
+
+/// The lints that lift a ban of the workspace when they are allowed: unsafe
+/// code, and the bans of `clippy.toml`.
+const ESCAPES: [&str; 3] = [
+    "unsafe_code",
+    "clippy::disallowed_methods",
+    "clippy::disallowed_types",
+];
+
+/// The files apart from the crate root of `kyto-bench-os` that allow a lint
+/// of [`ESCAPES`], from the workspace directory, each with the lints of its
+/// one attribute that allows lints.
+const OTHER_ESCAPES: [(&str, &[&str]); 2] = [
+    ("kyto-bench/build.rs", &["clippy::disallowed_types"]),
+    ("kyto-bench/tests/release.rs", &["clippy::disallowed_types"]),
+];
+
+/// The modules that the crate root of `kyto-bench-os` declares, each with
+/// the lints that the attributes on its declaration allow and whether one
+/// of them forbids unsafe code.
+const OS_MODULES: [(&str, &[&str], bool); 9] = [
+    ("clock", &["clippy::disallowed_methods"], true),
+    ("command_port", &[], false),
+    ("console", &["clippy::disallowed_methods"], true),
+    ("report", &["clippy::disallowed_methods"], true),
+    ("timing", &[], true),
+    ("tty", &["clippy::disallowed_methods"], false),
+    (
+        "child",
+        &[
+            "clippy::disallowed_methods",
+            "clippy::disallowed_types",
+            "dead_code",
+        ],
+        false,
+    ),
+    ("pty", &["clippy::disallowed_methods", "dead_code"], false),
+    (
+        "scratch",
+        &[
+            "clippy::disallowed_methods",
+            "clippy::disallowed_types",
+            "dead_code",
+        ],
+        true,
+    ),
+];
+
+/// The line that ends a span of lines copied from krepi.
+const SPAN_END: &str = "// End of the lines from krepi.";
 
 fn workspace_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
@@ -172,11 +230,6 @@ fn dependencies_are_commented_exact_crates_io_pins() {
         for kind in ["dev-dependencies", "build-dependencies", "target"] {
             assert!(!manifest.contains_key(kind), "{dir} has no {kind} table");
         }
-        assert_eq!(
-            table(manifest, "lints", dir).get("workspace"),
-            Some(&Value::Boolean(true)),
-            "{dir} uses the workspace lints"
-        );
         let Some(dependencies) = manifest.get("dependencies") else {
             continue;
         };
@@ -338,4 +391,264 @@ fn member_clippy_settings_keep_every_workspace_ban() {
         }
     }
     assert!(checked > 0, "the core has Clippy settings of its own");
+}
+
+#[test]
+fn only_the_os_member_has_lints_of_its_own_and_libc() {
+    let (_, workspace) = workspace_manifest();
+    let lints = table(
+        table(&workspace, "workspace", "the workspace manifest"),
+        "lints",
+        "[workspace]",
+    );
+    // krepi's lints, and every lint of the workspace but `unsafe_code`.
+    let mut expected = lints.clone();
+    let mut group = |name: &str| -> Table {
+        let group = expected.remove(name).unwrap_or(Value::Table(Table::new()));
+        group
+            .as_table()
+            .cloned()
+            .expect("a group of lints is a table")
+    };
+    let (mut rust, mut clippy) = (group("rust"), group("clippy"));
+    assert_eq!(
+        rust.remove("unsafe_code"),
+        Some(Value::from("forbid")),
+        "the workspace forbids unsafe code"
+    );
+    rust.insert("unsafe_op_in_unsafe_fn".into(), Value::from("deny"));
+    clippy.insert("undocumented_unsafe_blocks".into(), Value::from("deny"));
+    expected.insert("rust".into(), Value::Table(rust));
+    expected.insert("clippy".into(), Value::Table(clippy));
+
+    let members = members(&workspace);
+    assert!(members.iter().any(|(dir, _)| dir == UNSAFE_MEMBER));
+    for (dir, manifest) in &members {
+        let lints = table(manifest, "lints", dir);
+        if dir == UNSAFE_MEMBER {
+            assert_eq!(
+                lints, &expected,
+                "{dir} has krepi's lints and the workspace's"
+            );
+        } else {
+            assert_eq!(
+                lints.get("workspace"),
+                Some(&Value::Boolean(true)),
+                "{dir} uses the workspace lints"
+            );
+        }
+        let dependencies = manifest.get("dependencies").and_then(Value::as_table);
+        let libc = dependencies.is_some_and(|dependencies| dependencies.contains_key("libc"));
+        assert_eq!(
+            libc,
+            dir == UNSAFE_MEMBER,
+            "{dir}: only {UNSAFE_MEMBER} uses libc"
+        );
+    }
+}
+
+/// The Rust files below `dir`, without build output.
+fn rust_files(dir: &Path, files: &mut Vec<PathBuf>) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() && path.file_name().is_some_and(|name| name != "target") {
+            rust_files(&path, files);
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            files.push(path);
+        }
+    }
+}
+
+/// `text` without its comment lines.
+fn code(text: &str) -> String {
+    let lines = text
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"));
+    lines.collect::<Vec<_>>().join("\n")
+}
+
+/// The text from the start of `text` to the bracket that closes the one
+/// before it, without white space; `None` when it does not close.
+fn bracketed(text: &str, open: char, close: char) -> Option<String> {
+    let mut depth = 1;
+    let end = text.char_indices().find_map(|(at, c)| {
+        depth += i32::from(c == open) - i32::from(c == close);
+        (depth == 0).then_some(at)
+    })?;
+    Some(text[..end].chars().filter(|c| !c.is_whitespace()).collect())
+}
+
+/// The lints of each attribute of `code` that allows or expects lints,
+/// directly or under `cfg_attr`, without its reason.
+fn allowed(code: &str) -> Vec<Vec<String>> {
+    let mut found = Vec::new();
+    for (at, _) in code.match_indices('#') {
+        let rest = code[at + 1..].trim_start_matches('!');
+        let Some(attribute) = rest.strip_prefix('[').and_then(|r| bracketed(r, '[', ']')) else {
+            continue;
+        };
+        for word in ["allow(", "expect("] {
+            let Some(start) = attribute.find(word) else {
+                continue;
+            };
+            let list = bracketed(&attribute[start + word.len()..], '(', ')').unwrap_or_default();
+            let list = list.split("reason=").next().unwrap_or_default();
+            let lints = list.split(',').filter(|lint| !lint.is_empty());
+            found.push(lints.map(str::to_string).collect());
+        }
+    }
+    found
+}
+
+#[test]
+fn lint_escapes_are_where_they_are_listed() {
+    let root = workspace_dir();
+    let os_root = format!("{UNSAFE_MEMBER}/src/lib.rs");
+    let mut files = Vec::new();
+    rust_files(&root, &mut files);
+    let mut escapes = Vec::new();
+    for path in &files {
+        let name = path
+            .strip_prefix(&root)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        for lints in allowed(&code(&read(path))) {
+            if name != os_root && lints.iter().any(|lint| ESCAPES.contains(&lint.as_str())) {
+                escapes.push((name.clone(), lints));
+            }
+        }
+    }
+    escapes.sort();
+    let listed: Vec<(String, Vec<String>)> = OTHER_ESCAPES
+        .iter()
+        .map(|(file, lints)| {
+            (
+                file.to_string(),
+                lints.iter().map(|l| l.to_string()).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(escapes, listed, "the files that lift a ban");
+
+    // In the crate root of the member, each declaration has the attributes
+    // of its row, and no other item allows a lint.
+    let code = code(&read(&root.join(&os_root)));
+    let mut declared = Vec::new();
+    for item in code.split(';') {
+        let item = item.rsplit('}').next().unwrap();
+        let words: Vec<&str> = item.split_whitespace().collect();
+        let [.., "mod", module] = words.as_slice() else {
+            continue;
+        };
+        let attributes = item
+            .trim()
+            .trim_end_matches(module)
+            .trim_end()
+            .trim_end_matches("mod");
+        let attributes = attributes.trim_end().trim_end_matches("pub");
+        let lints: Vec<String> = allowed(attributes).into_iter().flatten().collect();
+        let forbids = attributes
+            .replace(char::is_whitespace, "")
+            .contains("#[forbid(unsafe_code)]");
+        declared.push((module.to_string(), lints, forbids));
+    }
+    let expected: Vec<(String, Vec<String>, bool)> = OS_MODULES
+        .iter()
+        .map(|(module, lints, forbids)| {
+            let lints = lints.iter().map(|lint| lint.to_string()).collect();
+            (module.to_string(), lints, *forbids)
+        })
+        .collect();
+    assert_eq!(declared, expected, "the declarations of {os_root}");
+    let allowing = OS_MODULES.iter().filter(|(_, lints, _)| !lints.is_empty());
+    assert_eq!(
+        allowed(&code).len(),
+        allowing.count(),
+        "{os_root} allows lints elsewhere"
+    );
+    assert!(
+        !code.replace("forbid(unsafe_code)", "").contains("unsafe"),
+        "{os_root} holds no unsafe code"
+    );
+}
+
+/// The code spans of a cell of a Markdown table.
+fn code_spans(cell: &str) -> Vec<&str> {
+    cell.split('`').skip(1).step_by(2).collect()
+}
+
+#[test]
+fn copied_files_have_the_digests_of_their_record() {
+    let repository = workspace_dir().join("..");
+    let record = read(&repository.join("PORTING.md"));
+    let rows = record.lines().filter(|line| line.starts_with("| `tools/"));
+    let (mut files, mut spans) = (0, Vec::new());
+    for row in rows {
+        let cells: Vec<&str> = row.split('|').map(str::trim).collect();
+        let (module, source, lines, sha256) = (
+            code_spans(cells[1])[0],
+            code_spans(cells[2])[0],
+            cells[3],
+            code_spans(cells[6])[0],
+        );
+        let (pin, path) = source
+            .strip_prefix("krepi@")
+            .unwrap()
+            .split_once(':')
+            .unwrap();
+        assert!(
+            pin.len() == 40 && pin.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "{module}: a full commit SHA"
+        );
+        assert!(path.starts_with("tools/src/"), "{module}: {path}");
+        let (first, last) = lines.split_once('–').expect("a range of lines");
+        let text = read(&repository.join(module));
+        let copied = if cells[1].contains(", a span") {
+            let start = format!("// {source}:{first}-{last}\n");
+            let at = text
+                .find(&start)
+                .unwrap_or_else(|| panic!("{module}: no {start}"));
+            let span = &text[at + start.len()..];
+            let end = span
+                .find(&format!("{SPAN_END}\n"))
+                .expect("the end of the span");
+            spans.push(start);
+            span[..end].to_string()
+        } else {
+            assert_eq!(
+                (first, last),
+                ("1", text.lines().count().to_string().as_str())
+            );
+            files += 1;
+            text
+        };
+        assert_eq!(
+            copied.lines().count(),
+            last.parse::<usize>().unwrap() - first.parse::<usize>().unwrap() + 1,
+            "{module}: the lines {lines}"
+        );
+        assert_eq!(
+            Sha256::of(copied.as_bytes()).as_str(),
+            sha256,
+            "{module}: the digest of the lines {lines} of {source}"
+        );
+    }
+    assert_eq!(files, 7, "the copied files");
+    // Every marked span of the member has its row.
+    let os_root = read(&workspace_dir().join(UNSAFE_MEMBER).join("src/lib.rs"));
+    let marked: Vec<String> = os_root
+        .lines()
+        .filter(|line| line.starts_with("// krepi@"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    spans.sort();
+    let mut marked = marked;
+    marked.sort();
+    assert_eq!(
+        spans, marked,
+        "the spans of the crate root of {UNSAFE_MEMBER}"
+    );
+    assert_eq!(spans.len(), 3, "the copied spans");
 }

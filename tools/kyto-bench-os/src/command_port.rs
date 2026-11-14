@@ -3,7 +3,9 @@
 //! `lock` (`flock`, as the copied transport takes it), `exclusive access`,
 //! `attributes`, `flush`, a wait, `write`, `drain`, after which the time is
 //! taken, and a hold; then the port is restored, released, unlocked and
-//! closed, each step also after a failed one. Nothing is read. An error is
+//! closed, each step also after a failed one. Nothing is read. The drain
+//! has no bound and goes on after a signal, so a port that never sends the
+//! frame holds the command until the process is killed. An error is
 //! `<step>: <text>`, the operating system's text of the error or a fixed
 //! phrase, and never names the port.
 
@@ -59,8 +61,7 @@ fn last_errno() -> i32 {
 }
 
 /// The result of the step `name`, whose call returned `status`: a failure
-/// with the last operating-system error when the status is negative. The
-/// tests read the steps that a command took, in order.
+/// with the last operating-system error when the status is negative.
 fn step(name: &'static str, status: libc::c_int) -> Result<(), PortError> {
     let error = || PortError::new(name, os_error(last_errno()));
     let result = (status >= 0).then_some(()).ok_or_else(error);
@@ -111,8 +112,7 @@ pub fn send_frame<C: StampClock>(
     let end = ready.saturating_add(timing.write.as_nanos() as u64);
     port.write(frame, end, clock)?;
     let drained = loop {
-        // SAFETY: tcdrain takes a descriptor and touches no memory of this
-        // process. A signal ends it early with `EINTR`, and it is repeated.
+        // SAFETY: tcdrain takes a descriptor and touches no process memory.
         let drained = unsafe { libc::tcdrain(port.fd) };
         if drained == 0 || last_errno() != libc::EINTR {
             break drained;
@@ -211,14 +211,14 @@ impl Port {
 
 impl Drop for Port {
     fn drop(&mut self) {
-        let original = self.original.as_ref();
+        let fd = self.fd;
         #[cfg(test)]
-        let original = original.filter(|_| !tests::RESTORE_FAILS.get());
-        if let Some(original) = original {
+        let fd = if tests::RESTORE_FAILS.get() { -1 } else { fd };
+        if let Some(original) = &self.original {
             // SAFETY: `original` is an initialized, properly aligned termios
             // value that tcgetattr filled in; the call only reads it while
             // the borrow keeps it alive.
-            let restored = unsafe { libc::tcsetattr(self.fd, libc::TCSANOW, original) };
+            let restored = unsafe { libc::tcsetattr(fd, libc::TCSANOW, original) };
             let _ = step("restore", restored);
         }
         if self.exclusive {
@@ -251,8 +251,9 @@ mod tests {
     use std::cell::{Cell, RefCell};
 
     thread_local! {
-        /// Whether a command on this thread leaves its port's attributes
-        /// unrestored, as a failed restoration does.
+        /// Whether a command on this thread restores its port's attributes
+        /// on a descriptor that is not open, so that the restoration fails
+        /// and leaves the attributes of the command.
         pub(super) static RESTORE_FAILS: Cell<bool> = const { Cell::new(false) };
         /// The steps that the commands on this thread took, in order.
         pub(super) static STEPS: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
@@ -398,8 +399,7 @@ mod tests {
         clock.advance_to(2 * SECOND);
         let unrestored = command(&pty, clock, ON, true);
         assert_eq!(unrestored.sent, Ok(2 * SECOND + SETTLE));
-        let steps = COMMAND.into_iter().filter(|step| *step != "restore");
-        assert_eq!(unrestored.steps, steps.collect::<Vec<_>>());
+        assert_eq!(unrestored.steps, COMMAND, "the restoration was tried");
         assert_ne!(restorable(&pty), before, "not restored");
         clock.advance_to(3 * SECOND);
         let next = command(&pty, clock, OFF, false);

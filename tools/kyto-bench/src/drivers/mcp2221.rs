@@ -22,11 +22,14 @@ pub const WRITE_NO_STOP: u8 = 0x94;
 pub const DIVIDER: u8 = 118;
 /// How long the bridge has to answer a report.
 pub const ANSWER: Nanos = Nanos::from_millis(200);
-/// How often the link is asked for an answer, and the wait before each
-/// fetch of the data of a read.
+/// How often the link is asked for an answer, the wait before each fetch
+/// of the data of a read and before a command is sent again.
 const POLL: Nanos = Nanos::from_millis(1);
-/// How many times the data of a read are fetched before it fails.
-const FETCHES: usize = 3;
+/// How many times the data of a read are fetched, and an I2C command that
+/// the busy I2C engine did not take is sent, before it fails.
+const TRIES: usize = 3;
+/// The status of an I2C command that the busy I2C engine did not take.
+const BUSY: u8 = 0x01;
 /// The most reports that the bridge can have left from earlier exchanges.
 const LEFT: usize = 64;
 
@@ -103,28 +106,40 @@ impl<L: HidLink> Bridge<'_, L> {
         }
     }
 
-    /// [`Bridge::exchange`], whose answer must report success.
+    /// Waits `time` on the bench clock.
+    fn pause(&self, time: Nanos) {
+        let now = self.clock.now();
+        self.clock.wait_until(now.saturating_add(time));
+    }
+
+    /// [`Bridge::exchange`], whose answer must report success. A command
+    /// that the busy I2C engine did not take is sent again 1 ms later, at
+    /// most three times in all; any other status refuses it.
     fn accepted(&mut self, command: &Report) -> Result<Report, Fault> {
-        let (answer, _) = self.exchange(command)?;
-        match answer[1] {
-            0 => Ok(answer),
-            status => Err(Fault::Refused {
-                command: command[0],
-                status,
-            }),
+        let mut sent = 1;
+        loop {
+            let (answer, _) = self.exchange(command)?;
+            match answer[1] {
+                0 => return Ok(answer),
+                BUSY if sent < TRIES => sent += 1,
+                status => {
+                    let command = command[0];
+                    return Err(Fault::Refused { command, status });
+                }
+            }
+            self.pause(POLL);
         }
     }
 
     /// Cancels the transfer in progress and frees the bus; the status that
-    /// follows, read again 2 ms later when a transfer was cancelled.
+    /// follows, read again 2 ms later when a transfer was cancelled, as the
+    /// bus is released some hundreds of microseconds after the answer.
     pub fn cancel(&mut self) -> Result<Report, Fault> {
         let answer = self.accepted(&status(true))?;
         if answer[2] != 0x10 {
             return Ok(answer);
         }
-        let now = self.clock.now();
-        self.clock
-            .wait_until(now.saturating_add(Nanos::from_millis(2)));
+        self.pause(Nanos::from_millis(2));
         self.accepted(&status(false))
     }
 
@@ -161,9 +176,8 @@ impl<L: HidLink> Bridge<'_, L> {
     ) -> Result<([u8; N], Nanos), Fault> {
         self.accepted(&write(WRITE_NO_STOP, address, &[register]))?;
         self.accepted(&read(address, N as u8))?;
-        for _ in 0..FETCHES {
-            let now = self.clock.now();
-            self.clock.wait_until(now.saturating_add(POLL));
+        for _ in 0..TRIES {
+            self.pause(POLL);
             let (answer, at) = self.exchange(&get_data())?;
             if (answer[1], usize::from(answer[3])) == (0, N) {
                 let mut data = [0; N];
@@ -242,13 +256,6 @@ mod tests {
                     sent: 0x94,
                 }),
             ),
-            (
-                vec![answer(&[0x94, 1])],
-                Err(Fault::Refused {
-                    command: 0x94,
-                    status: 1,
-                }),
-            ),
             // Data of another length, as a fetch that the last transfer
             // left, and the status of a failed read.
             (
@@ -277,6 +284,40 @@ mod tests {
                 assert_eq!(commands, [WRITE_NO_STOP, READ, GET_DATA]);
             }
             assert_eq!(read.map(|(data, _)| data), expected);
+        }
+        // A command that the busy I2C engine did not take is sent again
+        // 1 ms later, three times in all; another status refuses it at once.
+        let data = || read_answers(answer(&[0x40, 0, 0, 2, 0xBB, 0x68]));
+        let refused = |status| {
+            Err(Fault::Refused {
+                command: 0x94,
+                status,
+            })
+        };
+        for (answers, expected, sent, waited) in [
+            (
+                [vec![answer(&[0x94, 1]); 2], data()].concat(),
+                Ok([0xBB, 0x68]),
+                5,
+                3,
+            ),
+            (vec![answer(&[0x94, 1]); 3], refused(1), 3, 2),
+            (vec![answer(&[0x94, 2])], refused(2), 1, 0),
+        ] {
+            let start = world.now();
+            let mut link = Scripted {
+                answers,
+                ..Scripted::default()
+            };
+            let mut bridge = Bridge {
+                link: &mut link,
+                clock: &world,
+            };
+            let read = bridge.read_register::<2>(0x40, 0x01);
+            assert_eq!(read.map(|(data, _)| data), expected);
+            assert_eq!(link.sent.len(), sent);
+            let waited = start.saturating_add(Nanos::from_millis(waited));
+            assert_eq!(world.now(), waited);
         }
         // No answer fails after 200 ms of the bench clock, polled every 1 ms.
         let start = world.now();

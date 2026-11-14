@@ -613,7 +613,7 @@ mod tests {
                 "the MCP2221 USB bridge answered command 40 to command 94",
             ),
             (
-                |knobs| knobs.busy = true,
+                |knobs| knobs.busy = 3,
                 "the MCP2221 USB bridge refused command 94 with status 01",
             ),
         ];
@@ -625,6 +625,31 @@ mod tests {
             world.wait_until(world.now().saturating_add(Nanos::from_millis(1000)));
             assert_eq!(micro(&mut meter), ON_MICRO, "{text}");
         }
+    }
+
+    #[test]
+    fn a_busy_bridge_is_asked_again_and_its_bus_checked_once_released() {
+        // A cancel that stops a transfer, which a busy I2C engine has,
+        // releases SDA 1 ms after its answer, and the lines are read 2 ms
+        // after it. A command that the busy engine did not take is sent
+        // again 1 ms later, three times in all.
+        for busy in [1, 2] {
+            let (_, bridge, mut meter) = on_bench(Quantity::SupplyVoltage);
+            bridge.knobs().busy = busy;
+            assert_eq!(micro(&mut meter), ON_MICRO, "{busy}");
+            assert_eq!(bridge.knobs().busy, 0);
+        }
+        let (_, bridge, mut meter) = on_bench(Quantity::SupplyVoltage);
+        bridge.knobs().busy = 3;
+        let refused = "the MCP2221 USB bridge refused command 94 with status 01";
+        assert_eq!(detail(&mut meter), refused);
+        // A bus still low 2 ms after the cancel is refused.
+        let (_, bridge, mut meter) = on_bench(Quantity::SupplyVoltage);
+        let mut knobs = bridge.knobs();
+        (knobs.busy, knobs.sda_low) = (1, true);
+        drop(knobs);
+        let low = "the I2C bus is held low (SCL 1, SDA 0); unplug and replug the meter";
+        assert_eq!(detail(&mut meter), low);
     }
 
     #[test]
@@ -687,7 +712,7 @@ mod tests {
             |knobs| knobs.link = Some(LinkError::Gone),
             |knobs| knobs.late = Some(Nanos(u64::MAX)),
             |knobs| knobs.echo = Some(0x93),
-            |knobs| knobs.busy = true,
+            |knobs| knobs.busy = 3,
             |knobs| knobs.sda_low = true,
             |knobs| knobs.no_speed = true,
             |knobs| knobs.absent = true,

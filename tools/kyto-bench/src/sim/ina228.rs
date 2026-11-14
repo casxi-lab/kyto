@@ -6,7 +6,8 @@
 //! relay's contacts feed, [`ON_MICRO`] and [`ON_CURRENT_MICRO`] while it is
 //! on and the residual voltage of the world while it is off, across a
 //! 15 mΩ shunt. After a reset its results read 0 until it is configured
-//! again, the worst case of a reset.
+//! again, the worst case of a reset. A cancel that stops a transfer holds
+//! SDA low for 1 ms, until the bridge releases the bus.
 
 use std::cell::{Ref, RefCell, RefMut};
 use std::collections::VecDeque;
@@ -25,6 +26,8 @@ const LATENCY: Nanos = Nanos::from_millis(1);
 const CONVERSION: u64 = 1_052_000;
 /// The register value of `ADC_CONFIG` after a reset.
 const ADC_RESET: u16 = 0xFB68;
+/// How long the bridge takes to release the bus after a cancel.
+const RELEASE: Nanos = Nanos::from_millis(1);
 
 /// A bridge with its INA228, on a world; clones share it. It is its own
 /// opener and the link that opening gives.
@@ -45,9 +48,9 @@ pub struct BridgeKnobs {
     pub late: Option<Nanos>,
     /// Answers echo this command code.
     pub echo: Option<u8>,
-    /// The I2C engine is busy: it refuses I2C commands and marks a
-    /// transfer for cancellation.
-    pub busy: bool,
+    /// The I2C engine is busy for this many more I2C commands, which it
+    /// refuses; a cancel meanwhile stops a transfer.
+    pub busy: u32,
     /// SCL reads low.
     pub scl_low: bool,
     /// SDA reads low, as when a device holds it after an aborted transfer.
@@ -86,15 +89,15 @@ struct State {
     before: Option<Vec<u8>>,
     /// The start and end of the conversion behind the last result read.
     conversion: Option<(Nanos, Nanos)>,
+    /// When the bus was released after the last transfer that was stopped.
+    released: Nanos,
 }
 
 impl SimBridge {
     /// The bridge and INA228 of `world`, which no one has configured.
     pub fn new(world: &SimWorld) -> Self {
-        let state = State {
-            adc: ADC_RESET,
-            ..State::default()
-        };
+        let mut state = State::default();
+        state.reset();
         let (world, state) = (world.clone(), Rc::new(RefCell::new(state)));
         Self { world, state }
     }
@@ -138,21 +141,23 @@ impl State {
         answer[0] = knobs.echo.unwrap_or(command[0]);
         let (len, data) = (usize::from(command[1]), &command[4..]);
         let i2c = matches!(command[0], 0x90 | 0x93 | 0x94);
-        if i2c && knobs.busy {
-            answer[1] = 1;
+        if i2c && knobs.busy > 0 {
+            (self.knobs.busy, answer[1]) = (knobs.busy - 1, 1);
             return Some(answer);
         }
         match command[0] {
             0x10 => {
-                if command[2] == 0x10 {
-                    answer[2] = if knobs.busy { 0x10 } else { 0x11 };
+                if command[2] == 0x10 && knobs.busy > 0 {
+                    (answer[2], self.released) = (0x10, now.saturating_add(RELEASE));
+                } else if command[2] == 0x10 {
+                    answer[2] = 0x11;
                 }
                 if command[3] == 0x20 {
                     answer[3] = if knobs.no_speed { 0x21 } else { 0x20 };
                     answer[4] = if knobs.no_speed { 0 } else { command[4] };
                 }
                 answer[22] = u8::from(!knobs.scl_low);
-                answer[23] = u8::from(!knobs.sda_low);
+                answer[23] = u8::from(!knobs.sda_low && now >= self.released);
             }
             0x90 if !knobs.absent && !knobs.ignores_writes && command[3] == 0x80 => {
                 let value = u16::from_be_bytes([data[1], data[2]]);

@@ -263,8 +263,11 @@ whose plan gives another digest for a payload file, refused under
 opened, so that nothing is staged and no power command is sent; a run on
 simulated devices whose staged copy differs while its source files keep
 their digests, which is refused under `payload.staged_digest` only after
-the copy was staged; and a test that re-deriving gives the same refusal
-from the recorded digests.
+the copy was staged; a test that re-deriving gives the same refusal from
+the recorded digests; and publications on simulated devices refused in the
+same way, whose source file differs, whose staged copy differs or whose
+TFTP directory cannot be staged, which serve nothing new and send no power
+command.
 
 ### PROV-R02
 
@@ -492,8 +495,9 @@ for a usage or input error, 3 for `BENCH FAULT`, when readings did not
 confirm the power off or a device failed, and 101 for an error of the tool.
 `kyto-bench publish` exits with 0 when the board is served the new
 generation and its copy has the digests of the run plan, 2 for a usage or
-input error, 3 for `BENCH FAULT`, when a device failed or the copy that the
-board is served after the switch differs, 4 when a payload check or the
+input error, 3 for `BENCH FAULT`, when the meter, the switch or the read of
+the served copy failed or the copy that the board is served after the
+switch differs, 4 when a payload check, the staging of the payload or the
 readings refused it, leaving what the board is served unchanged, 101 for an
 error of the tool and 130 for an interrupt before the switch. A message or
 result that cannot be written changes no exit status.
@@ -502,9 +506,11 @@ result that cannot be written changes no exit status.
 and of the usage errors; runs on simulated devices whose output files
 cannot be written, or that an interrupt stops; the power-off command whose
 power off readings do not confirm, or whose meter cannot be opened, and a
-publication whose served copy differs, each with the status 3; and runs of
+publication whose served copy differs or whose meter cannot be opened,
+each with the status 3; publications refused with the status 4; and runs of
 the built binary that pass, are refused, have no reader of their output, or
-cannot read their plan, which is said on standard error.
+cannot read their plan, which is said on standard error, and that switch
+the supply off or publish, which say so on standard output.
 
 ### POWER-R07
 
@@ -514,8 +520,10 @@ sends no further power on: the cold boot under way ends with its power off,
 confirmed by readings as after any cold boot. If the run has sent any power
 command, it then switches the supply off once more and says on standard
 error whether readings confirmed it. It leaves no receipt and no output
-directory and exits with 130. `kyto-bench publish` stopped by one before its
-switch leaves what the board is served unchanged and exits with 130;
+directory and exits with 130, also when staging the payloads refused the
+run before its first power command. `kyto-bench publish` stopped by one
+before its switch leaves what the board is served unchanged and exits with
+130, also when staging or the readings would have refused it;
 `kyto-bench power-off` finishes its command and confirmation.
 
 **Evidence.** Runs on simulated devices, whose bench takes the flag of an
@@ -524,6 +532,8 @@ after which the capture stops at once, the cold boot is switched off and the
 supply once more, also when the power off of the cold boot sticks, with no
 output directory and the message on standard error; one during the power
 off before the first entry, after which no cold boot starts; one before
-the first power command, after which none is sent; a publication that an
-interrupt stops before its switch, which serves nothing new; and the
-power-off command, which finishes when an interrupt came first.
+the first power command, after which none is sent, also when staging then
+refuses the run; a publication that an interrupt stops before its switch,
+which serves nothing new, also when the supply is on or the staged copy
+differs; and the power-off command, which finishes when an interrupt came
+first.

@@ -75,14 +75,20 @@ In the `tools` workspace, Clippy reads `tools/clippy.toml`, which bans
 sleeping and reading the system clock, since every time and wait of a run
 comes from the bench clock, and running an external program; only the build
 script of `kyto-bench`, which asks Git for the commit and whether the working
-tree is clean, the tests that run the `kyto-bench` binary and the tests of
+tree is clean, the tests that run the `kyto-bench` binary, the tests of
 `kyto-bench-os` that catch signals in a child process of their own test
-binary run one. `kyto-bench-os` is the one member that may use unsafe code,
-read the system clock and call the C library through `libc`: every other
-member forbids unsafe code, and within `kyto-bench-os` the bans are lifted
-only by `allow` attributes on the module declarations of
-`tools/kyto-bench-os/src/lib.rs`, each of which a test of the workspace
-pins.
+binary, and a test of the TFTP directory that runs its own test binary
+again through `sh` under the umask `077`, run one. `kyto-bench-os` is the
+one member that may use unsafe code, read the system clock and call the C
+library through `libc`: every other member forbids unsafe code, and within
+`kyto-bench-os` the bans are lifted only by `allow` attributes on the
+module declarations of `tools/kyto-bench-os/src/lib.rs`, each of which a
+test of the workspace pins. `kyto-bench` reaches the meter's USB bridge
+through the safe interface of the `hidapi` crate. On macOS its build
+compiles the crate's bundled C library with the system C compiler, which
+needs the Xcode Command Line Tools, and links IOKit, CoreFoundation and
+AppKit; on Linux it uses the crate's Rust backend over hidraw and compiles
+no C.
 `tools/kyto-bench-core/clippy.toml` repeats these bans, which a test of the
 workspace checks, and also bans the entry points of the standard library to
 files and links, the network, environment variables, process and system
@@ -359,10 +365,12 @@ change that adds it.
   the interrupt signals and the system clock, the one member that may use
   unsafe code and `libc`, whose serial transport is copied from krepi as the
   [porting record](PORTING.md) lists; and `kyto-bench`, the devices, the
-  flow of a run and the three commands. External dependencies come only from
-  crates.io and are pinned to exact versions. The tool does not depend on any
-  one bench or on the system under test: what it knows of a board is in the
-  board's [description](docs/bench/formats.md#board-descriptions), and what
+  flow of a run and the three commands, which reaches the meter's USB
+  bridge through the `hidapi` crate, whose bundled C library its build
+  compiles on macOS. External dependencies come only from crates.io and are
+  pinned to exact versions. The tool does not depend on any one bench or on
+  the system under test: what it knows of a board is in the board's
+  [description](docs/bench/formats.md#board-descriptions), and what
   it knows of a bench is in the bench's instance configuration.
 - **Instance configuration.** A bench's own configuration, such as addresses,
   relay channels, local paths and credentials, is kept outside this

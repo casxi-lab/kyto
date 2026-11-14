@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use kyto_bench_os::clock::SystemClock;
-use kyto_bench_os::command_port::{CommandTiming, send_frame};
+use kyto_bench_os::command_port::{CommandTiming, PortError, send_frame};
 
 use super::{Hidden, PowerSettings, device_error};
 use crate::device::{DeviceError, Nanos, PowerState, PowerSwitch, Role};
@@ -41,6 +41,8 @@ pub struct Lcus1Relay {
     port: String,
     clock: SystemClock,
     hidden: Hidden,
+    /// What sends a frame on a port: [`send_frame`], or a test's record.
+    send: fn(&str, &[u8], &CommandTiming, &SystemClock) -> Result<u64, PortError>,
 }
 
 impl Lcus1Relay {
@@ -51,6 +53,7 @@ impl Lcus1Relay {
             port: settings.port.clone(),
             clock,
             hidden,
+            send: send_frame,
         }
     }
 }
@@ -60,7 +63,7 @@ impl PowerSwitch for Lcus1Relay {
     /// left the port. The module's reply is not read, and a command that
     /// fails is not repeated.
     fn command(&mut self, state: PowerState) -> Result<Nanos, DeviceError> {
-        let sent = send_frame(&self.port, &frame(1, state), &TIMING, &self.clock);
+        let sent = (self.send)(&self.port, &frame(1, state), &TIMING, &self.clock);
         sent.map(Nanos)
             .map_err(|error| device_error(Role::Power, &error.to_string(), &self.hidden))
     }
@@ -68,11 +71,56 @@ impl PowerSwitch for Lcus1Relay {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+
     use super::*;
+
+    thread_local! {
+        /// The port, frame and timing of each frame sent on this thread.
+        static SENT: RefCell<Vec<(String, Vec<u8>, CommandTiming)>> =
+            const { RefCell::new(Vec::new()) };
+    }
+
+    /// Records a frame instead of sending it, as sent at 7 ns.
+    fn record(
+        port: &str,
+        frame: &[u8],
+        timing: &CommandTiming,
+        _: &SystemClock,
+    ) -> Result<u64, PortError> {
+        SENT.with_borrow_mut(|sent| sent.push((port.to_string(), frame.to_vec(), *timing)));
+        Ok(7)
+    }
 
     #[test]
     fn the_lcus_1_frames_are_the_documented_bytes() {
         assert_eq!(frame(1, PowerState::On), [0xA0, 0x01, 0x01, 0xA2]);
         assert_eq!(frame(1, PowerState::Off), [0xA0, 0x01, 0x00, 0xA1]);
+    }
+
+    #[test]
+    fn a_command_sends_the_frame_of_relay_1_with_the_waits_of_the_driver() {
+        let waits = CommandTiming {
+            settle: Duration::from_millis(250),
+            hold: Duration::from_millis(150),
+            write: Duration::from_secs(2),
+        };
+        assert_eq!(TIMING, waits);
+        let settings = PowerSettings {
+            port: "/dev/cu.usbserial-relay".into(),
+            relay: "1".into(),
+        };
+        let mut relay = Lcus1Relay::new(&settings, SystemClock::start(), Hidden::default());
+        relay.send = record;
+        for state in [PowerState::On, PowerState::Off, PowerState::On] {
+            assert_eq!(relay.command(state), Ok(Nanos(7)));
+        }
+        let port = || settings.port.clone();
+        let expected = [
+            (port(), vec![0xA0, 0x01, 0x01, 0xA2], waits),
+            (port(), vec![0xA0, 0x01, 0x00, 0xA1], waits),
+            (port(), vec![0xA0, 0x01, 0x01, 0xA2], waits),
+        ];
+        assert_eq!(SENT.take(), expected);
     }
 }

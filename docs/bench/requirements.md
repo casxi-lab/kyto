@@ -224,9 +224,11 @@ devices, and that it finds a verdict, check, observation or subject that the
 record does not give; and fuzz tests in which the record of a run on
 changed console output, read in chunks of any size, gives the observations
 that the run saw, also with other chunks that keep every send where it
-came, and in which the receipts of runs on simulated devices re-derive to
-themselves and re-deriving a receipt whose judgements alone were changed
-gives back the receipt as written.
+came, and in which the receipts of runs on simulated devices, refused and
+faulted runs among them, re-derive to themselves, re-deriving a receipt
+whose judgements alone were changed, its refusal among them, gives back
+the receipt as written, and re-deriving one in which an entry after a
+bench fault was given the events or cold boots of that entry fails.
 
 ## Payload digests and the tool's revision
 

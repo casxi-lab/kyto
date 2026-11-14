@@ -29,7 +29,7 @@ use kyto_bench::env::{self, Bench, Env};
 use kyto_bench::inputs::Inputs;
 use kyto_bench::provenance::ToolRevision;
 use kyto_bench::run;
-use kyto_bench::sim::{Files, Responder, Script, ScriptProvider, SimWorld};
+use kyto_bench::sim::{Files, Knobs, ON_MICRO, Responder, Script, ScriptProvider, SimWorld};
 use kyto_bench_core::board::{Board, LineForm, Method, RASPBERRY_PI_5};
 use kyto_bench_core::digest::Sha256;
 use kyto_bench_core::instance::{Instance, Parameters, Quantity};
@@ -1366,18 +1366,24 @@ impl Console for Played {
     }
 }
 
-/// A bench of simulated devices whose console plays a script and keeps
-/// what it gives, of a tool of a fixed revision that gives a fixed nonce,
-/// so that a case makes the same receipt in every run.
+/// A bench of simulated devices, with a fault set on them if any, whose
+/// console plays a script and keeps what it gives, of a tool of a fixed
+/// revision that gives a fixed nonce, so that a case makes the same receipt
+/// in every run.
 struct FuzzEnv {
     script: RefCell<Option<ScriptProvider>>,
     played: Rc<RefCell<Vec<Vec<u8>>>>,
+    fault: Option<fn(&mut Knobs)>,
 }
 
 impl Env for FuzzEnv {
     fn open_bench(&self, _: &Board, _: &Instance, _: &Path) -> Result<Bench, String> {
         let script = self.script.borrow_mut().take().ok_or("the bench is open")?;
-        let mut bench = env::simulated(&SimWorld::new(), script);
+        let world = SimWorld::new();
+        if let Some(fault) = self.fault {
+            fault(&mut world.knobs());
+        }
+        let mut bench = env::simulated(&world, script);
         bench.console = Box::new(Played(bench.console, Rc::clone(&self.played)));
         Ok(bench)
     }
@@ -1492,6 +1498,42 @@ fn receipt_script(rng: &mut Rng, seeds: &Seeds, outputs: &Outputs) -> ScriptProv
     })
 }
 
+/// A fault of the bench in a run of the receipts, set on its simulated
+/// world, and the verdict of the run that it gives.
+type Fault = (fn(&mut Knobs), Option<Verdict>);
+
+/// The faults of the runs of the receipts: staging that writes a changed
+/// copy, which refuses the run before any power command; and relay
+/// contacts that never close, a supply meter that reads the voltage of a
+/// supply that is on whatever the supply does, and a TFTP directory that
+/// serves a changed copy, each a fault of the bench.
+const FAULTS: [Fault; 4] = [
+    (|knobs: &mut Knobs| knobs.tftp.corrupts_staged = true, None),
+    (
+        |knobs: &mut Knobs| knobs.relay.stuck = true,
+        Some(Verdict::BenchFault),
+    ),
+    (
+        |knobs: &mut Knobs| knobs.meter.stuck_micro = Some(ON_MICRO),
+        Some(Verdict::BenchFault),
+    ),
+    (
+        |knobs: &mut Knobs| knobs.tftp.corrupts_served = true,
+        Some(Verdict::BenchFault),
+    ),
+];
+
+/// The fault of a case of the receipts: in one case of ten the staging
+/// that refuses the run, in another one of the faults of the bench, and
+/// else none.
+fn fault_of(rng: &mut Rng) -> Option<Fault> {
+    match rng.below(10) {
+        0 => Some(FAULTS[0]),
+        1 => Some(*rng.pick(&FAULTS[1..])),
+        _ => None,
+    }
+}
+
 /// Asserts that `error` names a value of a receipt by its JSON pointer.
 #[track_caller]
 fn assert_pointer(error: &ReceiptError) {
@@ -1562,8 +1604,64 @@ fn verdict_of(rng: &mut Rng) -> Verdict {
     ])
 }
 
-/// Changes one typed field of `receipt`, or a few in one part of it.
-fn forge(rng: &mut Rng, receipt: &mut Receipt, plans: &[String]) {
+/// What [`forge`] changed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Forgery {
+    /// The rule, entry, subject or detail of the refusal of a refused run,
+    /// which re-deriving makes again.
+    Refusal,
+    /// The entry of this index, which did not run because the entry before
+    /// it was a bench fault, was given the events, checks, cold boots and
+    /// verdict of that entry.
+    RanAfterFault(usize),
+    /// Anything else.
+    Other,
+}
+
+/// Changes one typed field of `receipt`, or a few in one part of it, and
+/// says what it changed.
+fn forge(rng: &mut Rng, receipt: &mut Receipt, plans: &[String]) -> Forgery {
+    let entries = receipt.entries.len();
+    if let Some(refusal) = &mut receipt.refusal
+        && rng.chance(50)
+    {
+        // Rules whose refusal re-deriving makes from the recorded digests
+        // alone.
+        let rules = [
+            "payload.source_digest",
+            "payload.staged_digest",
+            "payload.variant_missing",
+            "write.not_enabled",
+        ];
+        match rng.below(4) {
+            0 => {
+                let others: Vec<&str> = rules
+                    .into_iter()
+                    .filter(|rule| *rule != refusal.rule)
+                    .collect();
+                refusal.rule = rng.pick(&others).to_string();
+            }
+            1 => refusal.subject.push_str(".other"),
+            2 if entries > 1 => {
+                let entry = refusal.entry.unwrap_or_default();
+                refusal.entry = Some((entry + 1 + rng.below(entries - 1)) % entries);
+            }
+            _ => refusal.detail = format!("not {}", refusal.detail),
+        }
+        return Forgery::Refusal;
+    }
+    let verdicts: Vec<Verdict> = receipt.entries.iter().map(|entry| entry.verdict).collect();
+    let not_run =
+        |&at: &usize| verdicts[at - 1] == Verdict::BenchFault && verdicts[at] == Verdict::NotRun;
+    if let Some(after) = (1..entries).find(not_run)
+        && rng.chance(50)
+    {
+        let ran = receipt.entries[after - 1].clone();
+        let record = &mut receipt.entries[after];
+        (record.events, record.checks) = (ran.events, ran.checks);
+        (record.cold_boots, record.verdict) = (ran.cold_boots, ran.verdict);
+        return Forgery::RanAfterFault(after);
+    }
     let boots: Vec<(usize, usize)> = receipt
         .entries
         .iter()
@@ -1642,7 +1740,7 @@ fn forge(rng: &mut Rng, receipt: &mut Receipt, plans: &[String]) {
             }
             _ => cold_boot.verdict = verdict_of(rng),
         }
-        return;
+        return Forgery::Other;
     }
     match choice {
         0 => {
@@ -1715,6 +1813,7 @@ fn forge(rng: &mut Rng, receipt: &mut Receipt, plans: &[String]) {
             }
         }
     }
+    Forgery::Other
 }
 
 /// What the cases of the receipts showed.
@@ -1723,17 +1822,21 @@ struct ReceiptCover {
     verdicts: BTreeSet<String>,
     sent: u64,
     undone: u64,
+    refusals_undone: u64,
+    ran_after_fault: u64,
     not_utf8: u64,
     lone_cr: u64,
 }
 
 /// The receipts: runs of the example plan on simulated devices whose board
-/// writes changed example console output write receipts that are read back
-/// as written, re-derive to themselves and hold the bytes that the console
-/// gave, CR, LF and bytes that are not UTF-8 among them, exactly. A receipt
-/// with a typed field changed is read as it is, or refused at a JSON
-/// pointer, and re-deriving one that is read does not panic; when only its
-/// judgements were changed, re-deriving gives back the receipt as written.
+/// writes changed example console output, some refused or with a fault of
+/// the bench, write receipts that are read back as written, re-derive to
+/// themselves and hold the bytes that the console gave, CR, LF and bytes
+/// that are not UTF-8 among them, exactly. A receipt with a typed field
+/// changed is read as it is, or refused at a JSON pointer, and re-deriving
+/// one that is read does not panic; when only its judgements were changed,
+/// its refusal among them, re-deriving gives back the receipt as written;
+/// and re-deriving finds an entry that ran after a bench fault.
 fn receipts(cases: u64) {
     let board = pi5();
     let (seeds, plans, inputs) = (Seeds::new(&board), seed_plans(), receipt_inputs(&board));
@@ -1741,11 +1844,17 @@ fn receipts(cases: u64) {
     let mut cover = ReceiptCover::default();
     fuzz("receipts", cases, |rng| {
         let played = Rc::new(RefCell::new(Vec::new()));
+        let script = receipt_script(rng, &seeds, &outputs);
+        let fault = fault_of(rng);
         let env = FuzzEnv {
-            script: RefCell::new(Some(receipt_script(rng, &seeds, &outputs))),
+            script: RefCell::new(Some(script)),
             played: Rc::clone(&played),
+            fault: fault.map(|(set, _)| set),
         };
         let receipt = run::run(&env, &inputs).unwrap();
+        if let Some((_, verdict)) = fault {
+            assert_eq!(receipt.verdict, verdict, "the verdict of a fault");
+        }
         // The receipt that a run writes is read back as it was written and
         // re-derives to itself.
         let read = Receipt::parse(receipt.render().as_bytes()).unwrap();
@@ -1763,8 +1872,30 @@ fn receipts(cases: u64) {
         assert_eq!(held, played.iter().map(Vec::as_slice).collect::<Vec<_>>());
         for _ in 0..FORGERIES {
             let mut forged = read.clone();
-            forge(rng, &mut forged, &plans);
-            cover.undone += u64::from(read_forged(&read, &forged));
+            let forgery = forge(rng, &mut forged, &plans);
+            let undone = read_forged(&read, &forged);
+            cover.undone += u64::from(undone);
+            match forgery {
+                Forgery::Refusal => {
+                    assert!(undone, "re-deriving undoes a changed refusal");
+                    cover.refusals_undone += 1;
+                }
+                Forgery::RanAfterFault(entry) => {
+                    // An entry with events or cold boots ran; one with
+                    // checks alone did not, and re-deriving undoes them.
+                    let record = &forged.entries[entry];
+                    if record.events.is_empty() && record.cold_boots.is_empty() {
+                        assert!(undone, "re-deriving undoes the checks of an entry not run");
+                    } else {
+                        let pointer = format!("/entries/{entry}");
+                        let again = rejudge(&forged);
+                        let found = matches!(&again, Err(ReceiptError::Invalid { at, .. }) if *at == pointer);
+                        assert!(found, "an entry ran after a bench fault: {again:?}");
+                        cover.ran_after_fault += 1;
+                    }
+                }
+                Forgery::Other => {}
+            }
         }
         let verdict = format!("{:?}", read.verdict);
         cover.verdicts.insert(verdict);
@@ -1778,9 +1909,12 @@ fn receipts(cases: u64) {
             .any(|pair| pair[0] == b'\r' && pair[1] != b'\n');
         cover.lone_cr += u64::from(lone);
     });
-    assert!(cover.verdicts.len() >= 2, "{:?}", cover.verdicts);
+    let verdicts = ["None", "Some(BenchFault)", "Some(Fail)", "Some(Pass)"];
+    assert!(cover.verdicts.iter().eq(verdicts), "{:?}", cover.verdicts);
     let counts = [cover.sent, cover.undone, cover.not_utf8, cover.lone_cr];
     assert!(counts.iter().all(|count| *count > cases / 10), "{counts:?}");
+    let rare = [cover.refusals_undone, cover.ran_after_fault];
+    assert!(rare.iter().all(|count| *count > cases / 50), "{rare:?}");
 }
 
 #[test]

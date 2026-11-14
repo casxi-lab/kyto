@@ -55,10 +55,10 @@ pub struct SerialConsole<C: StampClock> {
     /// length, for a test to wait on.
     #[cfg(test)]
     stamps: Option<mpsc::Sender<(u64, usize)>>,
-    /// Where a receive reports each wait for a chunk that it begins, with
-    /// its length, for a test to wait on.
+    /// What a receive calls with the length of each wait for a chunk that
+    /// it begins, for a test to follow the receive.
     #[cfg(test)]
-    waits: Option<mpsc::Sender<Duration>>,
+    waits: Option<Box<dyn Fn(Duration) + Send + Sync>>,
 }
 
 /// An open port with its writer and its stamped chunks.
@@ -161,9 +161,11 @@ impl<C: StampClock> SerialConsole<C> {
 
     /// The next chunk stamped at or before `deadline`, or the deadline at
     /// the time now. A chunk stamped later is held for the next receive. A
-    /// receive whose deadline has passed takes only what has arrived and
-    /// never waits, and once the interrupt flag holds a signal, a receive
-    /// returns the deadline at once. The end of the port's stream is
+    /// receive whose deadline has passed takes only the held chunk or what
+    /// has arrived and never waits. Once the interrupt flag holds a signal,
+    /// a receive that finds no chunk returns the deadline at once, and one
+    /// that waits for a chunk returns it at the end of that wait of the
+    /// reader, within 100 ms. The end of the port's stream is
     /// [`Got::Closed`], or the error of the read that ended it.
     pub fn receive(&mut self, deadline: u64) -> Result<Got, PortError> {
         let session = self.session.as_mut().ok_or_else(|| not_open("receive"))?;
@@ -201,7 +203,7 @@ impl<C: StampClock> SerialConsole<C> {
             let slice = TIMING.reader_poll.min(Duration::from_nanos(deadline - now));
             #[cfg(test)]
             if let Some(waits) = &self.waits {
-                let _ = waits.send(slice);
+                waits(slice);
             }
             session.held = session.chunks.recv_timeout(slice).ok();
         }
@@ -246,7 +248,6 @@ pub(crate) mod tests {
     use crate::TEST_WAIT;
     use crate::clock::stepped::TestClock;
     use crate::pty::{Pty, exclusive_open_refused, lock_refused};
-    use std::collections::BTreeMap;
 
     const MS: u64 = 1_000_000;
     const SETTLE: u64 = 50 * MS;
@@ -265,15 +266,16 @@ pub(crate) mod tests {
         /// length.
         fn report_waits(&mut self) -> Receiver<Duration> {
             let (sender, waits) = mpsc::channel();
-            self.waits = Some(sender);
+            self.waits = Some(Box::new(move |wait| {
+                let _ = sender.send(wait);
+            }));
             waits
         }
     }
 
-    /// A receive by `deadline` on a thread of its own, for a deadline that
-    /// the clock has not reached, and what waits for it to return the
-    /// console and its result. A test fails when the receive has not
-    /// returned within [`TEST_WAIT`].
+    /// A receive by `deadline` on a thread of its own, and what waits for it
+    /// to return the console and its result. A test fails when the receive
+    /// has not returned within [`TEST_WAIT`].
     fn receive_apart(
         mut console: SerialConsole<TestClock>,
         deadline: u64,
@@ -337,12 +339,28 @@ pub(crate) mod tests {
         console
     }
 
-    /// What `console` received by `deadline`, by stamp, up to the deadline.
-    fn received(console: &mut SerialConsole<TestClock>, deadline: u64) -> BTreeMap<u64, Vec<u8>> {
-        let mut received = BTreeMap::<u64, Vec<u8>>::new();
+    /// What `console` received by `deadline`, up to the deadline, in the
+    /// order in which the receives returned it; the parts of a stamp, which
+    /// may come in several reads, are joined. Each receive runs apart, and
+    /// a test fails when a stamp is before the console was ready, after the
+    /// deadline or before the stamp of an earlier part.
+    #[track_caller]
+    fn received(console: &mut SerialConsole<TestClock>, deadline: u64) -> Vec<(u64, Vec<u8>)> {
+        let ready_at = console.session.as_ref().expect("an open console").ready_at;
+        let mut received = Vec::<(u64, Vec<u8>)>::new();
         loop {
-            match console.receive(deadline) {
-                Ok(Got::Bytes { at, bytes }) => received.entry(at).or_default().extend(bytes),
+            let idle = SerialConsole::new(String::new(), console.clock, None);
+            let (back, got) = receive_apart(std::mem::replace(console, idle), deadline)();
+            *console = back;
+            match got {
+                Ok(Got::Bytes { at, bytes }) => {
+                    let last = received.last().map_or(ready_at, |(stamp, _)| *stamp);
+                    assert!(last <= at && at <= deadline, "{at} ns after {last} ns");
+                    match received.last_mut() {
+                        Some((stamp, part)) if *stamp == at => part.extend(bytes),
+                        _ => received.push((at, bytes)),
+                    }
+                }
                 Ok(Got::Deadline { .. }) => return received,
                 other => panic!("{other:?}"),
             }
@@ -356,7 +374,7 @@ pub(crate) mod tests {
         let (mut console, stamps) = console(&pty, clock);
         assert_eq!(open_settled(&mut console, clock, || {}), Ok(SETTLE));
         let parts: [&[u8]; 3] = [b"\x00\xff\r\n", b"a\x7f\x03\x1a\x11", b"\r\r\n\n"];
-        let mut expected = BTreeMap::new();
+        let mut expected = Vec::new();
         for (part, at) in parts
             .into_iter()
             .zip([SETTLE, SETTLE + MS, SETTLE + 2 * MS])
@@ -368,7 +386,7 @@ pub(crate) mod tests {
                     .iter()
                     .all(|stamp| *stamp == at)
             );
-            expected.insert(at, part.to_vec());
+            expected.push((at, part.to_vec()));
         }
         clock.advance_to(SETTLE + 3 * MS);
         assert_eq!(received(&mut console, SETTLE + 3 * MS), expected);
@@ -380,6 +398,7 @@ pub(crate) mod tests {
         let pty = Pty::open();
         let clock = TestClock::at_zero();
         let (mut console, stamps) = console(&pty, clock);
+        let waits = console.report_waits();
         assert_eq!(open_settled(&mut console, clock, || {}), Ok(SETTLE));
         for (part, at) in [(b"before", SETTLE + 10 * MS), (b"after!", SETTLE + 30 * MS)] {
             clock.advance_to(at);
@@ -388,10 +407,21 @@ pub(crate) mod tests {
         }
         // The deadline has passed: the chunk stamped before it comes without
         // a wait, and the one stamped after it is held for the next receive.
-        let before = BTreeMap::from([(SETTLE + 10 * MS, b"before".to_vec())]);
+        let before = [(SETTLE + 10 * MS, b"before".to_vec())];
         assert_eq!(received(&mut console, SETTLE + 20 * MS), before);
-        let after = BTreeMap::from([(SETTLE + 30 * MS, b"after!".to_vec())]);
-        assert_eq!(received(&mut console, SETTLE + 30 * MS), after);
+        let no_wait = "a receive whose deadline had come waited";
+        assert_eq!(waits.try_recv(), Err(TryRecvError::Empty), "{no_wait}");
+        // A chunk that arrives while one is held comes after it, and a
+        // receive whose deadline is the time now does not wait either.
+        clock.advance_to(SETTLE + 40 * MS);
+        pty.write(b"third");
+        stamped(&stamps, 5);
+        let after = [
+            (SETTLE + 30 * MS, b"after!".to_vec()),
+            (SETTLE + 40 * MS, b"third".to_vec()),
+        ];
+        assert_eq!(received(&mut console, SETTLE + 40 * MS), after);
+        assert_eq!(waits.try_recv(), Err(TryRecvError::Empty), "{no_wait}");
         console.close().unwrap();
     }
 
@@ -423,7 +453,7 @@ pub(crate) mod tests {
             );
             pty.write(b"x");
             stamped(&stamps, 1);
-            let x = BTreeMap::from([(start + SETTLE, b"x".to_vec())]);
+            let x = [(start + SETTLE, b"x".to_vec())];
             assert_eq!(received(&mut console, start + SETTLE), x);
             console.close().unwrap();
             assert_eq!(console.receive(start), Err(not_open("receive")));
@@ -442,7 +472,7 @@ pub(crate) mod tests {
         assert_eq!(ready, Ok(SETTLE));
         pty.write(b"fresh");
         stamped(&stamps, 5);
-        let fresh = BTreeMap::from([(SETTLE, b"fresh".to_vec())]);
+        let fresh = [(SETTLE, b"fresh".to_vec())];
         assert_eq!(received(&mut console, SETTLE), fresh);
         console.close().unwrap();
     }
@@ -470,7 +500,7 @@ pub(crate) mod tests {
         assert_eq!(open_settled(&mut console, clock, || {}), Ok(2 * SETTLE));
         pty.write(b"x");
         assert_eq!(stamped(&stamps, 1), [2 * SETTLE]);
-        let x = BTreeMap::from([(2 * SETTLE, b"x".to_vec())]);
+        let x = [(2 * SETTLE, b"x".to_vec())];
         assert_eq!(received(&mut console, 2 * SETTLE), x);
         console.close().unwrap();
     }
@@ -481,18 +511,18 @@ pub(crate) mod tests {
         let clock = TestClock::at_zero();
         let flag: &'static AtomicI32 = Box::leak(Box::new(AtomicI32::new(0)));
         let mut console = SerialConsole::new(pty.path().to_string(), clock, Some(flag));
-        let waits = console.report_waits();
         assert_eq!(open_settled(&mut console, clock, || {}), Ok(SETTLE));
-        // The clock never reaches the deadline. The signal comes while the
-        // receive waits for a chunk, and the receive returns at the end of
-        // that wait of the reader, or of the next at the latest.
-        let returned = receive_apart(console, SECOND);
-        let wait = waits.recv_timeout(TEST_WAIT).expect("a wait for a chunk");
-        assert_eq!(wait, TIMING.reader_poll);
-        flag.store(libc::SIGINT, Ordering::SeqCst);
-        let (mut console, got) = returned();
+        // The clock never reaches the deadline. The signal comes as the
+        // receive begins to wait for a chunk, and the receive returns at the
+        // end of that wait of the reader, without beginning another.
+        let (sender, waits) = mpsc::channel();
+        console.waits = Some(Box::new(move |wait| {
+            flag.store(libc::SIGINT, Ordering::SeqCst);
+            let _ = sender.send(wait);
+        }));
+        let (mut console, got) = receive_apart(console, SECOND)();
         assert_eq!(got, Ok(Got::Deadline { at: SETTLE }));
-        assert!(waits.try_iter().count() <= 1, "one more wait at most");
+        assert_eq!(waits.try_iter().collect::<Vec<_>>(), [TIMING.reader_poll]);
         console.close().unwrap();
     }
 

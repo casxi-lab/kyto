@@ -1,9 +1,11 @@
 //! The USB link to the MCP2221 or MCP2221A bridge of the meter: one 64-byte
 //! HID report out, the next report in, never waiting, so that every wait
 //! and timeout of the meter runs on the bench clock. [`HidapiOpener`] opens
-//! the one bridge of the host through the `hidapi` crate, exclusively;
-//! failures keep only which step failed, never a text of the library, a
-//! path or a serial number.
+//! the one bridge of the host through the `hidapi` crate: exclusively on
+//! macOS, the host of a bench, while on Linux the crate opens the hidraw
+//! device without exclusivity, so that other processes can share the
+//! bridge. Failures keep only which step failed, never a text of the
+//! library, a path or a serial number.
 
 use std::collections::BTreeSet;
 use std::ffi::CStr;
@@ -30,7 +32,7 @@ pub trait HidLink {
 /// its link failed.
 pub trait HidOpen {
     type Link: HidLink;
-    /// Finds the one bridge and opens it exclusively.
+    /// Finds the one bridge and opens it, exclusively where the host can.
     fn open(&mut self) -> Result<Self::Link, OpenError>;
 }
 
@@ -112,7 +114,7 @@ impl HidOpen for HidapiOpener {
     type Link = HidapiLink;
 
     /// Lists the HID devices of the host, which reads their properties and
-    /// opens none, and opens the one bridge exclusively.
+    /// opens none, and opens the one bridge, exclusively on macOS.
     fn open(&mut self) -> Result<HidapiLink, OpenError> {
         let api = HidApi::new().or(Err(OpenError::NotOpened))?;
         let bridges = api.device_list();

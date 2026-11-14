@@ -11,14 +11,14 @@
 //! the shunt of the model, so no calibration register is used.
 //!
 //! The bridge is opened at the first reading, and again at the next reading
-//! after its link failed; opening finds exactly one bridge, opens it
-//! exclusively and checks that an INA228 answers. A reading waits 5 ms from
-//! its start, longer than a conversion cycle takes, so that the conversion
-//! behind its value started after the reading was asked for, and it is
-//! stamped when the value arrives. After each value `ADC_CONFIG` is read
-//! again: a reset of the INA228 sets it back to `FB68h` and zeroes its
-//! results, which then never pass for a supply that is off. Every error is
-//! one of a closed set of texts.
+//! after its link failed; opening finds exactly one bridge, opens it,
+//! exclusively on macOS, and checks that an INA228 answers. A reading waits
+//! 5 ms from its start, longer than a conversion cycle takes, so that the
+//! conversion behind its value started after the reading was asked for,
+//! and it is stamped when the value arrives. After each value `ADC_CONFIG`
+//! is read again: a reset of the INA228 sets it back to `FB68h` and zeroes
+//! its results, which then never pass for a supply that is off. Every error
+//! is one of a closed set of texts.
 
 use std::fmt;
 use std::rc::Rc;
@@ -194,8 +194,9 @@ impl<O: HidOpen> Ina228Meter<O> {
 
     /// A reading that started at `since`. A failed link is dropped, so the
     /// next reading opens the bridge again; after any other failure the
-    /// transfer is cancelled, as far as the bridge lets it, and the next
-    /// reading sets the bridge and the INA228 up again.
+    /// transfer is cancelled, as far as the bridge lets it, dropping the
+    /// link if that fails on it, and the next reading sets the bridge and
+    /// the INA228 up again.
     fn reading(&mut self, since: Nanos) -> Result<Measurement, Fault> {
         let link = match &mut self.link {
             Some(link) => link,
@@ -214,7 +215,9 @@ impl<O: HidOpen> Ina228Meter<O> {
         match measured {
             Err(Fault::Link(_)) => self.link = None,
             Err(_) => {
-                let _ = bridge.cancel();
+                if let Err(Fault::Link(_)) = bridge.cancel() {
+                    self.link = None;
+                }
                 self.set_up = true;
             }
             Ok(_) => {}
@@ -303,6 +306,7 @@ mod tests {
 
     use super::*;
     use crate::device::{MeterConfirm, PowerState, PowerSwitch};
+    use crate::drivers::hid::Report;
     use crate::sim::ina228::{BridgeKnobs, ON_CURRENT_MICRO, SimBridge};
     use crate::sim::{self, ON_MICRO, SimRelay, SimWorld};
     use crate::{env, run};
@@ -447,7 +451,7 @@ mod tests {
         // A device that is not an INA228, one that does not keep its
         // configuration, and a bus or a bridge that is not ready are
         // refused, and the next reading sets them up again.
-        let refused: [(Knob, &str); 6] = [
+        let refused: [(Knob, &str); 8] = [
             (
                 |knobs| knobs.ids = Some((0x5448, 0x2281)),
                 "the device at I2C address 0x40 is not an INA228 (manufacturer ID 5448)",
@@ -465,8 +469,16 @@ mod tests {
                 "the INA228 did not keep its configuration (CONFIG 0000, ADC_CONFIG fb68)",
             ),
             (
-                |knobs| knobs.bus_low = true,
+                |knobs| (knobs.scl_low, knobs.sda_low) = (true, true),
                 "the I2C bus is held low (SCL 0, SDA 0); unplug and replug the meter",
+            ),
+            (
+                |knobs| knobs.sda_low = true,
+                "the I2C bus is held low (SCL 1, SDA 0); unplug and replug the meter",
+            ),
+            (
+                |knobs| knobs.scl_low = true,
+                "the I2C bus is held low (SCL 0, SDA 1); unplug and replug the meter",
             ),
             (
                 |knobs| knobs.no_speed = true,
@@ -498,6 +510,79 @@ mod tests {
         assert_eq!(bridge.conversion(), None, "the value read was a zero");
         assert_eq!(micro(&mut meter), ON_MICRO);
         assert_eq!(bridge.configuration(), (0, CONVERSIONS));
+        // A reset at any time from the start of a reading to past its end,
+        // every 0.5 ms: each reading until the INA228 is set up again fails
+        // or reads the supply, never 0, and `ADC_CONFIG` read after the
+        // value is what makes it so. A reset between the pointer and the
+        // read of `ADC_CONFIG` points the read at `CONFIG`, which reads 0.
+        let resets = [
+            reset,
+            "the INA228 was reset since it was set up (ADC_CONFIG 0000)",
+        ];
+        for offset in (0..=40).map(|half| Nanos(half * 500_000)) {
+            let (world, bridge, mut meter) = on_bench(Quantity::SupplyVoltage);
+            assert_eq!(micro(&mut meter), ON_MICRO);
+            bridge.knobs().reset_at = Some(world.now().saturating_add(offset));
+            for tried in 1.. {
+                assert!(tried <= 4, "{offset:?}: the meter did not recover");
+                let pending = bridge.knobs().reset_at.is_some();
+                match meter.sample() {
+                    Ok(reading) => {
+                        assert_eq!(reading.micro, ON_MICRO, "{offset:?}");
+                        if !pending {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        let detail = error.detail.as_str();
+                        assert!(resets.contains(&detail), "{offset:?}: {detail}");
+                    }
+                }
+            }
+            assert_eq!(bridge.configuration(), (0, CONVERSIONS), "{offset:?}");
+        }
+    }
+
+    /// The simulated bridge, whose link is gone from the first transfer
+    /// that a failed reading cancels: a reading of a malformed result.
+    #[derive(Clone)]
+    struct Unplugged(SimBridge);
+
+    impl HidOpen for Unplugged {
+        type Link = Unplugged;
+
+        fn open(&mut self) -> Result<Unplugged, OpenError> {
+            self.0.open().map(Unplugged)
+        }
+    }
+
+    impl HidLink for Unplugged {
+        fn send(&mut self, report: &Report) -> Result<(), LinkError> {
+            if report[..3] == [0x10, 0, 0x10] && self.0.knobs().malformed {
+                self.0.knobs().link = Some(LinkError::Gone);
+            }
+            self.0.send(report)
+        }
+
+        fn receive(&mut self) -> Result<Option<Report>, LinkError> {
+            self.0.receive()
+        }
+    }
+
+    #[test]
+    fn a_link_that_fails_while_a_transfer_is_cancelled_is_dropped() {
+        let (world, bridge, _) = on_bench(Quantity::SupplyVoltage);
+        let clock = Rc::new(world.clone());
+        let opener = Unplugged(bridge.clone());
+        let mut meter = Ina228Meter::new(opener, clock, Quantity::SupplyVoltage, SHUNT);
+        assert_eq!(meter.sample().unwrap().micro, ON_MICRO);
+        bridge.knobs().malformed = true;
+        let malformed = "the INA228 returned a malformed reading (06 60 01)";
+        assert_eq!(meter.sample().unwrap_err().detail, malformed);
+        // The bridge is back: the next reading opens it again.
+        *bridge.knobs() = BridgeKnobs::default();
+        assert_eq!(meter.sample().unwrap().micro, ON_MICRO);
+        assert_eq!(bridge.opens(), 2);
     }
 
     #[test]
@@ -599,7 +684,7 @@ mod tests {
             |knobs| knobs.late = Some(Nanos(u64::MAX)),
             |knobs| knobs.echo = Some(0x93),
             |knobs| knobs.busy = true,
-            |knobs| knobs.bus_low = true,
+            |knobs| knobs.sda_low = true,
             |knobs| knobs.no_speed = true,
             |knobs| knobs.absent = true,
             |knobs| knobs.ids = Some((0, 0x2281)),

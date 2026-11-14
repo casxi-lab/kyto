@@ -48,8 +48,10 @@ pub struct BridgeKnobs {
     /// The I2C engine is busy: it refuses I2C commands and marks a
     /// transfer for cancellation.
     pub busy: bool,
-    /// SCL and SDA read low.
-    pub bus_low: bool,
+    /// SCL reads low.
+    pub scl_low: bool,
+    /// SDA reads low, as when a device holds it after an aborted transfer.
+    pub sda_low: bool,
     /// The bridge does not set the I2C speed.
     pub no_speed: bool,
     /// No device answers at the INA228's address.
@@ -149,8 +151,8 @@ impl State {
                     answer[3] = if knobs.no_speed { 0x21 } else { 0x20 };
                     answer[4] = if knobs.no_speed { 0 } else { command[4] };
                 }
-                answer[22] = u8::from(!knobs.bus_low);
-                answer[23] = answer[22];
+                answer[22] = u8::from(!knobs.scl_low);
+                answer[23] = u8::from(!knobs.sda_low);
             }
             0x90 if !knobs.absent && !knobs.ignores_writes && command[3] == 0x80 => {
                 let value = u16::from_be_bytes([data[1], data[2]]);

@@ -151,7 +151,9 @@ failing ones included, are fixed.
 sends sends nothing.** `step.response` fails for a step that its trigger
 line did not arm, that was not sent, or whose response line was not
 complete within its `timeout_ms` of the send. In an entry with
-`sends = false`, `step.declared_none` fails when a byte was sent.
+`sends = false`, `step.declared_none` fails when a byte was sent. A send
+that a receipt records inside a chunk is read after that chunk, one of the
+contract's [current deviations](contract.md#current-deviations).
 
 **Evidence.** Unit tests of a slow, missing, unsent and unarmed response, of
 a line that the board began before the send and that is therefore no

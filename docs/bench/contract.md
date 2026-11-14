@@ -449,3 +449,16 @@ it.
   [minimum bootloader](formats.md#minimum-bootloader) describes, but no
   check, refusal or verdict reads it: a board with an older bootloader is
   judged only by the `firmware.version` expectations of the run plan.
+- **A send recorded inside a chunk is read after that chunk** (`VERD-R09`).
+  A run sends a step only after it has read a whole chunk, so every send
+  that the tool records has its `received` on a chunk boundary, but reading
+  a receipt does not require it. Re-deriving gives the matcher a send whose
+  `received` lies inside a chunk only after that chunk: a trigger line in
+  the chunk, received after the send, can arm the step, and its response is
+  looked for from the end of the chunk, not from the recorded offset. A
+  receipt whose step was sent before its trigger line was received can
+  thus re-derive to an armed and answered step, against the rules of
+  [steps](formats.md#steps-and-the-end-of-a-cold-boot). Neither reading
+  nor re-deriving refuses such a receipt. The runs of the fuzz tests send
+  on chunk boundaries only, and a send that they move elsewhere is checked
+  only for the order of the rules or for an error at a JSON pointer.

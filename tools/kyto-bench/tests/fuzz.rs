@@ -2453,9 +2453,12 @@ fn the_instance_template_and_the_bench_example_hold_documentation_values_only() 
         let text = String::from_utf8(bytes).unwrap();
         let table: toml::Table = toml::from_str(&text).unwrap();
         let tftp = &table["tftp"];
-        let address = tftp["server_address"].as_str().unwrap();
-        assert!(!address.is_empty() && documentation_ipv4(address.as_bytes()));
-        assert_eq!(tftp["path_prefix"].as_str(), Some("example/"));
+        assert_eq!(
+            tftp["server_address"].as_str(),
+            Some("192.0.2.10"),
+            "{path}"
+        );
+        assert_eq!(tftp["path_prefix"].as_str(), Some("example/"), "{path}");
         // A salt that is not one, and settings that are key names alone.
         let local = table["local"].as_table().unwrap();
         let salt = local["salt"].as_str().unwrap();

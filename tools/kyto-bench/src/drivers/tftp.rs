@@ -183,11 +183,24 @@ impl TftpDirectory {
                 .to_ascii_lowercase();
             taken.extend(GenerationName::parse(&name).ok());
         }
-        let link = self.dir.join(&self.link);
-        let served = fs::read_link(&link).ok();
+        let served = fs::read_link(self.dir.join(&self.link)).ok();
         taken.extend(served.and_then(|target| generation_of(&self.dir, &target)));
         let generation = GenerationName::next_after(taken).ok_or("no generation name is left")?;
-        let root = releases.join(generation.to_string());
+        self.write_new(generation, files)?;
+        Ok(generation)
+    }
+
+    /// Makes the new directory `releases/<generation>` and writes `files`
+    /// into it. Fails when that name is there already, as when another
+    /// writer made it after it was chosen, and leaves it alone; fails too
+    /// when the link names the new directory, which it leaves empty.
+    fn write_new(
+        &self,
+        generation: GenerationName,
+        files: &[(PayloadName, Vec<u8>)],
+    ) -> Result<(), String> {
+        let link = self.dir.join(&self.link);
+        let root = self.dir.join(RELEASES).join(generation.to_string());
         DirBuilder::new()
             .create(&root)
             .map_err(|error| match error.kind() {
@@ -208,7 +221,7 @@ impl TftpDirectory {
             let mode = fs::set_permissions(directory, Permissions::from_mode(0o755));
             mode.map_err(|error| format!("cannot write {generation}: {error}"))?;
         }
-        Ok(generation)
+        Ok(())
     }
 
     /// Makes `generation` the served one; the one served before, when the
@@ -603,6 +616,26 @@ mod tests {
         drop(second);
         fs::remove_dir_all(&dir).unwrap();
         fs::remove_dir_all(&other).unwrap();
+    }
+
+    #[test]
+    fn a_generation_made_by_another_writer_after_its_name_was_chosen_is_left_alone() {
+        // Another writer makes a directory of the chosen name, or a link
+        // to a directory, before staging makes it.
+        let dir = scratch("raced");
+        let theirs = dir.join("releases/g000001");
+        fs::create_dir_all(&theirs).unwrap();
+        symlink(&theirs, dir.join("releases/g000002")).unwrap();
+        let files = [(name("config.txt"), b"1".to_vec())];
+        for number in [1, 2] {
+            let exists = format!("{} exists already", generation(number));
+            assert_eq!(
+                tftp(&dir).write_new(generation(number), &files),
+                Err(exists)
+            );
+        }
+        assert_eq!(fs::read_dir(&theirs).unwrap().count(), 0);
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

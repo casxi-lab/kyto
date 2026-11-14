@@ -79,9 +79,10 @@ tree is clean, the tests that run the `kyto-bench` binary and the tests of
 `kyto-bench-os` that catch signals in a child process of their own test
 binary run one. `kyto-bench-os` is the one member that may use unsafe code,
 read the system clock and call the C library through `libc`: every other
-member forbids unsafe code, and the bans are lifted only by `allow`
-attributes on the module declarations of `tools/kyto-bench-os/src/lib.rs`,
-each of which a test of the workspace pins.
+member forbids unsafe code, and within `kyto-bench-os` the bans are lifted
+only by `allow` attributes on the module declarations of
+`tools/kyto-bench-os/src/lib.rs`, each of which a test of the workspace
+pins.
 `tools/kyto-bench-core/clippy.toml` repeats these bans, which a test of the
 workspace checks, and also bans the entry points of the standard library to
 files and links, the network, environment variables, process and system

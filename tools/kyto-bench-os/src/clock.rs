@@ -15,8 +15,9 @@ pub trait StampClock: Copy + Send + Sync + 'static {
 
 /// The clock of a bench of real devices: nanoseconds since it was started,
 /// read from the monotonic clock of the operating system, which does not
-/// run while the host sleeps. It is the one place where the bench tool
-/// reads the system clock.
+/// run while the host sleeps. It is the one source of the bench's times:
+/// the copied writer reads the system clock only to bound its requests and
+/// to note their times, which kyto discards.
 #[derive(Clone, Copy, Debug)]
 pub struct SystemClock {
     origin: Instant,

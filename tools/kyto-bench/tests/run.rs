@@ -2274,6 +2274,25 @@ fn the_power_off_command_without_confirmation_is_a_bench_fault() {
 }
 
 #[test]
+fn the_power_off_command_says_the_last_of_readings_that_change() {
+    // A supply that is on and takes a second to fall to 0.6 V, above the
+    // 0.5 V of the example configuration: the first readings read it on,
+    // the later ones 0.6 V up to the timeout.
+    let env = TestEnv::example();
+    {
+        let mut knobs = env.world.knobs();
+        knobs.supply.fall = Nanos::from_millis(1000);
+        knobs.supply.residual_micro = 600_000;
+    }
+    SimRelay::new(&env.world).command(PowerState::On).unwrap();
+    assert_eq!(supply(&env.world), ON_MICRO);
+    assert_eq!(power_off(&env), cli::BENCH_FAULT);
+    assert_eq!(commands(&env), [PowerState::On, PowerState::Off]);
+    let said = "readings did not confirm the power off within 3000 ms; the last read 600000 µV";
+    assert_eq!(env.said(), [said]);
+}
+
+#[test]
 fn the_power_off_command_switches_off_when_the_meter_cannot_be_opened() {
     let mut env = TestEnv::example();
     env.no_bridge = true;

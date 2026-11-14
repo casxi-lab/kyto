@@ -1,0 +1,51 @@
+# A run plan with an entry that has every kind of rule: three steps, the
+# second armed by the response of the first and the third by a marker of
+# the board; markers that steps, orders, bounds of forbidden lines and
+# segments share; and named values. The digest of `firmware` is that of the
+# lines between the BOOTSYS line and the start of the operating system in
+# tools/examples/captures/echo.bin, that of `banner` as in the example run
+# plan, and that of `stats` that of no bytes, as when STATS follows READY.
+format = "kyto-bench run plan"
+format_version = 1
+board = "raspberry-pi-5"
+reference = "fuzz"
+
+[[entries]]
+name = "steps"
+payload_dir = "echo"
+payload = [
+  { name = "config.txt", sha256 = "950cbaa591e9064fff306370a33222dcb8887049caf5ec76bce9ac81d3f29136" },
+  { name = "bcm2712-rpi-5-b.dtb", sha256 = "ac44865282f3ffe541775e0fcbfa2f36375e0f97f953f3e37a039583c01d0b0e" },
+  { name = "overlays/bcm2712d0.dtbo", sha256 = "f7fbb4699eb8d708e3f0b98c8e5a2c57679dd6a44ea355c8af0c6804706d9902" },
+  { name = "kernel.img", sha256 = "854a05365ca392c93250b69848a50e17eb7f4f847f581f1e6d56c6a620b4306e" },
+]
+cold_boots = 1
+boot_timeout_ms = 60000
+end = { marker = "ready" }
+markers = [
+  { name = "ready", line = '^READY' },
+  { name = "stats", line = '^STATS seq=[0-9]+' },
+  { name = "build", line = '^BUILD id=' },
+]
+expect = [{ marker = "ready", min = 1, max = 2 }, { marker = "board.sd_boot", count = 0 }]
+order = [{ markers = ["board.bootloader", "board.network_boot", "board.os_start", "ready"] }]
+forbid = [{ line = '^PANIC' }, { line = '^STATS', to = "ready" }, { line = '^BUILD', from = "ready" }]
+before_first_send = ["board.network_boot", "build"]
+steps = [
+  { after = "ready", send = "?\r", expect = '^STATS seq=1', timeout_ms = 1000 },
+  { after = "stats", send = "!\r", expect = '^STATS seq=2', timeout_ms = 1000 },
+  { after = "board.os_start", send = "x", expect = '^READY$', timeout_ms = 5 },
+]
+values = [
+  { field = "build", line = '^BUILD id=(?P<value>[0-9a-f]{40})$' },
+  { field = "seq", line = 'seq=(?P<value>[0-9]+)' },
+]
+segments = [
+  { name = "firmware", from = "board.bootsys", to = "board.os_start", sha256 = "25ba2641e730c1e70d96d7deb479b53a019c288288d7c4f8346c31d60f9aedcd" },
+  { name = "banner", from = "board.os_start", to = "ready", sha256 = "498b39e65032d7680b7f9bd1ea46e620643f844930b2e22baea1dc3eec655188" },
+  { name = "stats", from = "ready", to = "stats", sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" },
+]
+
+[entries.firmware.bootloader]
+hash = "1accd665"
+date = "2026/09/25"

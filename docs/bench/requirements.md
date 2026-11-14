@@ -15,13 +15,14 @@ An id is never renumbered or given to another requirement.
 
 Every requirement is shown so far by tests on the host: unit tests of
 `kyto-bench-core` and `kyto-bench` on records and simulated devices built in
-code, runs of the command on simulated devices, and runs of the built binary
-on the example. The console output that they read was written for the
-examples, apart from two recordings of a Raspberry Pi 5 boot whose serial
-number, MAC and IP addresses, TFTP path prefix, SD card identifiers and
-partition UUID are replaced by documentation values, and no test is a run on
-a real bench. The tests that remain are the contract's
-[open obligations](contract.md#open-obligations).
+code, runs of the command on simulated devices, runs of the built binary on
+the example, and fuzz tests that make a fixed number of cases from a fixed
+seed. The console output that they read was written for the examples and
+the fuzz tests, or comes from two recordings of a Raspberry Pi 5 boot whose
+serial number, MAC and IP addresses, TFTP path prefix, SD card identifiers
+and partition UUID are replaced by documentation values; the fuzz tests also
+read changed copies of it. No test is a run on a real bench. The tests that
+remain are the contract's [open obligations](contract.md#open-obligations).
 
 ## Verdicts
 
@@ -150,11 +151,16 @@ failing ones included, are fixed.
 sends sends nothing.** `step.response` fails for a step that its trigger
 line did not arm, that was not sent, or whose response line was not
 complete within its `timeout_ms` of the send. In an entry with
-`sends = false`, `step.declared_none` fails when a byte was sent.
+`sends = false`, `step.declared_none` fails when a byte was sent. A send
+that a receipt records inside a chunk is read after that chunk, one of the
+contract's [current deviations](contract.md#current-deviations).
 
-**Evidence.** Unit tests of a slow, missing, unsent and unarmed response and
-of a send in an entry that declares none, and a run on simulated devices
-whose response has no LF.
+**Evidence.** Unit tests of a slow, missing, unsent and unarmed response, of
+a line that the board began before the send and that is therefore no
+response, and of a send in an entry that declares none; a run on simulated
+devices whose response has no LF; and a fuzz test in which the steps that
+the record of a run gives are those that the rules give from its lines and
+sends.
 
 ### VERD-R10
 
@@ -172,7 +178,22 @@ ends, and that reading refuses base64 that is not canonical; a run on
 simulated devices whose receipt holds the example console output, which
 starts with a byte that is not UTF-8 and ends its lines with CR LF, byte for
 byte; and a unit test of a segment whose content changed or whose line is
-missing.
+missing. Tests of receipts whose console output holds a line of every byte
+value but LF and sequences that are not UTF-8, or lines ended by CR LF, by
+CR CR LF and by LF alone, lone CR bytes and a CR and its LF in two chunks:
+read back, each holds the same bytes and gives the observations it
+records, while the same output decoded as UTF-8 with U+FFFD in place of
+what is not UTF-8, or with its line ends normalised to LF, breaks the
+recorded length and, with the length, index and events made to agree,
+gives other observations. A unit test in which a segment digest taken over
+its line with the line end normalised to LF, or without it, fails
+`segment.digest`, and a board that ends its lines with LF alone shows the
+digest of its own bytes. Fuzz tests of changed console output read in
+chunks of any size, whose lines put back together are its bytes and each of
+whose segments is the SHA-256 of the raw bytes between its lines, and of
+the receipts of runs on simulated devices whose board writes changed
+output, which hold the bytes that the console gave, up to the capture
+limit.
 
 ### VERD-R11
 
@@ -203,7 +224,14 @@ the tool wrote back unchanged.
 **Evidence.** Tests that re-deriving gives back the worked example and the
 receipts of passing, failing, faulted and refused runs on simulated
 devices, and that it finds a verdict, check, observation or subject that the
-record does not give.
+record does not give; and fuzz tests in which the record of a run on
+changed console output, read in chunks of any size, gives the observations
+that the run saw, also with other chunks that keep every send where it
+came, and in which the receipts of runs on simulated devices, refused and
+faulted runs among them, re-derive to themselves, re-deriving a receipt
+whose judgements alone were changed, its refusal among them, gives back
+the receipt as written, and re-deriving one in which an entry after a
+bench fault was given the events or cold boots of that entry fails.
 
 ## Payload digests and the tool's revision
 

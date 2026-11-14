@@ -87,6 +87,28 @@ bench tool alone run with:
 cargo test --locked --manifest-path tools/Cargo.toml
 ```
 
+Among them, the fuzz tests in `tools/kyto-bench/tests/fuzz.rs` read
+changed console transcripts, run plans and receipts. Each makes a fixed
+number of cases, written as a constant, from a fixed seed with a generator
+written in that file, so every run makes the same cases, and a case that
+fails is named on standard error by the seed and its index. The cases start
+from the examples in `tools/examples/`, the recordings in
+`tools/kyto-bench/tests/data/recorded/` and the corpus in
+`tools/kyto-bench/tests/data/corpus/`. A test fails when the corpus, the
+recordings or the example console output holds a file, at any depth, that
+is not a seed of the fuzz tests, a `.gitattributes` file or a `.DS_Store`
+file, which it skips, or a file that holds an IPv4 address, an IPv6
+address, a MAC address, a board serial number or a value of a sensitive
+line of a board description that is not a documentation value.
+The contract's [testing obligations](docs/bench/contract.md#testing-obligations)
+give the seeds, the documentation values, the number of cases of each fuzz
+test and what it checks. A deeper search, of a hundred times as many cases,
+runs with:
+
+```sh
+cargo test --release --locked --manifest-path tools/Cargo.toml --test fuzz -- --ignored
+```
+
 The change that adds the first design file or model also adds the checks of
 the chosen design tool, such as electrical rule checks, design rule checks
 and reproducible manufacturing outputs and exports, and updates this section
@@ -243,8 +265,9 @@ change that adds it.
   and [contract](docs/bench/contract.md) are written: the contract names the
   rules, the functions that apply them and the tests of each requirement, a
   negative one among them, and a test of the `tools` workspace checks it
-  against the code and the tests. No fuzz test exists yet; the contract
-  lists the fuzz tests with its other
+  against the code and the tests. Fuzz tests of the parsing of console
+  transcripts, run plans and receipts run with the other tests of the
+  workspace, and the contract lists the tests that remain as
   [open obligations](docs/bench/contract.md#open-obligations). The rest of
   the tool is tested on the host against simulated devices, on which the
   tests run the example run plan through the command. A bench self-test

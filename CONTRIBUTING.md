@@ -3,9 +3,9 @@
 kyto is newly initialized. It has no design files or models yet. Its Cargo
 workspaces are the repository tasks in `xtask/` and the bench tool in
 `tools/`, which runs [run plans](docs/bench/formats.md#run-plans) on
-simulated devices and writes their receipts, but has no driver for a real
-device yet. Before proposing a change, enable the commit message hook once
-and run these commands from the repository root:
+simulated devices and writes their receipts, but cannot drive a bench of
+real devices yet. Before proposing a change, enable the commit message hook
+once and run these commands from the repository root:
 
 ```sh
 git config --local core.hooksPath .githooks
@@ -75,7 +75,13 @@ In the `tools` workspace, Clippy reads `tools/clippy.toml`, which bans
 sleeping and reading the system clock, since every time and wait of a run
 comes from the bench clock, and running an external program; only the build
 script of `kyto-bench`, which asks Git for the commit and whether the working
-tree is clean, and the tests that run the `kyto-bench` binary run one.
+tree is clean, the tests that run the `kyto-bench` binary and the tests of
+`kyto-bench-os` that catch signals in a child process of their own test
+binary run one. `kyto-bench-os` is the one member that may use unsafe code,
+read the system clock and call the C library through `libc`: every other
+member forbids unsafe code, and the bans are lifted only by `allow`
+attributes on the module declarations of `tools/kyto-bench-os/src/lib.rs`,
+each of which a test of the workspace pins.
 `tools/kyto-bench-core/clippy.toml` repeats these bans, which a test of the
 workspace checks, and also bans the entry points of the standard library to
 files and links, the network, environment variables, process and system
@@ -185,11 +191,13 @@ parts.
 
 The bench hardware does not exist yet. The bench tool under `tools/` runs
 [run plans](docs/bench/formats.md#run-plans) on simulated devices and writes
-their [receipts](docs/bench/formats.md#receipts); it has no driver for a real
-device, so it cannot run a bench yet. From the repository root, this runs the
-example run plan on the simulated devices of the example instance
-configuration and writes the receipt and its public version into
-`tools/target/example-run`, a directory that must not exist yet:
+their [receipts](docs/bench/formats.md#receipts). It has drivers for a USB
+relay module and a USB serial adapter, which no run uses yet, and none for a
+supply meter or the TFTP directory, so it cannot run a bench yet. From the
+repository root, this runs the example run plan on the simulated devices of
+the example instance configuration and writes the receipt and its public
+version into `tools/target/example-run`, a directory that must not exist
+yet:
 
 ```sh
 cargo run --locked --release --manifest-path tools/Cargo.toml -- run \
@@ -223,7 +231,10 @@ change that adds it.
 - **Tool.** The bench tool is written in Rust and kept under `tools/`, in a
   Cargo workspace with its own `Cargo.lock`: `kyto-bench-core`, a library
   without input or output that reads and writes the formats and holds every
-  rule that decides a check or a verdict, and `kyto-bench`, the devices, the
+  rule that decides a check or a verdict; `kyto-bench-os`, the serial ports,
+  the interrupt signals and the system clock, the one member that may use
+  unsafe code and `libc`, whose serial transport is copied from krepi as the
+  [porting record](PORTING.md) lists; and `kyto-bench`, the devices, the
   flow of a run and the command. External dependencies come only from
   crates.io and are pinned to exact versions. The tool does not depend on any
   one bench or on the system under test: what it knows of a board is in the
@@ -270,8 +281,10 @@ change that adds it.
   workspace, and the contract lists the tests that remain as
   [open obligations](docs/bench/contract.md#open-obligations). The rest of
   the tool is tested on the host against simulated devices, on which the
-  tests run the example run plan through the command. A bench self-test
-  shows only that a bench works.
+  tests run the example run plan through the command, and its drivers of
+  the relay and the console on pseudo-terminals, with a clock that the test
+  moves; no test opens a real device. A bench self-test shows only that a
+  bench works.
 - **Bench hardware.** Adapter boards, fixtures and other bench parts keep
   their design files under `bench/` and follow the rules for design files and
   records above.

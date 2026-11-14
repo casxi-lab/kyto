@@ -117,8 +117,10 @@ versions, and derives the verdicts of a receipt again from what it records.
 The tool has the interfaces of four kinds of device, each with one simulated
 device: power commands, a supply meter that also confirms power-on and
 power-off, the serial console, and payload delivery to the directory that
-the board reads over TFTP. It has no driver for a real device and no input
-injection or display capture yet, so it cannot run a bench, and no receipt
+the board reads over TFTP. It has drivers for a USB relay module that
+switches the supply and a USB serial adapter for the console, which no run
+uses yet, but none for a supply meter or the TFTP directory, and no input
+injection or display capture, so it cannot run a bench yet, and no receipt
 that it writes is evidence. Apart from the bench tool, the board descriptions
 and the formats of run plans and receipts, none of the items above exists
 today. Until a power circuit exists, the development boards, a whole

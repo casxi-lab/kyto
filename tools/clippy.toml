@@ -3,7 +3,10 @@
 # file repeats these lists there, which a test of the workspace checks.
 
 # Every timestamp, wait, timeout and deadline of a run comes from the clock
-# that the bench provides, so nothing sleeps or reads the system clock.
+# that the bench provides, so nothing sleeps or reads the system clock. The
+# clock and the serial ports of a bench of real devices, in `kyto-bench-os`,
+# are where the system clock is read; attributes on the module declarations
+# of its `lib.rs` lift these bans there.
 disallowed-methods = [
     { path = "std::thread::sleep", reason = "waits use the bench clock" },
     { path = "std::thread::park_timeout", reason = "waits use the bench clock" },

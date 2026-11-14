@@ -152,6 +152,7 @@ dependencies = [
  "clap",
  "getrandom",
  "kyto-bench-core",
+ "kyto-bench-os",
  "serde",
  "toml",
 ]
@@ -166,6 +167,14 @@ dependencies = [
  "serde_json",
  "sha2",
  "toml",
+]
+
+[[package]]
+name = "kyto-bench-os"
+version = "0.0.0"
+dependencies = [
+ "libc",
+ "serde_json",
 ]
 
 [[package]]

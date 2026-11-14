@@ -5,7 +5,8 @@
 //! stages it and checks the staged copy, as a run does, then makes it the
 //! generation that the board is served, without a power command and only
 //! while readings confirm the supply off; it checks the copy that the board
-//! is served after the switch and never switches back.
+//! is served after the switch and never switches back. An interrupt before
+//! the switch stops it, also when staging or the readings refuse it.
 
 use std::io::{self, Write as _};
 use std::path::Path;
@@ -71,12 +72,20 @@ pub fn publish(
     }
     let (board, config) = (&inputs.board, &inputs.instance);
     let mut bench = env.open_bench(board, config, &inputs.instance_dir)?;
-    if let Err(refusal) = run::prepare_entry(env, &inputs, &mut bench, index, read, &mut record) {
-        return Ok(refused(env, &refusal));
-    }
+    let prepared = run::prepare_entry(env, &inputs, &mut bench, index, read, &mut record);
     let (confirmation, since) = (&config.parameters().confirmation, bench.clock.now());
     let events = &mut record.events;
-    if !run::readings_confirm(&mut bench, confirmation, Command::Off, since, events, 0) {
+    let confirmed = prepared.is_ok()
+        && !bench.interrupt.caught()
+        && run::readings_confirm(&mut bench, confirmation, Command::Off, since, events, 0);
+    if bench.interrupt.caught() {
+        env.say(&format!("interrupted before the switch; {UNCHANGED}"));
+        return Ok(INTERRUPTED);
+    }
+    if let Err(refusal) = prepared {
+        return Ok(refused(env, &refusal));
+    }
+    if !confirmed {
         if say_failures(env, events) {
             return Ok(BENCH_FAULT);
         }
@@ -86,10 +95,6 @@ pub fn publish(
              sends no power command; {UNCHANGED}; run power-off first"
         ));
         return Ok(REFUSED);
-    }
-    if bench.interrupt.caught() {
-        env.say(&format!("interrupted before the switch; {UNCHANGED}"));
-        return Ok(INTERRUPTED);
     }
     let payload = inputs.payload(entry);
     if run::publish_entry(&mut bench, payload, &mut record) {

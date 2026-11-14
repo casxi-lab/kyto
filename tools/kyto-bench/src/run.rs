@@ -28,8 +28,9 @@
 //! reader of the receipt calls again on what it records.
 //!
 //! An interrupt that the bench catches stops the run: before the first
-//! power command, at once; after it, once the cold boot under way has been
-//! switched off as usual, and the supply is switched off once more.
+//! power command, at once, even when staging refused the run; after it,
+//! once the cold boot under way has been switched off as usual, and the
+//! supply is switched off once more.
 
 use std::panic::{self, AssertUnwindSafe};
 use std::rc::Rc;
@@ -81,15 +82,19 @@ pub fn run(env: &dyn Env, inputs: &Inputs) -> Result<Receipt, NoReceipt> {
     let (board, instance) = (&inputs.board, &inputs.instance);
     let open = env.open_bench(board, instance, &inputs.instance_dir);
     let mut bench = open.map_err(NoReceipt::Input)?;
-    for (index, read) in sources.into_iter().enumerate() {
-        let record = &mut receipt.entries[index];
-        if let Err(refusal) = prepare_entry(env, inputs, &mut bench, index, read, record) {
-            return Ok(assemble::refused(receipt, refusal));
-        }
-    }
+    let prepared = sources
+        .into_iter()
+        .enumerate()
+        .try_for_each(|(index, read)| {
+            let record = &mut receipt.entries[index];
+            prepare_entry(env, inputs, &mut bench, index, read, record)
+        });
     if bench.interrupt.caught() {
         env.say("the run was interrupted before its first power command");
         return Err(NoReceipt::Interrupted);
+    }
+    if let Err(refusal) = prepared {
+        return Ok(assemble::refused(receipt, refusal));
     }
     let (off_at, interrupted) = (None, false);
     let mut flow = Flow {

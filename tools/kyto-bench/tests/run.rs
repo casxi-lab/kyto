@@ -317,8 +317,9 @@ enum Interrupts {
 /// `flag`; nothing installs a signal handler. When the bench is opened, a
 /// directory is made at `block`, if it is given. The revision of the tool
 /// is `tool`, when it is given, in place of the one that the build
-/// embedded. What the tool says on standard error is kept in `said`, and
-/// the bench is in use when `in_use` is set.
+/// embedded. What the tool says on standard error is kept in `said`, each
+/// with the number of power commands sent before it, and the bench is in
+/// use when `in_use` is set.
 struct TestEnv {
     world: SimWorld,
     script: RefCell<Option<ScriptProvider>>,
@@ -335,7 +336,7 @@ struct TestEnv {
     flag: &'static AtomicI32,
     block: Option<PathBuf>,
     tool: Option<ToolRevision>,
-    said: RefCell<Vec<String>>,
+    said: RefCell<Vec<(usize, String)>>,
     in_use: bool,
 }
 
@@ -366,6 +367,16 @@ impl TestEnv {
 
     /// What the tool said on standard error.
     fn said(&self) -> Vec<String> {
+        self.said
+            .borrow()
+            .iter()
+            .map(|(_, said)| said.clone())
+            .collect()
+    }
+
+    /// What the tool said on standard error, each with the number of power
+    /// commands that the relay had sent before it.
+    fn said_after(&self) -> Vec<(usize, String)> {
         self.said.borrow().clone()
     }
 
@@ -444,7 +455,8 @@ impl Env for TestEnv {
     }
 
     fn say(&self, message: &str) {
-        self.said.borrow_mut().push(message.to_string());
+        let sent = self.world.power_commands().len();
+        self.said.borrow_mut().push((sent, message.to_string()));
     }
 }
 
@@ -516,9 +528,8 @@ fn plan_with(dir: &Path, edit: impl Fn(String) -> String) -> PathBuf {
     path
 }
 
-/// A copy of the example payloads in `dir` with the file `PIEEPROM.UPD` in
-/// that of the first entry, which a plan that `eeprom_plan` writes lists.
-fn eeprom_payloads(dir: &Path) -> (PathBuf, Sha256) {
+/// A copy of the example payloads in `dir`, its payload root.
+fn payloads_in(dir: &Path) -> PathBuf {
     fn copy(from: &Path, to: &Path) {
         fs::create_dir_all(to).unwrap();
         for item in fs::read_dir(from).unwrap() {
@@ -533,6 +544,13 @@ fn eeprom_payloads(dir: &Path) -> (PathBuf, Sha256) {
     }
     let root = dir.join("payload");
     copy(&examples().join("payload"), &root);
+    root
+}
+
+/// A copy of the example payloads in `dir` with the file `PIEEPROM.UPD` in
+/// that of the first entry, which a plan that `eeprom_plan` writes lists.
+fn eeprom_payloads(dir: &Path) -> (PathBuf, Sha256) {
+    let root = payloads_in(dir);
     let image = b"A stand-in for an EEPROM image; it is not one.\n";
     fs::write(root.join("firmware-only/PIEEPROM.UPD"), image).unwrap();
     (root, Sha256::of(image))
@@ -2198,12 +2216,16 @@ fn power_off(env: &TestEnv) -> u8 {
 /// The exit status of `kyto-bench publish` of the entry `entry` of the
 /// example plan, instance configuration and payloads on `env`.
 fn publish(env: &TestEnv, entry: &str) -> u8 {
+    publish_from(env, &examples().join("payload"), entry)
+}
+
+/// [`publish`] with the payloads below `payloads`.
+fn publish_from(env: &TestEnv, payloads: &Path, entry: &str) -> u8 {
     let examples = examples();
     let (plan, instance) = (
         examples.join("run-plan.toml"),
         examples.join("instance.toml"),
     );
-    let payloads = examples.join("payload");
     let args: [&OsStr; 9] = [
         "publish".as_ref(),
         "--plan".as_ref(),
@@ -2285,7 +2307,11 @@ fn the_power_off_command_says_when_a_run_holds_the_bench() {
     );
     let said = "a run or publication holds this bench; this power off cuts it, and its receipt \
                 does not show this power off and is no evidence";
-    assert_eq!(env.said(), [said]);
+    assert_eq!(
+        env.said_after(),
+        [(0, said.into())],
+        "said before the power off"
+    );
 }
 
 #[test]
@@ -2312,7 +2338,13 @@ fn the_publish_command_reports_a_served_copy_that_differs() {
     assert!(env.world.power_commands().is_empty(), "no power command");
     let said = env.said();
     assert_eq!(said.len(), 5, "{said:?}");
-    for (line, file) in said.iter().zip(["config.txt", "bcm2712-rpi-5-b.dtb"]) {
+    let files = [
+        "config.txt",
+        "bcm2712-rpi-5-b.dtb",
+        "overlays/bcm2712d0.dtbo",
+        "kernel.img",
+    ];
+    for (line, file) in said.iter().zip(files) {
         let copy = format!("the served copy of {file} has the SHA-256 ");
         assert!(line.starts_with(&copy), "{line}");
     }
@@ -2347,6 +2379,79 @@ fn the_publish_command_switches_only_while_readings_confirm_the_supply_off() {
     assert!(served(&env, "kernel.img").is_err(), "nothing served");
     let said = "interrupted before the switch; the board is served what it was served before";
     assert_eq!(env.said(), [said]);
+    // An interrupt stops it before the switch also when readings would not
+    // have confirmed the supply off, or the staged copy differs.
+    for supply_on in [true, false] {
+        let mut env = TestEnv::example();
+        env.interrupts = Interrupts::AtOpen;
+        if supply_on {
+            SimRelay::new(&env.world).command(PowerState::On).unwrap();
+        } else {
+            env.world.knobs().tftp.corrupts_staged = true;
+        }
+        assert_eq!(publish(&env, "echo"), cli::INTERRUPTED);
+        assert_eq!(
+            commands(&env).len(),
+            usize::from(supply_on),
+            "no power command"
+        );
+        assert!(served(&env, "kernel.img").is_err(), "nothing served");
+        assert_eq!(env.said(), [said]);
+    }
+}
+
+#[test]
+fn the_publish_command_refuses_a_payload_that_fails_its_checks() {
+    let unchanged = "; the board is served what it was served before";
+    // A source file of another digest than the plan's: nothing is staged.
+    let dir = scratch("publish-source-digest");
+    let payloads = payloads_in(&dir);
+    fs::write(payloads.join("echo/kernel.img"), b"another kernel").unwrap();
+    let env = TestEnv::example();
+    assert_eq!(publish_from(&env, &payloads, "echo"), cli::REFUSED);
+    let (found, pinned) = (
+        Sha256::of(b"another kernel"),
+        "854a05365ca392c93250b69848a50e17eb7f4f847f581f1e6d56c6a620b4306e",
+    );
+    let said = format!(
+        "refused by payload.source_digest: the source copy of kernel.img has the SHA-256 \
+         {found}, not {pinned}{unchanged}"
+    );
+    assert_eq!(env.said(), [said]);
+    assert!(env.world.power_commands().is_empty(), "no power command");
+    assert!(!env.staged(1, "kernel.img"), "nothing staged");
+    assert!(served(&env, "kernel.img").is_err(), "nothing served");
+    // A staged copy that differs, and a TFTP directory that cannot be
+    // staged: nothing is served.
+    let staged = "refused by payload.staged_digest: the staged copy of bcm2712-rpi-5-b.dtb";
+    let cannot = "staging the payload of echo: the delivery device failed: the simulated TFTP \
+                  directory could not stage";
+    for (corrupts, said) in [(true, &[][..]), (false, &[cannot][..])] {
+        let env = TestEnv::example();
+        env.world.knobs().tftp.corrupts_staged = corrupts;
+        env.world.knobs().tftp.stage_fails = !corrupts;
+        assert_eq!(publish(&env, "echo"), cli::REFUSED);
+        let mut found = env.said();
+        let last = found.pop().unwrap();
+        assert_eq!(found, said);
+        assert!(
+            last.starts_with(staged) && last.ends_with(unchanged),
+            "{last}"
+        );
+        assert!(env.world.power_commands().is_empty(), "no power command");
+        assert!(served(&env, "kernel.img").is_err(), "nothing served");
+    }
+}
+
+#[test]
+fn the_publish_command_is_a_bench_fault_when_the_meter_fails() {
+    let mut env = TestEnv::example();
+    env.no_bridge = true;
+    assert_eq!(publish(&env, "echo"), cli::BENCH_FAULT);
+    let said = "the power_confirmation device failed: no MCP2221 USB bridge is connected";
+    assert_eq!(env.said(), [said]);
+    assert!(env.world.power_commands().is_empty(), "no power command");
+    assert!(served(&env, "kernel.img").is_err(), "nothing served");
 }
 
 #[test]
@@ -2411,6 +2516,15 @@ fn an_interrupt_before_the_first_power_command_sends_none() {
     assert!(!ran.out.exists(), "no receipt and no output directory");
     assert!(env.world.power_commands().is_empty(), "no power command");
     let said = "the run was interrupted before its first power command";
+    assert_eq!(env.said(), [said]);
+    // Also when staging then refuses the run.
+    let mut env = TestEnv::example();
+    env.interrupts = Interrupts::AtOpen;
+    env.world.knobs().tftp.corrupts_staged = true;
+    let ran = run_example("interrupted-and-refused", &env);
+    assert_eq!(ran.status, cli::INTERRUPTED);
+    assert!(!ran.out.exists(), "no receipt and no output directory");
+    assert!(env.world.power_commands().is_empty(), "no power command");
     assert_eq!(env.said(), [said]);
 }
 
@@ -2503,4 +2617,35 @@ fn a_chunk_stamped_after_a_passed_deadline_ends_the_cold_boot() {
         "{stamps:?}"
     );
     assert!(failed(cold_boot).contains(&"boot.end"));
+}
+
+#[test]
+fn a_step_armed_at_the_boot_deadline_is_sent() {
+    // Readings every 1 ms confirm the power on 1 ms after it, and the echo
+    // entry's READY line, which arms its step, comes 19 ms after it, at the
+    // boot timeout: the step is sent at the deadline, and the cold boot
+    // ends there.
+    let dir = scratch("armed-at-the-deadline");
+    let plan = plan_with(&dir, |text| {
+        let end = "boot_timeout_ms = 60000\nend = { marker = \"ready\" }";
+        text.replacen(end, "boot_timeout_ms = 19\nend = { marker = \"ready\" }", 1)
+    });
+    let instance = dir.join("instance.toml");
+    let text = String::from_utf8(example("instance.toml")).unwrap();
+    fs::write(&instance, text.replacen("poll_ms = 100", "poll_ms = 1", 1)).unwrap();
+    let env = TestEnv::example();
+    let ran = run_with(&dir, &plan, &instance, &examples().join("payload"), &env);
+    assert_eq!(ran.status, cli::FAIL);
+    let receipt = ran.receipt();
+    let cold_boot = &receipt.entries[1].cold_boots[0];
+    let t = times(&receipt, &cold_boot.events);
+    let boot = t.on.0 + 19 * MS;
+    assert_eq!(t.on_confirmed.0, t.on.0 + MS);
+    assert_eq!(
+        t.send.map(|send| send.0),
+        Some(boot),
+        "sent at the deadline"
+    );
+    assert_eq!(end(&cold_boot.events), Some(EndReason::BootTimeout));
+    assert_eq!(t.end.0, boot);
 }

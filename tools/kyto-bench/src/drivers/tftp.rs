@@ -8,23 +8,24 @@
 //! directory, of files of the mode `0644` and directories of `0755`; a name
 //! that `releases` holds already, in any letter case, or that the link
 //! names, is never used again, and nothing in `releases` is changed or
-//! removed, whoever made it. A switch makes a new link to the relative path
-//! `releases/gNNNNNN`, which a server that serves from a changed root
-//! resolves as the tool does, and renames it over the old link, so that the
-//! link's name stays present and names the old generation or the new one;
-//! on macOS a lookup through the link that meets the rename can fail with
-//! `EINVAL`, which is why the tool switches only while readings confirm the
-//! supply off. It switches only to a generation that
-//! the same driver staged whole. From its first staging or switch until the
-//! bench closes, the driver holds a lock on the directory, so that no other
-//! run or publication stages or switches there meanwhile. Its errors name
-//! no path and no link.
+//! removed, whoever made it. Should the link name the new directory all the
+//! same, through a path of its own, staging leaves that directory empty and
+//! fails. A switch makes a new link to the relative path `releases/gNNNNNN`,
+//! which a server that serves from a changed root resolves as the tool
+//! does, and renames it over the old link, so that the link's name stays
+//! present and names the old generation or the new one; on macOS a lookup
+//! through the link that meets the rename can fail with `EINVAL`, which is
+//! why the tool switches only while readings confirm the supply off. It
+//! switches only to a generation that the same driver staged whole. From
+//! its first staging or switch until the bench closes, the driver holds a
+//! lock on the directory, so that no other run or publication stages or
+//! switches there meanwhile. Its errors name no path and no link.
 
 use std::collections::BTreeSet;
 use std::fs::{self, DirBuilder, File, OpenOptions, Permissions, TryLockError};
 use std::io::{self, ErrorKind, Write as _};
-use std::os::unix::fs::{PermissionsExt as _, symlink};
-use std::path::{Path, PathBuf};
+use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _, symlink};
+use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -106,10 +107,15 @@ fn failed(detail: impl Into<String>) -> DeviceError {
     DeviceError::new(Role::Delivery, detail)
 }
 
-/// The generation of a link's `target`: exactly `releases/gNNNNNN`.
-fn generation_of(target: &Path) -> Option<GenerationName> {
-    let name = target.strip_prefix(RELEASES).ok()?.to_str()?;
-    GenerationName::parse(name).ok()
+/// The generation that a link's `target` names below `dir`:
+/// `releases/gNNNNNN` in any letter case, also through `.` or from `dir`.
+fn generation_of(dir: &Path, target: &Path) -> Option<GenerationName> {
+    let target = target.strip_prefix(dir).unwrap_or(target);
+    let mut parts = target.components().filter(|p| *p != Component::CurDir);
+    let mut next = || parts.next().and_then(|part| part.as_os_str().to_str());
+    let (releases, name) = (next()?, next()?.to_ascii_lowercase());
+    let only = next().is_none() && releases.eq_ignore_ascii_case(RELEASES);
+    GenerationName::parse(&name).ok().filter(|_| only)
 }
 
 /// Makes the directory at `path`, of the mode `0755`.
@@ -177,8 +183,9 @@ impl TftpDirectory {
                 .to_ascii_lowercase();
             taken.extend(GenerationName::parse(&name).ok());
         }
-        let served = fs::read_link(self.dir.join(&self.link)).ok();
-        taken.extend(served.as_deref().and_then(generation_of));
+        let link = self.dir.join(&self.link);
+        let served = fs::read_link(&link).ok();
+        taken.extend(served.and_then(|target| generation_of(&self.dir, &target)));
         let generation = GenerationName::next_after(taken).ok_or("no generation name is left")?;
         let root = releases.join(generation.to_string());
         DirBuilder::new()
@@ -187,6 +194,11 @@ impl TftpDirectory {
                 ErrorKind::AlreadyExists => format!("{generation} exists already"),
                 _ => format!("cannot make {generation}: {error}"),
             })?;
+        // A link that names the new directory through a spelling of its own.
+        let made = fs::metadata(&root).map_err(|error| format!("{generation}: {error}"))?;
+        if fs::metadata(&link).is_ok_and(|to| (to.dev(), to.ino()) == (made.dev(), made.ino())) {
+            return Err(format!("the served link names {generation}, left empty"));
+        }
         let mut directories = Vec::new();
         for (name, bytes) in files {
             let written = write_file(&root, name, bytes, &mut directories);
@@ -211,7 +223,7 @@ impl TftpDirectory {
             Err(error) if error.kind() == ErrorKind::NotFound => None,
             Ok(found) if found.is_symlink() => fs::read_link(&link)
                 .ok()
-                .and_then(|target| generation_of(&target)),
+                .and_then(|target| generation_of(&self.dir, &target)),
             Ok(_) => return Err("the served path is not a symbolic link".into()),
             Err(error) => return Err(format!("the served path: {error}")),
         };
@@ -534,6 +546,31 @@ mod tests {
         fs::remove_file(dir.join("example")).unwrap();
         symlink("releases/g000003", dir.join("example")).unwrap();
         assert_eq!(stage(&mut second, &files), Ok(generation(4)));
+        // Nor when the link spells it otherwise; one that names the new
+        // directory all the same leaves it empty.
+        let again = dir.join("releases/../releases/g000011");
+        let absolute = dir.join("releases/g000009");
+        for (target, number) in [
+            (Path::new("./releases/g000005"), Ok(6)),
+            (Path::new("releases/G000007"), Ok(8)),
+            (absolute.as_path(), Ok(10)),
+            (
+                again.as_path(),
+                Err("the served link names g000011, left empty"),
+            ),
+        ] {
+            fs::remove_file(dir.join("example")).unwrap();
+            symlink(target, dir.join("example")).unwrap();
+            match (stage(&mut second, &files), number) {
+                (Err(detail), Err(expected)) => refused(detail, expected),
+                (staged, number) => assert_eq!(staged, Ok(generation(number.unwrap()))),
+            }
+        }
+        assert_eq!(
+            fs::read_dir(dir.join("releases/g000011")).unwrap().count(),
+            0
+        );
+        assert_eq!(stage(&mut second, &files), Ok(generation(12)));
         // No name is used again, in any letter case, nor one after the last.
         fs::create_dir(dir.join("releases/G999999")).unwrap();
         refused(

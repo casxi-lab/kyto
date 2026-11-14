@@ -781,18 +781,20 @@ symbolic link of that name in `dir`. Each staged generation is a new
 directory `releases/<generation>` below `dir`, with files of the mode `0644`
 and directories of `0755`; a name that `releases` holds already, in any
 letter case, or that the link names, is never used again, and nothing in
-`releases` is changed or removed. Switching makes a new link whose target
-is the relative path `releases/<generation>`, so that a server that serves
-from a changed root resolves it as the tool does, and renames it over the
-old link, so that the link's name stays present and names the old
-generation or the new one. On macOS a lookup through the link that meets
-the rename can fail with `EINVAL`, which is why the tool switches only
-while readings confirm the supply off. A link to anything else, such as one
-that another publisher left, is replaced the same way; a file or directory
-of that name is refused. The tool switches only to a generation that the
-same run or publication staged whole. From its first staging until it ends,
-a run or a publication holds a lock on `dir`, so that no other one stages
-or switches there meanwhile; `kyto-bench power-off` takes no lock. The tool
+`releases` is changed or removed. A link that names the new directory all
+the same, through a path of its own, makes the staging fail before it writes
+into that directory, which stays empty. Switching makes a new link whose
+target is the relative path `releases/<generation>`, so that a server that
+serves from a changed root resolves it as the tool does, and renames it over
+the old link, so that the link's name stays present and names the old
+generation or the new one. On macOS a lookup through the link that meets the
+rename can fail with `EINVAL`, which is why the tool switches only while
+readings confirm the supply off. A link to anything else, such as one that
+another publisher left, is replaced the same way; a file or directory of
+that name is refused. The tool switches only to a generation that the same
+run or publication staged whole. From its first staging until it ends, a run
+or a publication holds a lock on `dir`, so that no other one stages or
+switches there meanwhile; `kyto-bench power-off` takes no lock. The tool
 never deletes a generation, so whoever runs the bench removes old ones from
 `releases/` by hand, never the one that the link names.
 

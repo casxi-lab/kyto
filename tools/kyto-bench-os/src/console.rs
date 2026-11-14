@@ -55,6 +55,10 @@ pub struct SerialConsole<C: StampClock> {
     /// length, for a test to wait on.
     #[cfg(test)]
     stamps: Option<mpsc::Sender<(u64, usize)>>,
+    /// Where a receive reports each wait for a chunk that it begins, with
+    /// its length, for a test to wait on.
+    #[cfg(test)]
+    waits: Option<mpsc::Sender<Duration>>,
 }
 
 /// An open port with its writer and its stamped chunks.
@@ -85,12 +89,14 @@ impl<C: StampClock> SerialConsole<C> {
             session: None,
             #[cfg(test)]
             stamps: None,
+            #[cfg(test)]
+            waits: None,
         }
     }
 
     /// Opens the port exclusively and returns the time from which every
-    /// byte is kept, [`OPEN_SETTLE`] after the open, or fails when that is
-    /// after `deadline`.
+    /// byte is kept, [`OPEN_SETTLE`] after the open; when that is after
+    /// `deadline`, it closes the port again and fails.
     pub fn open(&mut self, deadline: u64) -> Result<u64, PortError> {
         if self.session.is_some() {
             return Err(PortError::new("open", "the console is already open"));
@@ -124,12 +130,6 @@ impl<C: StampClock> SerialConsole<C> {
         let ready_at = self
             .clock
             .wait_until_ns(self.clock.now_ns().saturating_add(settle));
-        if ready_at > deadline {
-            return Err(PortError::new(
-                "open",
-                "the port was not ready by the deadline",
-            ));
-        }
         self.session = Some(Session {
             port,
             writer,
@@ -138,6 +138,13 @@ impl<C: StampClock> SerialConsole<C> {
             held: None,
             ready_at,
         });
+        if ready_at > deadline {
+            // Closed as `close` closes it, so that the next open receives
+            // every byte.
+            let late = PortError::new("open", "the port was not ready by the deadline");
+            let _ = self.close();
+            return Err(late);
+        }
         Ok(ready_at)
     }
 
@@ -192,6 +199,10 @@ impl<C: StampClock> SerialConsole<C> {
                 return Ok(Got::Deadline { at: now });
             }
             let slice = TIMING.reader_poll.min(Duration::from_nanos(deadline - now));
+            #[cfg(test)]
+            if let Some(waits) = &self.waits {
+                let _ = waits.send(slice);
+            }
             session.held = session.chunks.recv_timeout(slice).ok();
         }
     }
@@ -248,6 +259,34 @@ pub(crate) mod tests {
             let (sender, stamps) = mpsc::channel();
             self.stamps = Some(sender);
             stamps
+        }
+
+        /// Reports each wait for a chunk that a receive begins, with its
+        /// length.
+        fn report_waits(&mut self) -> Receiver<Duration> {
+            let (sender, waits) = mpsc::channel();
+            self.waits = Some(sender);
+            waits
+        }
+    }
+
+    /// A receive by `deadline` on a thread of its own, for a deadline that
+    /// the clock has not reached, and what waits for it to return the
+    /// console and its result. A test fails when the receive has not
+    /// returned within [`TEST_WAIT`].
+    fn receive_apart(
+        mut console: SerialConsole<TestClock>,
+        deadline: u64,
+    ) -> impl FnOnce() -> (SerialConsole<TestClock>, Result<Got, PortError>) {
+        let (sender, returned) = mpsc::channel();
+        std::thread::spawn(move || {
+            let got = console.receive(deadline);
+            let _ = sender.send((console, got));
+        });
+        move || {
+            returned
+                .recv_timeout(TEST_WAIT)
+                .expect("the receive returned")
         }
     }
 
@@ -409,19 +448,51 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn an_open_not_ready_by_its_deadline_releases_the_port() {
+        let pty = Pty::open();
+        let clock = TestClock::at_zero();
+        let (mut console, stamps) = console(&pty, clock);
+        let late = std::thread::scope(|scope| {
+            let open = scope.spawn(|| console.open(SETTLE - 1));
+            clock.await_wait(SETTLE);
+            clock.advance_to(SETTLE);
+            open.join().unwrap()
+        });
+        let refused = PortError::new("open", "the port was not ready by the deadline");
+        assert_eq!(late, Err(refused));
+        // The stamping thread has ended, and so has the reader, whose end
+        // ends it: nothing else holds a sender of the stamps.
+        console.stamps = None;
+        assert_eq!(stamps.try_recv(), Err(TryRecvError::Disconnected));
+        // The port was restored, released and unlocked: it opens again at
+        // once, and the new reader receives every byte.
+        let stamps = console.report_stamps();
+        assert_eq!(open_settled(&mut console, clock, || {}), Ok(2 * SETTLE));
+        pty.write(b"x");
+        assert_eq!(stamped(&stamps, 1), [2 * SETTLE]);
+        let x = BTreeMap::from([(2 * SETTLE, b"x".to_vec())]);
+        assert_eq!(received(&mut console, 2 * SETTLE), x);
+        console.close().unwrap();
+    }
+
+    #[test]
     fn an_interrupt_ends_a_receive_early() {
         let pty = Pty::open();
         let clock = TestClock::at_zero();
         let flag: &'static AtomicI32 = Box::leak(Box::new(AtomicI32::new(0)));
         let mut console = SerialConsole::new(pty.path().to_string(), clock, Some(flag));
+        let waits = console.report_waits();
         assert_eq!(open_settled(&mut console, clock, || {}), Ok(SETTLE));
-        // The clock never reaches the deadline: the signal ends the wait.
-        let got = std::thread::scope(|scope| {
-            let receive = scope.spawn(|| console.receive(SECOND));
-            flag.store(libc::SIGINT, Ordering::SeqCst);
-            receive.join().unwrap()
-        });
+        // The clock never reaches the deadline. The signal comes while the
+        // receive waits for a chunk, and the receive returns at the end of
+        // that wait of the reader, or of the next at the latest.
+        let returned = receive_apart(console, SECOND);
+        let wait = waits.recv_timeout(TEST_WAIT).expect("a wait for a chunk");
+        assert_eq!(wait, TIMING.reader_poll);
+        flag.store(libc::SIGINT, Ordering::SeqCst);
+        let (mut console, got) = returned();
         assert_eq!(got, Ok(Got::Deadline { at: SETTLE }));
+        assert!(waits.try_iter().count() <= 1, "one more wait at most");
         console.close().unwrap();
     }
 
@@ -429,11 +500,12 @@ pub(crate) mod tests {
     fn a_hang_up_names_no_port() {
         let mut pty = Pty::open();
         let clock = TestClock::at_zero();
-        let mut console = opened(&pty, clock);
+        let console = opened(&pty, clock);
         pty.close_master();
         // A Darwin pseudo-terminal ends its stream, and a Linux one fails
-        // the read with `EIO`.
-        match console.receive(SECOND) {
+        // the read with `EIO`, though the clock never reaches the deadline.
+        let (mut console, got) = receive_apart(console, SECOND)();
+        match got {
             Ok(Got::Closed { at }) => assert_eq!(at, SETTLE),
             Err(error) => {
                 assert_eq!(

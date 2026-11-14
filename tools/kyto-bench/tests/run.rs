@@ -2287,6 +2287,19 @@ fn the_power_off_command_switches_off_when_the_meter_cannot_be_opened() {
 }
 
 #[test]
+fn the_power_off_command_says_when_the_power_off_was_not_sent() {
+    let mut env = TestEnv::example();
+    env.failing = Some(1);
+    assert_eq!(power_off(&env), cli::BENCH_FAULT);
+    assert_eq!(commands(&env), [], "no power off was sent");
+    let said = [
+        "the power device failed: the command was not sent",
+        "the power off was not sent",
+    ];
+    assert_eq!(env.said(), said);
+}
+
+#[test]
 fn the_power_off_command_finishes_when_interrupted() {
     let mut env = TestEnv::example();
     env.interrupts = Interrupts::AtOpen;

@@ -78,7 +78,7 @@ to confirm the supply off. Its exit status:
 | --- | --- |
 | 0 | Readings confirmed the power off; standard output gives the last reading |
 | 2 | A usage or input error: the command line is not valid, the instance configuration cannot be read or does not pass its checks, or the bench cannot be opened |
-| 3 | `BENCH FAULT`: readings did not confirm the power off, or a device failed, such as a meter that cannot be opened, after the power off was sent; standard error says which, with the last reading |
+| 3 | `BENCH FAULT`: readings did not confirm the power off, or a device failed: the power switch, so that the power off was not sent, or the meter, such as one that cannot be opened, after it was sent; standard error says which, and whether the power off was sent, with the last reading |
 | 101 | An error of the tool itself |
 
 `kyto-bench publish --plan <file> --instance <file> --payload-root <dir>

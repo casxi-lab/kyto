@@ -44,6 +44,11 @@ pub fn power_off(env: &dyn Env, instance: &Path) -> Result<u8, String> {
         return Ok(PASS);
     }
     say_failures(env, &events);
+    let sent = (events.iter()).any(|event| matches!(event.event, EventKind::Power { .. }));
+    if !sent {
+        env.say("the power off was not sent");
+        return Ok(BENCH_FAULT);
+    }
     let within = confirmation.off_timeout_ms;
     env.say(&format!(
         "readings did not confirm the power off within {within} ms; {last}"

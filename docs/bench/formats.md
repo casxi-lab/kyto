@@ -775,7 +775,7 @@ sends a step is recorded after the send.
 
 The delivery device of the kind `tftp-directory` publishes into a directory
 of the bench host from which a TFTP server serves the board. The path prefix
-of `[tftp]` must be one directory name and `/`, such as `current/`, whose
+of `[tftp]` must be one directory name and `/`, such as `example/`, whose
 name is not `releases` in any letter case: the board is served through a
 symbolic link of that name in `dir`. Each staged generation is a new
 directory `releases/<generation>` below `dir`, with files of the mode `0644`

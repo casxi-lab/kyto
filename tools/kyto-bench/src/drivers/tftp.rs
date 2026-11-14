@@ -1,8 +1,8 @@
 //! The delivery device of the kind `tftp-directory`: a directory of the
 //! bench host from which a TFTP server serves the board. The board reads
 //! every file through a symbolic link in it whose name is the path prefix
-//! of the instance configuration without its final `/`, such as `current`
-//! for `current/`.
+//! of the instance configuration without its final `/`, such as `example`
+//! for `example/`.
 //!
 //! Each payload is staged as a new generation `releases/gNNNNNN` below the
 //! directory, of files of the mode `0644` and directories of `0755`; a name
@@ -60,7 +60,7 @@ pub struct TftpSettings {
 }
 
 const ABSOLUTE: &str = "[local.delivery] dir: an absolute path without a NUL byte";
-const ONE_DIRECTORY: &str = "[tftp] path_prefix: a tftp-directory serves the board through one directory and a slash, such as current/";
+const ONE_DIRECTORY: &str = "[tftp] path_prefix: a tftp-directory serves the board through one directory and a slash, such as example/";
 
 /// The settings of the TFTP directory of `instance`, checked for their form
 /// alone: nothing is opened, nor whether the directory exists.
@@ -318,9 +318,9 @@ mod tests {
         dir
     }
 
-    /// The TFTP directory `dir`, which serves through `current`.
+    /// The TFTP directory `dir`, which serves through `example`.
     fn tftp(dir: &Path) -> TftpDirectory {
-        let (dir, link) = (dir.to_path_buf(), "current".to_string());
+        let (dir, link) = (dir.to_path_buf(), "example".to_string());
         TftpDirectory::new(TftpSettings { dir, link })
     }
 
@@ -358,7 +358,7 @@ mod tests {
         fs::write(releases.join("legacy-abc/config.txt"), "old").unwrap();
         fs::create_dir(releases.join("g000002")).unwrap();
         fs::write(releases.join("g000002/config.txt"), "two").unwrap();
-        symlink("releases/legacy-abc", dir.join("current")).unwrap();
+        symlink("releases/legacy-abc", dir.join("example")).unwrap();
         let mut tftp = tftp(&dir);
         // A new generation after every one present, whole, with the modes
         // of a served one; staging serves nothing.
@@ -378,7 +378,7 @@ mod tests {
         // The switch replaces the link that another publisher left by a
         // relative one, and gives the generation served before.
         assert_eq!(tftp.switch_to(&generation(3)), Ok(None));
-        let target = fs::read_link(dir.join("current")).unwrap();
+        let target = fs::read_link(dir.join("example")).unwrap();
         assert_eq!(target, Path::new("releases/g000003"));
         assert_eq!(tftp.read_served(&name("config.txt")), Ok(b"a".to_vec()));
         assert!(fs::symlink_metadata(dir.join(SWITCH)).is_err());
@@ -390,7 +390,7 @@ mod tests {
         // link at that instant can fail with EINVAL instead, which is why
         // the tool switches only while the board is off.
         let (start, done) = (Barrier::new(2), AtomicBool::new(false));
-        let served = dir.join("current/config.txt");
+        let served = dir.join("example/config.txt");
         thread::scope(|scope| {
             let reader = scope.spawn(|| {
                 start.wait();
@@ -491,7 +491,7 @@ mod tests {
         // and the lock shows the bench in use.
         let delivery = format!("[local.delivery]\ndir = \"{}\"\n", dir.display());
         let model = ina228::MODELS[0].0;
-        let bench = instance(REAL, model, "current/", &delivery);
+        let bench = instance(REAL, model, "example/", &delivery);
         assert!(!in_use(&bench));
         let mut first = tftp(&dir);
         let staged = stage(&mut first, &files).unwrap();
@@ -507,16 +507,16 @@ mod tests {
         assert_eq!(stage(&mut second, &files), Ok(generation(2)));
         refused(second.switch_to(&staged).unwrap_err().detail, not_staged);
         // A served path that is no link is left as it is.
-        fs::create_dir(dir.join("current")).unwrap();
-        fs::write(dir.join("current/config.txt"), "mine").unwrap();
+        fs::create_dir(dir.join("example")).unwrap();
+        fs::write(dir.join("example/config.txt"), "mine").unwrap();
         let no_link = "the served path is not a symbolic link";
         refused(
             second.switch_to(&generation(2)).unwrap_err().detail,
             no_link,
         );
-        assert_eq!(fs::read(dir.join("current/config.txt")).unwrap(), b"mine");
+        assert_eq!(fs::read(dir.join("example/config.txt")).unwrap(), b"mine");
         // A file where the new link goes is not removed.
-        fs::remove_dir_all(dir.join("current")).unwrap();
+        fs::remove_dir_all(dir.join("example")).unwrap();
         fs::write(dir.join(SWITCH), "mine").unwrap();
         let taken = format!("the name of the new link, {SWITCH}, is taken");
         refused(second.switch_to(&generation(2)).unwrap_err().detail, &taken);
@@ -526,13 +526,13 @@ mod tests {
         fs::remove_file(dir.join(SWITCH)).unwrap();
         symlink("releases/g000001", dir.join(SWITCH)).unwrap();
         assert_eq!(second.switch_to(&generation(2)), Ok(None));
-        let target = fs::read_link(dir.join("current")).unwrap();
+        let target = fs::read_link(dir.join("example")).unwrap();
         assert_eq!(target, Path::new("releases/g000002"));
         assert!(fs::symlink_metadata(dir.join(SWITCH)).is_err());
         // The generation that the link names is not staged again, also when
         // it is gone.
-        fs::remove_file(dir.join("current")).unwrap();
-        symlink("releases/g000003", dir.join("current")).unwrap();
+        fs::remove_file(dir.join("example")).unwrap();
+        symlink("releases/g000003", dir.join("example")).unwrap();
         assert_eq!(stage(&mut second, &files), Ok(generation(4)));
         // No name is used again, in any letter case, nor one after the last.
         fs::create_dir(dir.join("releases/G999999")).unwrap();
@@ -558,7 +558,7 @@ mod tests {
         for detail in details {
             let lower = detail.to_ascii_lowercase();
             assert!(
-                !lower.contains("current") && !lower.contains("tftp-refusals"),
+                !lower.contains("example") && !lower.contains("tftp-refusals"),
                 "{detail}"
             );
             assert!(!detail.contains('/'), "{detail}");
@@ -577,7 +577,7 @@ mod tests {
             dir: "/srv/tftp/board".into(),
             link: link.into(),
         };
-        assert_eq!(checked("current/", dir), Ok(served("current")));
+        assert_eq!(checked("example/", dir), Ok(served("example")));
         assert_eq!(checked("boot.d/", dir), Ok(served("boot.d")));
         for (local, error) in [
             ("", "[local.delivery]: missing field `dir`"),
@@ -588,11 +588,11 @@ mod tests {
             ("[local.delivery]\ndir = \"srv/tftp\"\n", ABSOLUTE),
             ("[local.delivery]\ndir = \"/srv/\\u0000tftp\"\n", ABSOLUTE),
         ] {
-            assert_eq!(checked("current/", local).unwrap_err(), error, "{local}");
+            assert_eq!(checked("example/", local).unwrap_err(), error, "{local}");
         }
         for prefix in [
             "",
-            "current",
+            "example",
             "a/b/",
             "/srv/",
             "releases/",

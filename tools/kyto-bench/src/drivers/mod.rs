@@ -256,7 +256,7 @@ mod tests {
     /// An instance configuration of real devices with `local` as the
     /// settings of its roles.
     fn of_real(local: &str) -> Instance {
-        instance(REAL, ina228::MODELS[0].0, "current/", local)
+        instance(REAL, ina228::MODELS[0].0, "example/", local)
     }
 
     fn board(text: &str) -> Board {
@@ -278,7 +278,7 @@ mod tests {
         };
         let delivery = TftpSettings {
             dir: "/srv/tftp/board".into(),
-            link: "current".into(),
+            link: "example".into(),
         };
         let expected = Settings {
             power: power.clone(),
@@ -289,7 +289,7 @@ mod tests {
         assert_eq!(settings(&pi5, &of_real(&all)), Ok(expected.clone()));
         assert_eq!(serial_settings(&pi5, &of_real(&all)), Ok((power, console)));
         // Either model of the meter, and an empty table of its settings.
-        let adm00559 = instance(REAL, ina228::MODELS[1].0, "current/", &all);
+        let adm00559 = instance(REAL, ina228::MODELS[1].0, "example/", &all);
         assert_eq!(settings(&pi5, &adm00559), Ok(expected.clone()));
         let empty = of_real(&format!("{all}[local.power_confirmation]\n"));
         assert_eq!(settings(&pi5, &empty), Ok(expected));
@@ -345,7 +345,7 @@ mod tests {
             assert_eq!(checked.unwrap_err(), error, "{local}");
         }
         let model = "Adafruit 5832 INA228 board";
-        let unknown = instance(REAL, model, "current/", &all);
+        let unknown = instance(REAL, model, "example/", &all);
         let error = format!(
             "this build has no power_confirmation device of the kind {} and the model {model}",
             ina228::KIND
@@ -463,7 +463,7 @@ mod tests {
             let (mut one, mut but_one) = (simulated, REAL);
             (one[role], but_one[role]) = (REAL[role], SIMULATED);
             for kinds in [one, but_one] {
-                let mixed = instance(kinds, model, "current/", &all);
+                let mixed = instance(kinds, model, "example/", &all);
                 assert_eq!(real(&mixed), Err(MIXED.into()), "{kinds:?}");
                 let pi5 = board(RASPBERRY_PI_5);
                 let opened = HostEnv.open_bench(&pi5, &mixed, Path::new("/"));
@@ -474,7 +474,7 @@ mod tests {
         let mut kinds = REAL;
         kinds.swap(0, 2);
         let error = "this build has no power device of the kind serial";
-        let other = instance(kinds, model, "current/", &all);
+        let other = instance(kinds, model, "example/", &all);
         assert_eq!(real(&other), Err(error.into()));
     }
 

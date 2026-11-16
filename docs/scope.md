@@ -178,9 +178,10 @@ Other parts of casξ work with kyto's hardware:
 - **Design tools.** Chosen: KiCad 10.0.8 for electronic design and build123d
   0.13.0 for mechanical models, with the rules in
   [Contributing](../CONTRIBUTING.md#design-files). Still open, and fixed with
-  the first design file: the directory layout, the Python version, the pinned
-  libraries, the name of the design tool job and whether it is required, and
-  how the checks judge KiCad's board STEP and the 3MF print models.
+  the first design file: the directory layout, the Python version, the locked
+  Python dependencies, how the symbol, footprint and 3D model libraries are
+  pinned, the name of the design tool job and whether it is required, and how
+  the checks judge KiCad's board STEP and the 3MF print models.
 - **Display, input and rendering stack.** Not decided in krepi; the screen
   and keyboard interfaces follow that decision.
 - **Thermal design.** The cooling parts, fan and air path have not been chosen; they

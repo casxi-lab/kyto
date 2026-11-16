@@ -144,9 +144,9 @@ how files will be organized and the commit rules.
 
 ## How the files will be organized
 
-No design file or model exists yet. Electronic designs will be made with
-KiCad 10.0.8 and mechanical models with build123d 0.13.0, a Python library for
-parametric models in code. The bench tool, written in Rust, is under `tools/`, with the
+No design file or model exists yet. Electronic designs will be made with KiCad
+10.0.8 and mechanical models with build123d 0.13.0, a Python library for
+models in code. The bench tool, written in Rust, is under `tools/`, with the
 [formats](docs/bench/formats.md) of the files it reads and writes, the
 [requirements](docs/bench/requirements.md) of its rules and their
 [contract](docs/bench/contract.md) under `docs/bench/`. When work on the

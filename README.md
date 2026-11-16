@@ -144,20 +144,22 @@ how files will be organized and the commit rules.
 
 ## How the files will be organized
 
-No design file or model exists yet, and the electronic and mechanical design
-tools have not been chosen; the formats of the design files follow that
-choice. The bench tool, written in Rust, is under `tools/`, with the
+No design file or model exists yet. Electronic designs will be made with
+KiCad 10.0.8 and mechanical models with build123d 0.13.0, a Python library for
+parametric models in code. The bench tool, written in Rust, is under `tools/`, with the
 [formats](docs/bench/formats.md) of the files it reads and writes, the
 [requirements](docs/bench/requirements.md) of its rules and their
 [contract](docs/bench/contract.md) under `docs/bench/`. When work on the
 design starts, the repository will keep:
 
-- the editable design sources of each electrical module (schematics and board
-  layouts) and the parametric models and assembly sources of each part, in the
-  native formats of the chosen tools;
+- the editable design sources of each electrical module (KiCad schematics and
+  board layouts) and the parametric models and assemblies of each part
+  (build123d programs in Python);
 - the bill of materials of each design revision, next to its design sources;
-- the manufacturing outputs, STEP exports and print models of each released
-  revision, generated from a committed revision and never edited by hand;
+- the text manufacturing outputs of each released revision (Gerber, drill,
+  bill of materials and placement files), generated from a committed revision
+  and never edited by hand, with its STEP exports and print models attached to
+  the release and listed in the repository;
 - measurement, mockup, print and fit-test records, each stating the revision
   and the board or part it was taken on, with nominal and measured values
   kept apart;

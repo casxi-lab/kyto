@@ -112,5 +112,7 @@
   `git diff --cached --check` and review the staged diff. CI runs
   `cargo xtask check` on every pull request to `main` and every push to
   `main`. The change that adds the first design file or model also adds the
-  checks of the chosen design tool and updates `CONTRIBUTING.md` and these
-  instructions.
+  checks of the design tools, KiCad 10.0.8 and build123d 0.13.0, as `xtask`
+  steps in a separate job on the hosted `ubuntu-24.04` runner, and updates
+  `CONTRIBUTING.md` and these instructions; the rules for design files are in
+  `CONTRIBUTING.md`.

@@ -175,18 +175,23 @@ Other parts of casξ work with kyto's hardware:
   fixed.
 - **Battery and power circuit.** Not chosen; development uses a stable
   external supply.
-- **Design tools.** The electronic and mechanical design tools have not been
-  chosen. The directory layout, file formats and the checks that run on
-  design files and models follow that choice.
+- **Design tools.** Chosen: KiCad 10.0.8 for electronic design and build123d
+  0.13.0 for mechanical models, with the rules in
+  [Contributing](../CONTRIBUTING.md#design-files). Still open, and fixed with
+  the first design file: the directory layout, the Python version, the locked
+  Python dependencies, how the symbol, footprint and 3D model libraries are
+  pinned, the name of the design tool job and whether it is required, and how
+  the checks judge KiCad's board STEP and the 3MF print models.
 - **Display, input and rendering stack.** Not decided in krepi; the screen
   and keyboard interfaces follow that decision.
 - **Thermal design.** The cooling parts, fan and air path have not been chosen; they
   follow measurements of the device under sustained load.
 - **Measurement data and binary files.** Raw files of measurements taken by
   hand are kept outside this repository, as the Measurements row states;
-  small de-identified data tables may be committed later. Whether large exports and
-  print models are kept in Git directly or with a large-file extension has
-  not been decided; it follows the choice of the design tools.
+  small de-identified data tables may be committed later. Large exports and print
+  models are not kept in Git: they are attached to releases and listed in the
+  repository, and no large-file extension is used
+  ([Contributing](../CONTRIBUTING.md#design-files)).
 - **Response times.** No numeric targets for start-up, cancellation or
   response times have been set; they will be set after measurements on a
   prototype.

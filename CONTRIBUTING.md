@@ -123,23 +123,52 @@ cargo test --release --locked --manifest-path tools/Cargo.toml --test fuzz -- --
 ```
 
 The change that adds the first design file or model also adds the checks of
-the chosen design tool, such as electrical rule checks, design rule checks
-and reproducible manufacturing outputs and exports, and updates this section
-and [AGENTS](AGENTS.md) to match.
+the design tools, such as electrical rule checks, design rule checks and
+reproducible manufacturing outputs and exports, and updates this section and
+[AGENTS](AGENTS.md) to match. These checks will be `xtask` steps written in
+Rust that run `kicad-cli` and the Python programs that use build123d as
+subprocesses and judge their exit status and JSON reports; KiCad's electrical
+and design rule checks run with `--exit-code-violations`. The checks do not
+use KiCad's SWIG or IPC scripting interfaces and never call build123d's
+`export_to_pcbway`, which uploads a model to a manufacturer's service. They
+will run in a separate job on the hosted `ubuntu-24.04` (x86_64) runner,
+while the bench tool and the other steps stay on `ubuntu-24.04-arm`. The name
+of that job and whether it is required are set by the same change.
 
 ## Design files
 
-The electronic and mechanical design tools have not been chosen, and no
-design file or model exists yet. The rules below apply from the first design
-file; the directory layout and file formats are fixed together with the tools.
+The electronic design tool is KiCad 10.0.8. The mechanical design tool is
+build123d 0.13.0, a Python library that builds parametric solid models in
+code on Open CASCADE. No design file or model exists yet; the rules below
+apply from the first one, and the directory layout is fixed with it.
 
+- **Tool versions.** Each tool is pinned to one exact version, and the
+  repository records how that version is obtained, with its digest, both on
+  macOS and on the hosted runner. KiCad is the versioned macOS
+  disk image with its SHA-256 and, on the runner, the official `kicad/kicad`
+  container image pinned by its manifest digest. build123d and every package
+  it depends on are exact PyPI versions with file hashes, installed with
+  `pip install --require-hashes` on one fixed Python minor version from 3.11
+  to 3.14. Sources that keep only the latest version, such as KiCad's Ubuntu
+  PPA, and development snapshots are not used for pinning. Upgrading a tool is
+  a change of its own that updates both digests; the outputs of released
+  revisions are then generated again and kept as described under released
+  outputs below. The symbol, footprint and 3D model libraries that the checks
+  use are pinned too; how they are pinned is fixed with the first design
+  file.
 - **Sources.** Each electrical module (for example the screen connection, the
   keyboard or the power circuit) keeps its editable schematic and board layout
-  in the native format of the chosen tool.
+  as KiCad files: `.kicad_sch`, `.kicad_pcb`, `.kicad_sym`, `.kicad_mod`,
+  `.kicad_pro` and `.kicad_dru`, and `.kicad_jobset` when output jobs are
+  used. `.kicad_prl`, `fp-info-cache` and the `.history` directory are local
+  files, not sources.
 - **Models.** Each part (for example the enclosure, the keycaps or a bracket)
-  keeps its editable parametric model and its assembly sources in the native
-  format of the chosen tool. Sources and models are the only design files
-  that are edited by hand.
+  is a build123d model: a Python program (`.py`) that builds the part and its
+  assembly. Sources and models are the only design files that are edited by
+  hand. Models are design files under the CERN Open Hardware Licence Version
+  2 – Permissive; the helper scripts that `xtask` runs and the hash-locked
+  list of Python dependencies are kept under `xtask/` or `tools/` under the
+  MIT License.
 - **Bills of materials.** Every design revision has a bill of materials next
   to its sources, listing each part with its manufacturer, part number,
   quantity and reference designators. A part enters a bill of materials only
@@ -147,14 +176,39 @@ file; the directory layout and file formats are fixed together with the tools.
   coordination records. Prices, quotes, suppliers and lead times are not kept
   in this repository.
 - **Generated files.** The files sent to a manufacturer, the STEP exports and
-  the print models of each released revision are generated from a committed
-  revision with the pinned version of the tool, kept with the revision they
-  were generated from, and never edited by hand. Ordering boards, parts or
-  prints is a separate authorized action.
+  the print models are generated from a committed revision with the pinned
+  versions of the tools, through one entry point, an `xtask` subcommand used
+  both locally and in CI, and are never edited by hand. KiCad's command-line
+  interface exports the Gerber files, the Excellon drill files
+  (`--excellon-min-header`), the bill of materials as CSV, the placement file
+  (`--format csv`), PDF plots of the fabrication layers and the board's STEP
+  export, and every time or version field that an option can leave out is
+  left out; build123d writes STEP files with a fixed `timestamp=`. Two exports
+  of the same revision are expected to be byte for byte identical once known
+  date and version fields are normalized: in KiCad's outputs, the date in the
+  Gerber `G04` comment and `TF.CreationDate`, the job file, the dates of
+  IPC-2581 and ODB++ outputs, the PDF `/CreationDate` and the timestamp in the
+  STEP header; in build123d's, the STEP header timestamp. KiCad's board STEP
+  and 3MF print models do not meet this yet; how their checks judge them is
+  set with the first design file.
+- **Released outputs and large files.** Of the outputs of a released
+  revision, the text manufacturing outputs (Gerber, drill, bill of materials
+  and placement files) are committed. STEP exports, print models and photos
+  are attached to the release, and the repository keeps a list of them with
+  their file names, sizes, SHA-256 digests and the commit and tool versions
+  they were generated with. No large-file extension is used. Design sources
+  and models are always committed. Creating a release, and ordering boards,
+  parts or prints, are separate authorized actions.
+- **Third-party models.** Reference models from other makers, such as the
+  STEP model of the compute module, are not committed before their licenses
+  are checked; the repository records where they were downloaded from and
+  their SHA-256.
 - **Shared dimensions.** Board outlines, mounting holes, connector, button
   and port positions, the screen window and the key interface appear in both
   the board design and the models. Both are kept here and are checked against
-  the same revision before either is released.
+  the same revision before either is released. The board design reaches the
+  models as STEP or BREP exports from KiCad; outline changes go back to KiCad
+  as DXF or SVG files imported in its editor.
 - **Interfaces with the rest of casξ.** The pins, buses, voltage levels and
   timing that krepi's drivers use are stated in the design documentation of
   each module. The thermal design that krepi's temperature thresholds depend

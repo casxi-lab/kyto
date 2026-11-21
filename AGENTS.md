@@ -107,8 +107,9 @@
 - kyto has no design files or models yet. Its Cargo workspaces are the
   repository tasks in `xtask/` and the bench tool in `tools/`, which runs
   run plans on simulated devices and on a bench of the devices that it has
-  drivers for; `cargo xtask check` runs the format, Clippy and test steps in
-  both. Before committing, run `cargo xtask check`, `git diff --check` and
+  drivers for and writes the bench self-test kernel in `tools/self-test/`;
+  `cargo xtask check` runs the format, Clippy and test steps in both.
+  Before committing, run `cargo xtask check`, `git diff --check` and
   `git diff --cached --check` and review the staged diff. CI runs
   `cargo xtask check` on every pull request to `main` and every push to
   `main`. The change that adds the first design file or model also adds the

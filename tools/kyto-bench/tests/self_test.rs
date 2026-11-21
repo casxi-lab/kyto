@@ -96,6 +96,24 @@ fn the_self_test_plan_passes_the_plan_checks_against_a_pinned_set() {
     // reads of config.txt, the kernel and the device tree, each of its size.
     let [firmware, echo] = [&plan.entries[0], &plan.entries[1]];
     assert_eq!(firmware.sends, Some(false));
+    let end = |entry: &Entry| match &entry.end {
+        End::Marker(end) => Some(end.marker.clone()),
+        End::Timeout(_) => None,
+    };
+    assert_eq!(end(firmware).as_deref(), Some("board.os_start"));
+    assert_eq!(end(echo).as_deref(), Some("ready"));
+    let range = |entry: &Entry, marker: &str| {
+        let expect = entry.expect.iter().find(|e| e.marker == marker);
+        expect.map(|e| e.range())
+    };
+    assert_eq!(range(firmware, "board.network_boot"), Some((1, None)));
+    for marker in ["sd_boot", "recovery", "eeprom_write", "eeprom_updated"] {
+        let marker = format!("board.{marker}");
+        assert_eq!(range(firmware, &marker), Some((0, Some(0))), "{marker}");
+    }
+    let order = ["board.bootloader", "board.network_boot", "board.os_start"];
+    assert_eq!(firmware.order[0].markers, order);
+    assert_eq!(echo.before_first_send, ["board.os_start", "ready"]);
     let reads = [
         ("config.txt", read("self-test/config.txt").len()),
         ("kernel_2712.img", read("self-test/kernel_2712.img").len()),

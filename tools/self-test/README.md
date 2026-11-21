@@ -83,8 +83,8 @@ over the header.
   BL31 goes on only on the core whose `MPIDR_EL1` core number is 0 and holds
   the others until a PSCI call starts them
   ([`plat/rpi/rpi5/aarch64/plat_helpers.S`](https://github.com/raspberrypi/arm-trusted-firmware/blob/36761b2765044b62c5485be8fcc109fbd3dae451/plat/rpi/rpi5/aarch64/plat_helpers.S)).
-  Any core whose affinity fields in `MPIDR_EL1` are not all 0 that reaches
-  the kernel all the same waits for an event, for ever.
+  Any core whose affinity fields `Aff0` to `Aff2` in `MPIDR_EL1` are not all
+  0 that reaches the kernel all the same waits for an event, for ever.
 - **The UART.** The debug UART connector, labelled `UART`, is UART10, an Arm
   PL011, at the physical address `0x107d001000`: the device tree of the
   Raspberry Pi 5 (`arch/arm64/boot/dts/broadcom/bcm2712.dtsi` and

@@ -43,8 +43,8 @@ pub fn kernel() -> Vec<u8> {
     a.word(0x644d_5241);
     a.word(0);
 
-    // Only the core whose affinity fields are all 0 goes on; any other core
-    // waits for an event, for ever.
+    // Only the core whose affinity fields Aff0 to Aff2 are all 0 goes on;
+    // any other core waits for an event, for ever.
     a.label("start");
     a.word(MRS_X0_MPIDR_EL1);
     a.word(rri(AND, 0, 0, 24 - 1));

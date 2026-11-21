@@ -1,0 +1,57 @@
+# The bench self-test: a run plan for the Raspberry Pi 5 that boots the
+# self-test payload, which a bench pins in its instance configuration as the
+# set `self-test`: config.txt and kernel_2712.img of this directory and the
+# official device tree files that the README of this directory names. Its
+# markers are lines of the board description and lines about or from the
+# payload itself, never lines of a system under test. A plan holds no value
+# of a bench, not even in a comment: receipts record its text verbatim.
+format = "kyto-bench run plan"
+format_version = 1
+board = "raspberry-pi-5"
+reference = "kyto bench self-test"
+
+# One cold boot that boots from the network without falling back to the SD
+# card, reads config.txt, the kernel and the device tree over TFTP, writes
+# no EEPROM and starts the payload. The firmware reads the overlay only on a
+# board of the D0 stepping, so its read is not expected.
+[[entries]]
+name = "firmware"
+payload_dir = "self-test"
+payload_pin = "self-test"
+cold_boots = 1
+boot_timeout_ms = 60000
+end = { marker = "board.os_start" }
+sends = false
+markers = [
+  { name = "read_config", line = '^ *[0-9]+\.[0-9]+ Read (?:[^ ]*/)?config\.txt bytes +16 hnd 0x[0-9a-f]+$' },
+  { name = "read_kernel", line = '^ *[0-9]+\.[0-9]+ Read (?:[^ ]*/)?kernel_2712\.img bytes +409 hnd 0x[0-9a-f]+$' },
+  { name = "read_dtb", line = '^ *[0-9]+\.[0-9]+ Read (?:[^ ]*/)?bcm2712-rpi-5-b\.dtb bytes +78770 hnd 0x[0-9a-f]+$' },
+]
+expect = [
+  { marker = "board.network_boot", min = 1 },
+  { marker = "board.sd_boot", count = 0 },
+  { marker = "board.recovery", count = 0 },
+  { marker = "board.eeprom_write", count = 0 },
+  { marker = "board.eeprom_updated", count = 0 },
+  { marker = "read_config", min = 1 },
+  { marker = "read_kernel", min = 1 },
+  { marker = "read_dtb", min = 1 },
+]
+order = [{ markers = ["board.bootloader", "board.network_boot", "board.os_start"] }]
+
+# One cold boot in which the payload, once it has started and written its
+# ready line, answers one line that it is sent. The answer has a form that
+# the payload writes only in answer to a line, and the cold boot ends once
+# it has come.
+[[entries]]
+name = "echo"
+payload_dir = "self-test"
+payload_pin = "self-test"
+cold_boots = 1
+boot_timeout_ms = 60000
+end = { marker = "ready" }
+markers = [{ name = "ready", line = '^kyto self-test: ready$' }]
+expect = [{ marker = "ready", count = 1 }]
+order = [{ markers = ["board.os_start", "ready"] }]
+before_first_send = ["board.os_start", "ready"]
+steps = [{ after = "ready", send = "hello bench\r", expect = '^kyto self-test: echo hello bench \(11 bytes\)$', timeout_ms = 1000 }]

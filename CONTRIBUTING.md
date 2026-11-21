@@ -97,7 +97,7 @@ in which unsafe code is forbidden, has no input or output. The tests of the
 bench tool alone run with:
 
 ```sh
-cargo test --locked --manifest-path tools/Cargo.toml
+cargo test --locked --manifest-path tools/Cargo.toml --workspace
 ```
 
 Among them, the fuzz tests in `tools/kyto-bench/tests/fuzz.rs` read
@@ -287,6 +287,10 @@ the supply is switched off once more, whose readings take up to another
 `off_timeout_ms`; each power command adds about 400 ms of relay timing, a
 wait of 250 ms before its frame and 150 ms after it.
 
+The [bench self-test](tools/self-test/README.md) is a payload for the
+Raspberry Pi 5 and a run plan that show that a bench works; its README lists
+the files that a bench pins for it and the command that runs it.
+
 Two more commands use a bench without a run, and write no receipt; with
 the instance configuration, plan, payload root and entry of a bench in
 place of the placeholders, they run as:
@@ -427,12 +431,14 @@ change that adds it.
   rule that decides a check or a verdict; `kyto-bench-os`, the serial ports,
   the interrupt signals and the system clock, the one member that may use
   unsafe code and `libc`, whose serial transport is copied from krepi as the
-  [porting record](PORTING.md) lists; and `kyto-bench`, the devices, the
-  flow of a run and the three commands, which reaches the meter's USB
-  bridge through the `hidapi` crate, whose bundled C library its build
-  compiles on macOS. External dependencies come only from crates.io and are
-  pinned to exact versions. The tool does not depend on any one bench or on
-  the system under test: what it knows of a board is in the board's
+  [porting record](PORTING.md) lists; `kyto-bench`, the devices, the flow
+  of a run and the three commands, which reaches the meter's USB bridge
+  through the `hidapi` crate, whose bundled C library its build compiles on
+  macOS; and `kyto-self-test`, in `tools/self-test/`, which writes the
+  kernel of the bench self-test from its instruction words. External
+  dependencies come only from crates.io and are pinned to exact versions.
+  The tool does not depend on any one bench or on the system under test:
+  what it knows of a board is in the board's
   [description](docs/bench/formats.md#board-descriptions), and what
   it knows of a bench is in the bench's instance configuration.
 - **Instance configuration.** A bench's own configuration, such as addresses,

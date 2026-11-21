@@ -1,7 +1,10 @@
 # The bench tool is a workspace of its own, apart from the repository tasks
-# in `xtask/`, with its own `Cargo.lock`.
+# in `xtask/`, with its own `Cargo.lock`. The self-test's image writer is a
+# member but not a default one, so that `cargo run` from here runs
+# `kyto-bench`; the checks build and test every member.
 [workspace]
-members = ["kyto-bench-core", "kyto-bench-os", "kyto-bench"]
+members = ["kyto-bench-core", "kyto-bench-os", "kyto-bench", "self-test"]
+default-members = ["kyto-bench-core", "kyto-bench-os", "kyto-bench"]
 resolver = "3"
 
 [workspace.package]

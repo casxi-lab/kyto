@@ -122,13 +122,17 @@ monitor read through a Microchip MCP2221A USB bridge, which confirms power-on
 and power-off by the supply voltage; a USB serial adapter for the serial
 console; and the directory of a TFTP server for payload delivery. Its commands
 run a plan, switch a bench's supply off and confirm it, and publish a payload
-without powering the board. It has no bench self-test, input injection or
+without powering the board. [`tools/self-test/`](tools/self-test) holds the
+bench self-test: a small kernel for the Raspberry Pi 5, written from its
+instruction words, that answers lines on the debug UART, its `config.txt` and
+a run plan that boots it from the network and sends it a line. It has run on
+simulated devices and on a bench. The tool has no input injection or
 display capture yet. A receipt is evidence only when a clean, known revision
 of the tool wrote it on real devices. Apart from the bench tool, the board
-descriptions and the formats of run plans and receipts, none of the items
-above exists today. Until a power circuit exists, the development boards, a
-whole Raspberry Pi 5 board and a Compute Module 5 in its official IO board,
-run from a stable external supply.
+descriptions, the formats of run plans and receipts and the bench self-test,
+none of the items above exists today. Until a power circuit exists, the
+development boards, a whole Raspberry Pi 5 board and a Compute Module 5 in its
+official IO board, run from a stable external supply.
 
 The repository checks run from the repository root:
 

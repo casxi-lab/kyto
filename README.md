@@ -126,7 +126,7 @@ without powering the board. [`tools/self-test/`](tools/self-test) holds the
 bench self-test: a small kernel for the Raspberry Pi 5, written from its
 instruction words, that answers lines on the debug UART, its `config.txt` and
 a run plan that boots it from the network and sends it a line. It has run on
-simulated devices, not yet on a bench. The tool has no input injection or
+simulated devices and on a bench. The tool has no input injection or
 display capture yet. A receipt is evidence only when a clean, known revision
 of the tool wrote it on real devices. Apart from the bench tool, the board
 descriptions, the formats of run plans and receipts and the bench self-test,

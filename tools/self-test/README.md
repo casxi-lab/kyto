@@ -6,9 +6,9 @@ the network, reads the payload over TFTP and starts it, writes no EEPROM,
 and the serial console carries bytes both ways. Its result says nothing
 about any system tested on the bench.
 
-The self-test has not run on a bench yet. What this page says about the
-firmware's hand-over comes from the sources it cites; a run on a bench is
-what will show that the board starts this kernel.
+On a bench, the firmware has loaded and started this kernel, which wrote
+its ready line and answered the line it was sent. What this page says about
+the rest of the firmware's hand-over comes from the sources it cites.
 
 ## Files
 
@@ -69,8 +69,9 @@ over the header.
   boot below prints). The firmware has been seen
   to load a Linux `kernel_2712.img` at offset `0x200000` in a recorded
   Raspberry Pi 5 boot from an SD card
-  ([`fallback-to-sd.bin`](../kyto-bench/tests/data/recorded/fallback-to-sd.bin));
-  the address at which it loads this kernel is not known and not needed.
+  ([`fallback-to-sd.bin`](../kyto-bench/tests/data/recorded/fallback-to-sd.bin)),
+  and to load this kernel at the same offset on a bench; the kernel does not
+  depend on that.
 - **Exception level and state.** BL31 enters the kernel at EL2 with every
   interrupt masked
   ([`plat/rpi/rpi5/rpi5_private.c`](https://github.com/raspberrypi/arm-trusted-firmware/blob/36761b2765044b62c5485be8fcc109fbd3dae451/plat/rpi/rpi5/rpi5_private.c),
@@ -98,9 +99,9 @@ over the header.
   configuration sets `BOOT_UART=1`
   ([bootloader configuration](https://github.com/raspberrypi/documentation/blob/21d772e7ee022e36a8f43c3ee75e20ca359fb832/documentation/asciidoc/computers/raspberry-pi/eeprom-bootloader.adoc)),
   as the board description's console settings require. BL31 for the
-  Raspberry Pi 5 is built to keep the UART as the firmware set it when the
-  UART is enabled, and to set it to 115200 baud, 8N1, with transmission and
-  reception on otherwise
+  Raspberry Pi 5 is built to keep the UART as the firmware set it when its
+  control register is not 0, and to set it to 115200 baud, 8N1, with
+  transmission and reception on otherwise
   ([`plat/rpi/rpi5/platform.mk`](https://github.com/raspberrypi/arm-trusted-firmware/blob/36761b2765044b62c5485be8fcc109fbd3dae451/plat/rpi/rpi5/platform.mk),
   `PL011_INHERIT_SETUP`, and
   [`drivers/arm/pl011/aarch64/pl011_console.S`](https://github.com/raspberrypi/arm-trusted-firmware/blob/36761b2765044b62c5485be8fcc109fbd3dae451/drivers/arm/pl011/aarch64/pl011_console.S)),
@@ -150,5 +151,7 @@ cargo run --locked --manifest-path tools/Cargo.toml -p kyto-self-test -- \
 ```
 
 A test of the workspace fails unless `kernel_2712.img` is the image that the
-source gives and the table above gives its size and SHA-256. A change of the
+source gives and the table above gives its size and SHA-256. Another runs
+the kernel on a model of the instructions that it uses, of `MPIDR_EL1` and
+of the UART's registers, and checks what it writes to the UART. A change of the
 kernel changes both, and every bench pins the new image again.

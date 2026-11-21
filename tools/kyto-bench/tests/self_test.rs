@@ -148,6 +148,7 @@ fn the_self_test_plan_passes_the_plan_checks_against_a_pinned_set() {
     assert!(has(format!("\r\n{ready}\r\n").as_bytes()));
     assert_eq!(echo.markers.len(), 1);
     assert!(echo.markers[0].line.is_match(ready.as_bytes()));
+    assert_eq!(range(echo, "ready"), Some((1, Some(1))));
     let [step] = echo.steps() else {
         panic!("the echo entry has one step");
     };

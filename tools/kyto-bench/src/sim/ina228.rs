@@ -7,7 +7,8 @@
 //! on and the residual voltage of the world while it is off, across a
 //! 15 mΩ shunt. After a reset its results read 0 until it is configured
 //! again, the worst case of a reset. A cancel that stops a transfer holds
-//! SDA low for 1 ms, until the bridge releases the bus.
+//! SDA low for 1 ms, until the bridge releases the bus; a cancel of an idle
+//! I2C engine leaves it stuck, as it left a newly powered MCP2221A's.
 
 use std::cell::{Ref, RefCell, RefMut};
 use std::collections::VecDeque;
@@ -48,15 +49,15 @@ pub struct BridgeKnobs {
     pub late: Option<Nanos>,
     /// Answers echo this command code.
     pub echo: Option<u8>,
-    /// The I2C engine is busy for this many more I2C commands, which it
-    /// refuses; a cancel meanwhile stops a transfer.
+    /// The I2C engine is busy, in state 1, for this many more I2C commands,
+    /// which it refuses; a cancel meanwhile stops a transfer.
     pub busy: u32,
     /// SCL reads low.
     pub scl_low: bool,
     /// SDA reads low, as when a device holds it after an aborted transfer.
     pub sda_low: bool,
-    /// The bridge does not set the I2C speed.
-    pub no_speed: bool,
+    /// The I2C engine is stuck in state 0x62: it refuses the I2C speed.
+    pub stuck: bool,
     /// No device answers at the INA228's address.
     pub absent: bool,
     /// The manufacturer and device IDs read these.
@@ -140,8 +141,7 @@ impl State {
         let mut answer = [0; 64];
         answer[0] = knobs.echo.unwrap_or(command[0]);
         let (len, data) = (usize::from(command[1]), &command[4..]);
-        let i2c = matches!(command[0], 0x90 | 0x93 | 0x94);
-        if i2c && knobs.busy > 0 {
+        if matches!(command[0], 0x90 | 0x93 | 0x94) && knobs.busy > 0 {
             (self.knobs.busy, answer[1]) = (knobs.busy - 1, 1);
             return Some(answer);
         }
@@ -150,12 +150,13 @@ impl State {
                 if command[2] == 0x10 && knobs.busy > 0 {
                     (answer[2], self.released) = (0x10, now.saturating_add(RELEASE));
                 } else if command[2] == 0x10 {
-                    answer[2] = 0x11;
+                    (answer[2], self.knobs.stuck) = (0x10, true);
                 }
                 if command[3] == 0x20 {
-                    answer[3] = if knobs.no_speed { 0x21 } else { 0x20 };
-                    answer[4] = if knobs.no_speed { 0 } else { command[4] };
+                    answer[3] = if knobs.stuck { 0x21 } else { 0x20 };
+                    answer[4] = if knobs.stuck { 0 } else { command[4] };
                 }
+                answer[8] = u8::from(knobs.busy > 0).max(0x62 * u8::from(self.knobs.stuck));
                 answer[22] = u8::from(!knobs.scl_low);
                 answer[23] = u8::from(!knobs.sda_low && now >= self.released);
             }

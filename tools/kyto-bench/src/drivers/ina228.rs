@@ -111,9 +111,10 @@ impl fmt::Display for Fault {
                 f,
                 "the I2C bus is held low (SCL {scl}, SDA {sda}); unplug and replug the meter"
             ),
-            Self::Speed { status } => {
-                write!(f, "{bridge} did not set the I2C speed (status {status:02x})")
-            }
+            Self::Speed { status } => write!(
+                f,
+                "{bridge} did not set the I2C speed (status {status:02x}); unplug and replug the meter"
+            ),
             Self::NoDevice => write!(f, "no INA228 answered at I2C address 0x40"),
             Self::Manufacturer(id) => write!(f, "{other} (manufacturer ID {id:04x})"),
             Self::Device(id) => write!(f, "{other} (device ID {id:04x})"),
@@ -328,7 +329,7 @@ mod tests {
         "the MCP2221 USB bridge answered command {} to command {}",
         "the MCP2221 USB bridge refused command {} with status {}",
         "the I2C bus is held low (SCL {}, SDA {}); unplug and replug the meter",
-        "the MCP2221 USB bridge did not set the I2C speed (status {})",
+        "the MCP2221 USB bridge did not set the I2C speed (status {}); unplug and replug the meter",
         "no INA228 answered at I2C address 0x40",
         "the device at I2C address 0x40 is not an INA228 (manufacturer ID {})",
         "the device at I2C address 0x40 is not an INA228 (device ID {})",
@@ -485,8 +486,8 @@ mod tests {
                 "the I2C bus is held low (SCL 0, SDA 1); unplug and replug the meter",
             ),
             (
-                |knobs| knobs.no_speed = true,
-                "the MCP2221 USB bridge did not set the I2C speed (status 21)",
+                |knobs| knobs.stuck = true,
+                "the MCP2221 USB bridge did not set the I2C speed (status 21); unplug and replug the meter",
             ),
         ];
         for (fault, text) in refused {
@@ -547,22 +548,26 @@ mod tests {
         }
     }
 
-    /// The simulated bridge, whose link is gone from the first transfer
-    /// that a failed reading cancels: a reading of a malformed result.
+    /// The simulated bridge, whose link is gone from the first report that
+    /// starts with the given bytes once a reading has failed, on a malformed
+    /// result or a busy engine: the status command that asks whether the I2C
+    /// engine has a transfer to cancel, or the cancel itself.
     #[derive(Clone)]
-    struct Unplugged(SimBridge);
+    struct Unplugged(SimBridge, &'static [u8]);
 
     impl HidOpen for Unplugged {
         type Link = Unplugged;
 
         fn open(&mut self) -> Result<Unplugged, OpenError> {
-            self.0.open().map(Unplugged)
+            let prefix = self.1;
+            self.0.open().map(|bridge| Unplugged(bridge, prefix))
         }
     }
 
     impl HidLink for Unplugged {
         fn send(&mut self, report: &Report) -> Result<(), LinkError> {
-            if report[..3] == [0x10, 0, 0x10] && self.0.knobs().malformed {
+            let failed = self.0.knobs().malformed || self.0.knobs().busy > 0;
+            if report.starts_with(self.1) && failed {
                 self.0.knobs().link = Some(LinkError::Gone);
             }
             self.0.send(report)
@@ -574,19 +579,49 @@ mod tests {
     }
 
     #[test]
-    fn a_link_that_fails_while_a_transfer_is_cancelled_is_dropped() {
-        let (world, bridge, _) = on_bench(Quantity::SupplyVoltage);
-        let clock = Rc::new(world.clone());
-        let opener = Unplugged(bridge.clone());
-        let mut meter = Ina228Meter::new(opener, clock, Quantity::SupplyVoltage, SHUNT);
-        assert_eq!(meter.sample().unwrap().micro, ON_MICRO);
+    fn a_link_that_fails_after_a_failed_reading_is_dropped() {
+        // A malformed result leaves the I2C engine idle, so the status
+        // command fails; a command that the busy engine refused leaves it
+        // busy, so the cancel that follows the status fails.
+        let cases: [(&[u8], Knob, &str); 2] = [
+            (
+                &[0x10, 0],
+                |knobs| knobs.malformed = true,
+                "the INA228 returned a malformed reading (06 60 01)",
+            ),
+            (
+                &[0x10, 0, 0x10],
+                |knobs| knobs.busy = 4,
+                "the MCP2221 USB bridge refused command 94 with status 01",
+            ),
+        ];
+        for (prefix, fault, text) in cases {
+            let (world, bridge, _) = on_bench(Quantity::SupplyVoltage);
+            let clock = Rc::new(world.clone());
+            let opener = Unplugged(bridge.clone(), prefix);
+            let mut meter = Ina228Meter::new(opener, clock, Quantity::SupplyVoltage, SHUNT);
+            assert_eq!(meter.sample().unwrap().micro, ON_MICRO);
+            fault(&mut bridge.knobs());
+            assert_eq!(meter.sample().unwrap_err().detail, text);
+            // The bridge is back: the next reading opens it again.
+            *bridge.knobs() = BridgeKnobs::default();
+            assert_eq!(meter.sample().unwrap().micro, ON_MICRO, "{text}");
+            assert_eq!(bridge.opens(), 2, "{text}");
+        }
+    }
+
+    #[test]
+    fn an_idle_i2c_engine_is_never_sent_a_cancel() {
+        // The simulated engine is left stuck by any cancel that finds it
+        // idle, and would then refuse the I2C speed of the next set-up.
+        let (_, bridge, mut meter) = on_bench(Quantity::SupplyVoltage);
+        assert_eq!(micro(&mut meter), ON_MICRO);
         bridge.knobs().malformed = true;
         let malformed = "the INA228 returned a malformed reading (06 60 01)";
-        assert_eq!(meter.sample().unwrap_err().detail, malformed);
-        // The bridge is back: the next reading opens it again.
-        *bridge.knobs() = BridgeKnobs::default();
-        assert_eq!(meter.sample().unwrap().micro, ON_MICRO);
-        assert_eq!(bridge.opens(), 2);
+        assert_eq!(detail(&mut meter), malformed);
+        bridge.knobs().malformed = false;
+        assert_eq!(micro(&mut meter), ON_MICRO);
+        assert!(!bridge.knobs().stuck);
     }
 
     #[test]
@@ -714,7 +749,7 @@ mod tests {
             |knobs| knobs.echo = Some(0x93),
             |knobs| knobs.busy = 3,
             |knobs| knobs.sda_low = true,
-            |knobs| knobs.no_speed = true,
+            |knobs| knobs.stuck = true,
             |knobs| knobs.absent = true,
             |knobs| knobs.ids = Some((0, 0x2281)),
             |knobs| knobs.ids = Some((0x5449, 0)),

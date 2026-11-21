@@ -5,7 +5,9 @@
 //! I2C speed, I2C writes with and without a stop, reads with a repeated
 //! start and the fetch of the data read; never the flash, GPIO or SRAM
 //! commands, so the bridge's own settings are never changed. An answer is
-//! taken only by the fields that both data sheets document alike.
+//! taken only by the fields that both data sheets document alike, and by
+//! the state of the I2C engine, which only the MCP2221A's gives as 0 while
+//! the engine is idle.
 
 use super::hid::{HidLink, Report};
 use super::ina228::Fault;
@@ -32,6 +34,8 @@ const TRIES: usize = 3;
 const BUSY: u8 = 0x01;
 /// The most reports that the bridge can have left from earlier exchanges.
 const LEFT: usize = 64;
+/// The index of the I2C engine's state in the answer to the status command.
+const STATE: usize = 8;
 
 /// The report of `command` with `fields` from index 1 on, the rest zero.
 fn report(command: u8, fields: &[u8]) -> Report {
@@ -131,10 +135,18 @@ impl<L: HidLink> Bridge<'_, L> {
         }
     }
 
-    /// Cancels the transfer in progress and frees the bus; the status that
-    /// follows, read again 2 ms later when a transfer was cancelled, as the
-    /// bus is released some hundreds of microseconds after the answer.
+    /// Cancels the transfer in progress, if the I2C engine is not idle, and
+    /// frees the bus; the status that follows, read again 2 ms later when a
+    /// transfer was cancelled, as the bus is released some hundreds of
+    /// microseconds after the answer. An idle engine is sent no cancel: a
+    /// newly powered MCP2221A answered one with 0x10, not the 0x11 of its
+    /// data sheet, and its engine then stayed in state 0x62, a timeout, and
+    /// refused the I2C speed until the bridge was powered again.
     pub fn cancel(&mut self) -> Result<Report, Fault> {
+        let before = self.accepted(&status(false))?;
+        if before[STATE] == 0 {
+            return Ok(before);
+        }
         let answer = self.accepted(&status(true))?;
         if answer[2] != 0x10 {
             return Ok(answer);
@@ -202,10 +214,15 @@ mod tests {
         sent: Vec<Report>,
         answers: Vec<Option<Report>>,
         due: Option<Report>,
+        /// The link is gone from the send of this many reports on.
+        gone_at: Option<usize>,
     }
 
     impl HidLink for Scripted {
         fn send(&mut self, report: &Report) -> Result<(), LinkError> {
+            if self.gone_at == Some(self.sent.len()) {
+                return Err(LinkError::Gone);
+            }
             self.sent.push(*report);
             self.due = self.answers.remove(0);
             Ok(())
@@ -331,5 +348,61 @@ mod tests {
         };
         assert_eq!(bridge.exchange(&status(false)), Err(Fault::NoAnswer));
         assert_eq!(world.now(), start.saturating_add(ANSWER));
+    }
+
+    #[test]
+    fn only_an_i2c_engine_that_is_not_idle_is_sent_a_cancel() {
+        let world = SimWorld::new();
+        let status_answer = |state: u8, cancel: u8| {
+            let mut fields = [0; 9];
+            (fields[0], fields[2], fields[STATE]) = (STATUS, cancel, state);
+            answer(&fields)
+        };
+        // An idle engine gets the status alone; one that is not idle gets a
+        // cancel, and after a cancelled transfer the status again 2 ms later.
+        for (answers, cancels, waited) in [
+            (vec![status_answer(0, 0)], 0, 0),
+            (
+                vec![status_answer(0x62, 0), status_answer(0x62, 0x11)],
+                1,
+                0,
+            ),
+            (
+                vec![
+                    status_answer(0x62, 0),
+                    status_answer(0x60, 0x10),
+                    status_answer(0, 0),
+                ],
+                1,
+                2,
+            ),
+        ] {
+            let (start, last) = (world.now(), answers.last().copied().flatten());
+            let mut link = Scripted {
+                answers,
+                ..Scripted::default()
+            };
+            let mut bridge = Bridge {
+                link: &mut link,
+                clock: &world,
+            };
+            assert_eq!(bridge.cancel().ok(), last);
+            let sent = link.sent.iter().filter(|report| report[2] == 0x10);
+            assert_eq!(sent.count(), cancels);
+            let waited = start.saturating_add(Nanos::from_millis(waited));
+            assert_eq!(world.now(), waited);
+        }
+        // A link that is gone when the status is read again after a
+        // cancelled transfer fails the cancel.
+        let mut link = Scripted {
+            answers: vec![status_answer(0x62, 0), status_answer(0x60, 0x10)],
+            gone_at: Some(2),
+            ..Scripted::default()
+        };
+        let mut bridge = Bridge {
+            link: &mut link,
+            clock: &world,
+        };
+        assert_eq!(bridge.cancel(), Err(Fault::Link(LinkError::Gone)));
     }
 }

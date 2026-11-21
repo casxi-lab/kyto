@@ -151,7 +151,12 @@ cargo run --locked --manifest-path tools/Cargo.toml -p kyto-self-test -- \
 ```
 
 A test of the workspace fails unless `kernel_2712.img` is the image that the
-source gives and the table above gives its size and SHA-256. Another runs
-the kernel on a model of the instructions that it uses, of `MPIDR_EL1` and
-of the UART's registers, and checks what it writes to the UART. A change of the
-kernel changes both, and every bench pins the new image again.
+source gives and the table above gives its size and SHA-256. A change of the
+kernel changes both, and every bench pins the new image again. Another test
+runs the kernel on a model of the instructions that it uses, of `MPIDR_EL1`
+and of the UART's registers, and checks what it writes to the UART. The
+tests of the self-test alone run with:
+
+```sh
+cargo test --locked --manifest-path tools/Cargo.toml -p kyto-self-test
+```

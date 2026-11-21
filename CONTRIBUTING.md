@@ -97,7 +97,7 @@ in which unsafe code is forbidden, has no input or output. The tests of the
 bench tool alone run with:
 
 ```sh
-cargo test --locked --manifest-path tools/Cargo.toml
+cargo test --locked --manifest-path tools/Cargo.toml --workspace
 ```
 
 Among them, the fuzz tests in `tools/kyto-bench/tests/fuzz.rs` read

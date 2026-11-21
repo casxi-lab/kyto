@@ -1,0 +1,3 @@
+# The kernel image is the bytes that kyto-self-test writes: Git keeps and
+# compares it as bytes, never as text.
+*.img binary

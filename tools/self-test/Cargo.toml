@@ -1,0 +1,14 @@
+[package]
+name = "kyto-self-test"
+description = "The bench self-test kernel for the Raspberry Pi 5, generated from its instruction words"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+kyto-bench-core = { path = "../kyto-bench-core" }
+
+[lints]
+workspace = true

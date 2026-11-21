@@ -228,6 +228,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "kyto-self-test"
+version = "0.0.0"
+dependencies = [
+ "kyto-bench-core",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
